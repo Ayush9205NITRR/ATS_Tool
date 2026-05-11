@@ -22,34 +22,24 @@ export function AppRouter() {
       <Suspense fallback={<PageLoader />}>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
-
           <Route element={<AuthGuard><AppShell /></AuthGuard>}>
             <Route index element={<Navigate to="/dashboard" replace />} />
             <Route path="/dashboard" element={<DashboardPage />} />
-
-            {/* All roles */}
             <Route path="/candidates" element={<CandidatesPage />} />
             <Route path="/candidates/:id" element={<CandidateProfile />} />
-
-            {/* Interviewer */}
             <Route path="/interviews" element={
               <AuthGuard roles={['interviewer','admin','super_admin','hr_team']}><InterviewsPage /></AuthGuard>
             } />
-
-            {/* Admin + HR Team + Super Admin */}
             <Route path="/jobs" element={
               <AuthGuard roles={['admin','super_admin','hr_team']}><JobsPage /></AuthGuard>
             } />
             <Route path="/upload" element={
               <AuthGuard roles={['admin','super_admin','hr_team']}><UploadPage /></AuthGuard>
             } />
-
-            {/* Super Admin only */}
             <Route path="/settings" element={
               <AuthGuard roles={['super_admin']}><SettingsPage /></AuthGuard>
             } />
           </Route>
-
           <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Routes>
       </Suspense>
