@@ -3,8 +3,8 @@
 // All components read from here. Never call supabase.auth directly.
 // ============================================================
 import { create } from 'zustand'
-import { supabase } from '../lib/supabaseClient'
-import type { User } from '../types/database.types'
+import { supabase } from '../../lib/supabaseClient'
+import type { User } from '../../types/database.types'
 
 interface AuthState {
   user: User | null
