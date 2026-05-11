@@ -1,7 +1,3 @@
-// ============================================================
-// AUTH STORE — Zustand store for global auth + user state
-// All components read from here. Never call supabase.auth directly.
-// ============================================================
 import { create } from 'zustand'
 import { supabase } from '../../lib/supabaseClient'
 import type { User } from '../../types/database.types'
@@ -25,7 +21,6 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       set({ user: null, session: null, loading: false })
       return
     }
-    // Fetch profile from public.users table
     const { data } = await supabase
       .from('users')
       .select('*')
@@ -40,7 +35,6 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     set({ user: null, session: null })
   },
 
-  // Helper: check if current user has one of the given roles
   hasRole: (roles) => {
     const { user } = get()
     if (!user) return false
