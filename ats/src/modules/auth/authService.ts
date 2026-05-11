@@ -1,18 +1,17 @@
-// ============================================================
-// AUTH SERVICE — all Supabase auth calls live here
-// ============================================================
 import { supabase } from '../../lib/supabaseClient'
 
 export const authService = {
   signIn: async (email: string, password: string) => {
-    const { data, error } = await supabase.auth.signInWithPassword({ email, password })
-    if (error) throw error
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email: email.trim().toLowerCase(),
+      password,
+    })
+    if (error) throw new Error(error.message)
     return data
   },
 
   signOut: async () => {
-    const { error } = await supabase.auth.signOut()
-    if (error) throw error
+    await supabase.auth.signOut()
   },
 
   getSession: async () => {
