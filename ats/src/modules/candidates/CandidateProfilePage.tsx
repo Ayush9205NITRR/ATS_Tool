@@ -1,10 +1,12 @@
 import { useParams, useNavigate } from 'react-router-dom'
 import { useState } from 'react'
-import { ArrowLeft, ExternalLink, Phone, Mail, Linkedin, Loader2, Send, Pencil, Check, X, ChevronDown } from 'lucide-react'
+import {
+  ArrowLeft, ExternalLink, Phone, Mail, Linkedin,
+  Loader2, Send, Pencil, Check, X, ChevronDown, CheckCircle
+} from 'lucide-react'
 import { useCandidate, useUpdateStage } from './useCandidates'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Button } from '../../shared/components/Button'
-import { PageHeader } from '../../shared/components/PageHeader'
 import { useAuthStore } from '../auth/authStore'
 import { formatDate, formatRelative, labelOf } from '../../shared/utils/helpers'
 import { supabase } from '../../lib/supabaseClient'
@@ -31,6 +33,19 @@ const STAGE_COLOURS: Record<string, string> = {
 
 interface NoteEntry { text: string; author: string; authorId: string; timestamp: string }
 
+// Convert stored value (string | null) → datetime-local input value
+function toDatetimeLocal(v: string | null | undefined): string {
+  if (!v) return ''
+  // If already has T (ISO), trim to 16 chars for datetime-local
+  return v.replace(' ', 'T').slice(0, 16)
+}
+
+// Convert datetime-local → ISO string for DB
+function toISO(v: string): string | null {
+  if (!v) return null
+  return new Date(v).toISOString()
+}
+
 export function CandidateProfilePage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
@@ -38,17 +53,16 @@ export function CandidateProfilePage() {
   const qc = useQueryClient()
 
   const isInterviewer = hasRole(['interviewer'])
+  // HR team can edit candidates but NOT assign hr_owner
   const canEdit       = hasRole(['admin', 'super_admin', 'hr_team'])
+  const canAssignHR   = hasRole(['admin', 'super_admin'])  // ← HR Team excluded
   const canAddNotes   = hasRole(['admin', 'super_admin', 'hr_team', 'interviewer'])
 
-  // Global edit mode
   const [editMode, setEditMode]       = useState(false)
   const [stageOpen, setStageOpen]     = useState(false)
   const [draftNotes, setDraftNotes]   = useState<Record<string, string>>({})
   const [savingNote, setSavingNote]   = useState<string | null>(null)
-  // Contact edit state
   const [contactDraft, setContactDraft] = useState({ email: '', phone: '', linkedin_url: '' })
-  // General notes draft
   const [generalNotesDraft, setGeneralNotesDraft] = useState('')
 
   const { data: candidate, isLoading } = useCandidate(id!)
@@ -60,6 +74,22 @@ export function CandidateProfilePage() {
       const { data } = await supabase.from('users').select('id,full_name,role').eq('is_active', true)
       return (data ?? []) as { id: string; full_name: string; role: string }[]
     },
+  })
+
+  // Check if current user (interviewer) has submitted feedback for this candidate
+  const { data: myFeedback } = useQuery({
+    queryKey: ['my-feedback', id, user?.id],
+    queryFn: async () => {
+      if (!isInterviewer) return null
+      const { data } = await supabase
+        .from('interview_feedback')
+        .select('submitted_at')
+        .eq('candidate_id', id!)
+        .eq('interviewer_id', user!.id)
+        .maybeSingle()
+      return data
+    },
+    enabled: !!user && isInterviewer,
   })
 
   const hrUsers          = allUsers.filter(u => ['hr_team','admin','super_admin'].includes(u.role))
@@ -75,18 +105,32 @@ export function CandidateProfilePage() {
 
   const saveAll = useMutation({
     mutationFn: async () => {
-      const updates: Record<string, unknown> = {
+      const { error } = await supabase.from('candidates').update({
         email: contactDraft.email,
         phone: contactDraft.phone || null,
         linkedin_url: contactDraft.linkedin_url || null,
         notes: generalNotesDraft || null,
-      }
-      const { error } = await supabase.from('candidates').update(updates).eq('id', id!)
+      }).eq('id', id!)
+      if (error) throw error
+    },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['candidate', id] }); setEditMode(false) },
+  })
+
+  // Submit feedback mutation
+  const submitFeedback = useMutation({
+    mutationFn: async () => {
+      const { error } = await supabase
+        .from('interview_feedback')
+        .upsert({
+          candidate_id: id!,
+          interviewer_id: user!.id,
+          submitted_at: new Date().toISOString(),
+        }, { onConflict: 'candidate_id,interviewer_id' })
       if (error) throw error
     },
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['candidate', id] })
-      setEditMode(false)
+      qc.invalidateQueries({ queryKey: ['my-feedback', id, user?.id] })
+      qc.invalidateQueries({ queryKey: ['my-interviews'] })
     },
   })
 
@@ -109,25 +153,23 @@ export function CandidateProfilePage() {
 
   const enterEditMode = () => {
     if (!candidate) return
-    setContactDraft({
-      email: candidate.email,
-      phone: candidate.phone ?? '',
-      linkedin_url: candidate.linkedin_url ?? '',
-    })
+    setContactDraft({ email: candidate.email, phone: candidate.phone ?? '', linkedin_url: candidate.linkedin_url ?? '' })
     setGeneralNotesDraft((candidate as any).notes ?? '')
     setEditMode(true)
-  }
-
-  const toggleHR = (uid: string) => {
-    const curr: string[] = (candidate as any).hr_owner_ids ?? ((candidate as any).hr_owner ? [(candidate as any).hr_owner] : [])
-    const next = curr.includes(uid) ? curr.filter((i: string) => i !== uid) : [...curr, uid]
-    updateField.mutate({ field: 'hr_owner', value: next[0] ?? null }) // keep backward compat with single hr_owner
   }
 
   const toggleInterviewer = (uid: string) => {
     const curr: string[] = (candidate as any).assigned_interviewers ?? []
     const next = curr.includes(uid) ? curr.filter((i: string) => i !== uid) : [...curr, uid]
     updateField.mutate({ field: 'assigned_interviewers', value: next })
+  }
+
+  // HR Owner — array stored but backward-compat: single UUID in hr_owner column
+  const toggleHROwner = (uid: string) => {
+    const curr: string | null = (candidate as any).hr_owner
+    // Toggle: if same person, remove; else assign new
+    const next = curr === uid ? null : uid
+    updateField.mutate({ field: 'hr_owner', value: next })
   }
 
   if (isLoading) return <div className="flex justify-center py-24"><Loader2 className="w-6 h-6 animate-spin text-blue-500"/></div>
@@ -137,6 +179,7 @@ export function CandidateProfilePage() {
   const interviewNotes = (candidate as any).interview_notes ?? {}
   const assignedInterviewers: string[] = (candidate as any).assigned_interviewers ?? []
   const hrOwnerId: string | null = (candidate as any).hr_owner ?? null
+  const feedbackSubmitted = !!myFeedback?.submitted_at
 
   const drivePreviewUrl = candidate.resume_url
     ? candidate.resume_url.includes('drive.google.com')
@@ -146,30 +189,49 @@ export function CandidateProfilePage() {
 
   return (
     <div>
-      {/* Back + global edit */}
+      {/* Top bar */}
       <div className="flex items-center justify-between mb-4">
         <button onClick={() => navigate(-1)} className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700 transition-colors">
           <ArrowLeft className="w-4 h-4"/> Back
         </button>
-        {canEdit && (
-          editMode ? (
-            <div className="flex gap-2">
-              <Button variant="secondary" size="sm" icon={<X className="w-3.5 h-3.5"/>} onClick={() => setEditMode(false)}>Cancel</Button>
-              <Button size="sm" loading={saveAll.isPending} icon={<Check className="w-3.5 h-3.5"/>} onClick={() => saveAll.mutate()}>Save Changes</Button>
-            </div>
-          ) : (
-            <Button variant="secondary" size="sm" icon={<Pencil className="w-3.5 h-3.5"/>} onClick={enterEditMode}>Edit Info</Button>
-          )
-        )}
+        <div className="flex items-center gap-2">
+          {/* Submit Feedback button — only for interviewers who haven't submitted */}
+          {isInterviewer && (
+            feedbackSubmitted ? (
+              <div className="flex items-center gap-2 text-sm text-green-600 bg-green-50 border border-green-200 rounded-lg px-3 py-1.5">
+                <CheckCircle className="w-4 h-4"/>
+                Feedback Submitted
+              </div>
+            ) : (
+              <Button
+                size="sm"
+                loading={submitFeedback.isPending}
+                icon={<CheckCircle className="w-3.5 h-3.5"/>}
+                onClick={() => submitFeedback.mutate()}
+              >
+                Submit Feedback
+              </Button>
+            )
+          )}
+          {canEdit && (
+            editMode ? (
+              <div className="flex gap-2">
+                <Button variant="secondary" size="sm" icon={<X className="w-3.5 h-3.5"/>} onClick={() => setEditMode(false)}>Cancel</Button>
+                <Button size="sm" loading={saveAll.isPending} icon={<Check className="w-3.5 h-3.5"/>} onClick={() => saveAll.mutate()}>Save Changes</Button>
+              </div>
+            ) : (
+              <Button variant="secondary" size="sm" icon={<Pencil className="w-3.5 h-3.5"/>} onClick={enterEditMode}>Edit Info</Button>
+            )
+          )}
+        </div>
       </div>
 
-      {/* Header row: name + stage */}
+      {/* Header: name + stage */}
       <div className="flex items-start justify-between gap-4 mb-5 flex-wrap">
         <div>
           <h1 className="text-xl font-semibold text-gray-900">{candidate.full_name}</h1>
           <p className="text-sm text-gray-400 mt-0.5">{candidate.source_name} · {labelOf(candidate.source_category)}</p>
         </div>
-        {/* Stage pill dropdown */}
         <div className="relative">
           {canEdit ? (
             <>
@@ -209,7 +271,7 @@ export function CandidateProfilePage() {
             <p className="text-sm font-semibold text-gray-700 mb-3">Contact</p>
             {editMode ? (
               <div className="space-y-2.5">
-                {([['email','Email','email'],['phone','Phone','tel'],['linkedin_url','LinkedIn URL','url']] as const).map(([k,label,type]) => (
+                {([['email','Email','email'],['phone','Phone','tel'],['linkedin_url','LinkedIn URL','url']] as const).map(([k, label, type]) => (
                   <div key={k}>
                     <label className="block text-xs text-gray-400 mb-1">{label}</label>
                     <input type={type} value={contactDraft[k]}
@@ -240,54 +302,69 @@ export function CandidateProfilePage() {
             )}
           </div>
 
-          {/* Assignment — HR + Interviewers (not shown to interviewer) */}
+          {/* Assignment — hidden from interviewer */}
           {!isInterviewer && (
             <div className="bg-white rounded-xl border border-gray-200 p-5 space-y-4">
               <p className="text-sm font-semibold text-gray-700">Assignment</p>
 
-              {/* HR Owner — single select (backward compat) */}
+              {/* HR Owner — only admin/super_admin can change */}
               <div>
                 <p className="text-xs text-gray-400 mb-1.5">HR Owner</p>
-                {canEdit ? (
-                  <select value={hrOwnerId ?? ''}
+                {canAssignHR ? (
+                  <select
+                    value={hrOwnerId ?? ''}
                     onChange={e => updateField.mutate({ field: 'hr_owner', value: e.target.value || null })}
-                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  >
                     <option value="">— Unassigned —</option>
                     {hrUsers.map(u => <option key={u.id} value={u.id}>{u.full_name}</option>)}
                   </select>
                 ) : (
-                  <p className="text-sm text-gray-700">{hrUsers.find(u => u.id === hrOwnerId)?.full_name ?? '—'}</p>
+                  // HR team can only VIEW, not change
+                  <p className="text-sm text-gray-700 px-1">
+                    {hrUsers.find(u => u.id === hrOwnerId)?.full_name ?? '—'}
+                  </p>
                 )}
               </div>
 
               {/* Interviewers — multi-select pills */}
               <div>
                 <p className="text-xs text-gray-400 mb-1.5">Interviewers <span className="text-gray-300">(select multiple)</span></p>
-                <div className="flex flex-wrap gap-1.5">
-                  {interviewerUsers.length === 0 && <p className="text-xs text-gray-400">No interviewers in Settings yet</p>}
-                  {interviewerUsers.map(u => {
-                    const sel = assignedInterviewers.includes(u.id)
-                    return (
-                      <button key={u.id} onClick={() => canEdit && toggleInterviewer(u.id)} disabled={!canEdit}
-                        className={`px-2.5 py-1 rounded-full text-xs font-medium border transition-all ${
-                          sel ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-200 hover:border-blue-300'
-                        } ${!canEdit ? 'cursor-default' : 'cursor-pointer'}`}>
-                        {u.full_name}
-                      </button>
-                    )
-                  })}
-                </div>
+                {interviewerUsers.length === 0 ? (
+                  <p className="text-xs text-gray-400">No interviewers added in Settings yet</p>
+                ) : (
+                  <div className="flex flex-wrap gap-1.5">
+                    {interviewerUsers.map(u => {
+                      const sel = assignedInterviewers.includes(u.id)
+                      return (
+                        <button key={u.id}
+                          onClick={() => canEdit && toggleInterviewer(u.id)}
+                          disabled={!canEdit}
+                          className={`px-2.5 py-1 rounded-full text-xs font-medium border transition-all ${
+                            sel ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-200 hover:border-blue-300'
+                          } ${!canEdit ? 'cursor-default' : 'cursor-pointer'}`}>
+                          {u.full_name}
+                        </button>
+                      )
+                    })}
+                  </div>
+                )}
               </div>
 
-              {/* Interview Date */}
+              {/* Interview Date — synced ISO timestamp */}
               <div>
                 <p className="text-xs text-gray-400 mb-1.5">Interview Date & Time</p>
                 {canEdit ? (
-                  <input type="datetime-local" value={(candidate as any).interview_date ?? ''}
-                    onChange={e => updateField.mutate({ field: 'interview_date', value: e.target.value || null })}
-                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"/>
+                  <input
+                    type="datetime-local"
+                    value={toDatetimeLocal((candidate as any).interview_date)}
+                    onChange={e => updateField.mutate({ field: 'interview_date', value: toISO(e.target.value) })}
+                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
                 ) : (
-                  <p className="text-sm text-gray-700">{(candidate as any).interview_date ? formatDate((candidate as any).interview_date) : '—'}</p>
+                  <p className="text-sm text-gray-700">
+                    {(candidate as any).interview_date ? formatDate((candidate as any).interview_date) : '—'}
+                  </p>
                 )}
               </div>
             </div>
@@ -315,7 +392,7 @@ export function CandidateProfilePage() {
               )}
             </div>
             {drivePreviewUrl ? (
-              <iframe src={drivePreviewUrl} className="w-full border-0" style={{ height: '300px' }} title="Resume"/>
+              <iframe src={drivePreviewUrl} className="w-full border-0" style={{ height: '280px' }} title="Resume"/>
             ) : (
               <div className="flex items-center justify-center h-20 text-gray-400">
                 <p className="text-sm">No resume link added</p>
@@ -323,22 +400,25 @@ export function CandidateProfilePage() {
             )}
           </div>
 
-          {/* General Notes — from Add Candidate form, editable in edit mode */}
+          {/* General Notes */}
           <div className="bg-white rounded-xl border border-gray-200 p-5">
             <p className="text-sm font-semibold text-gray-700 mb-2">General Notes</p>
             {editMode ? (
-              <textarea value={generalNotesDraft}
+              <textarea
+                value={generalNotesDraft}
                 onChange={e => setGeneralNotesDraft(e.target.value)}
-                rows={4} placeholder="General notes about this candidate…"
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-y"/>
+                rows={4}
+                placeholder="General notes about this candidate…"
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-y"
+              />
             ) : (
               (candidate as any).notes
                 ? <p className="text-sm text-gray-700 whitespace-pre-wrap">{(candidate as any).notes}</p>
-                : <p className="text-xs text-gray-400">{canEdit ? 'Click "Edit Info" to add general notes.' : 'No general notes.'}</p>
+                : <p className="text-xs text-gray-400">{canEdit ? 'Click "Edit Info" to add notes.' : 'No notes.'}</p>
             )}
           </div>
 
-          {/* Interview Notes — per round, chat style */}
+          {/* Interview Notes — per round */}
           <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
             <p className="text-sm font-semibold text-gray-700 px-5 py-3 border-b border-gray-100">Interview Notes</p>
             <div className="divide-y divide-gray-50">
