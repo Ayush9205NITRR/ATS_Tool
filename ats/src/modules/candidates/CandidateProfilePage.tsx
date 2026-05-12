@@ -1,377 +1,425 @@
-import { useParams, useNavigate } from 'react-router-dom'
-import { useState } from 'react'
-import { ArrowLeft, ExternalLink, Phone, Mail, Linkedin, Loader2, Send, Pencil, Check, X, ChevronDown } from 'lucide-react'
-import { useCandidate, useUpdateStage } from './useCandidates'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Badge } from '../../shared/components/Badge'
-import { Button } from '../../shared/components/Button'
-import { PageHeader } from '../../shared/components/PageHeader'
-import { useAuthStore } from '../auth/authStore'
-import { formatDate, formatRelative, labelOf } from '../../shared/utils/helpers'
-import { supabase } from '../../lib/supabaseClient'
-import { INTERVIEW_STAGES } from '../../types/database.types'
+import { useState, useCallback } from 'react'
+import { useMutation, useQueryClient, useQuery } from '@tanstack/react-query'
+import { Upload, CheckCircle, AlertTriangle, ChevronRight, Sparkles } from 'lucide-react'
+import { candidateService } from '../../candidates/candidateService'
+import { useAuthStore } from '../../auth/authStore'
+import { Button } from '../../../shared/components/Button'
+import { supabase } from '../../../lib/supabaseClient'
+import type { SourceCategory } from '../../../types/database.types'
 
-const NOTES_SECTIONS = [
-  { key: 'screening',   label: 'Screening Call' },
-  { key: 'r1',          label: 'R1 Interview' },
-  { key: 'case_study',  label: 'Case Study' },
-  { key: 'r2',          label: 'R2 Interview' },
-  { key: 'r3',          label: 'R3 Interview' },
-  { key: 'cf_virtual',  label: 'CF Virtual' },
-  { key: 'cf_inperson', label: 'CF In-Person' },
-]
+type Step = 1 | 2 | 3 | 4
 
-const STAGE_COLOURS: Record<string,string> = {
-  Applied:'bg-gray-100 text-gray-700', Screening:'bg-blue-100 text-blue-700',
-  R1:'bg-indigo-100 text-indigo-700', 'Case Study':'bg-yellow-100 text-yellow-700',
-  R2:'bg-orange-100 text-orange-700', R3:'bg-orange-200 text-orange-800',
-  'CF (Virtual)':'bg-purple-100 text-purple-700','CF (In-Person)':'bg-purple-200 text-purple-800',
-  Offer:'bg-violet-100 text-violet-700', Hired:'bg-green-100 text-green-700',
-  Rejected:'bg-red-100 text-red-700',
+// ── Helpers ──────────────────────────────────────────────────
+
+function parseCSVRobust(text: string): Record<string, string>[] {
+  const lines: string[] = []
+  let current = ''
+  let inQuotes = false
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]
+    if (ch === '"') { inQuotes = !inQuotes }
+    else if ((ch === '\n' || ch === '\r') && !inQuotes) {
+      if (current.trim()) lines.push(current)
+      current = ''
+      if (ch === '\r' && text[i+1] === '\n') i++
+      continue
+    }
+    current += ch
+  }
+  if (current.trim()) lines.push(current)
+
+  const parseRow = (line: string): string[] => {
+    const fields: string[] = []
+    let field = ''
+    let inQ = false
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i]
+      if (ch === '"') {
+        if (inQ && line[i+1] === '"') { field += '"'; i++ }
+        else inQ = !inQ
+      } else if (ch === ',' && !inQ) {
+        fields.push(field.trim())
+        field = ''
+      } else {
+        field += ch
+      }
+    }
+    fields.push(field.trim())
+    return fields
+  }
+
+  if (lines.length < 2) return []
+  const headers = parseRow(lines[0])
+  return lines.slice(1).map(line => {
+    const vals = parseRow(line)
+    return Object.fromEntries(headers.map((h, i) => [h.trim(), (vals[i] ?? '').trim()]))
+  })
 }
 
-interface NoteEntry { text: string; author: string; authorId: string; timestamp: string }
+function extractUrl(text: string): string | null {
+  if (!text) return null
+  // Airtable format: "filename.pdf (https://...)" — extract URL inside parens
+  const parenMatch = text.match(/\(https?:\/\/[^)]+\)/)
+  if (parenMatch) return parenMatch[0].slice(1, -1)
+  // Plain URL
+  const urlMatch = text.match(/https?:\/\/[^\s,)]+/)
+  return urlMatch ? urlMatch[0] : null
+}
 
-export function CandidateProfilePage() {
-  const { id } = useParams<{ id: string }>()
-  const navigate = useNavigate()
-  const { user, hasRole } = useAuthStore()
+function normalizeSource(raw: string): SourceCategory {
+  const v = (raw ?? '').toLowerCase().trim()
+  if (v.includes('college') || v.includes('university') || v.includes('campus') ||
+      v.includes('iit') || v.includes('iim') || v.includes('institute') || v.includes('school'))
+    return 'college'
+  if (v.includes('agency') || v.includes('consultant') || v.includes('recruiter') || v.includes('vendor'))
+    return 'agency'
+  return 'platform'
+}
+
+function normalizePhone(raw: string): string | null {
+  if (!raw) return null
+  const digits = raw.replace(/\D/g, '')
+  if (digits.length >= 10) return '+' + digits
+  return raw || null
+}
+
+// ── Smart Column Detector ────────────────────────────────────
+
+interface ColumnMap {
+  full_name: string; email: string; phone: string; linkedin: string
+  source: string; source_name: string; resume: string; notes: string
+  college: string
+}
+
+function autoDetectColumns(headers: string[]): Partial<ColumnMap> {
+  const find = (...patterns: string[]) =>
+    headers.find(h => patterns.some(p => h.toLowerCase().includes(p.toLowerCase()))) ?? ''
+
+  return {
+    full_name:   find('full name', 'name', 'candidate'),
+    email:       find('email', 'mail'),
+    phone:       find('phone', 'mobile', 'contact'),
+    linkedin:    find('linkedin', 'profile'),
+    source:      find('source'),
+    source_name: find('college/university', 'college', 'university', 'institution', 'agency'),
+    resume:      find('resume', 'cv'),
+    notes:       find('tell us', 'about yourself', 'summary', 'note', 'why'),
+    college:     find('college/university', 'university name', 'institute'),
+  }
+}
+
+function transformRow(row: Record<string, string>, colMap: Partial<ColumnMap>, userId: string, jobId: string | null): any {
+  const get = (key: keyof ColumnMap) => colMap[key] ? (row[colMap[key]!] ?? '') : ''
+
+  const sourceName = get('college') || get('source_name') || get('source') || 'Unknown'
+  const sourceRaw = get('source')
+  const resumeRaw = get('resume')
+  const resumeUrl = extractUrl(resumeRaw)
+
+  return {
+    full_name:             get('full_name').trim(),
+    email:                 get('email').trim().toLowerCase(),
+    phone:                 normalizePhone(get('phone')),
+    linkedin_url:          extractUrl(get('linkedin')) || (get('linkedin').startsWith('http') ? get('linkedin') : null),
+    resume_url:            resumeUrl,
+    source_category:       normalizeSource(sourceRaw || 'college'),
+    source_name:           sourceName.trim() || 'Unknown',
+    notes:                 get('notes').slice(0, 500) || null,
+    current_stage:         'Applied',
+    status:                'active' as const,
+    tags:                  [],
+    assigned_interviewers: [],
+    job_id:                jobId || null,
+    hr_owner:              null,
+    screening_notes:       null,
+    interview_notes:       {},
+    custom_data:           {},
+    uploaded_by:           userId,
+  }
+}
+
+// ── Component ────────────────────────────────────────────────
+
+export function CsvUploader() {
+  const { user } = useAuthStore()
   const qc = useQueryClient()
 
-  const isInterviewer = hasRole(['interviewer'])
-  const canEdit       = hasRole(['admin', 'super_admin', 'hr_team'])
-  const canAddNotes   = hasRole(['admin', 'super_admin', 'hr_team', 'interviewer'])
-  const isSuperAdmin  = hasRole(['super_admin'])
+  const [step, setStep]           = useState<Step>(1)
+  const [rows, setRows]           = useState<Record<string, string>[]>([])
+  const [headers, setHeaders]     = useState<string[]>([])
+  const [colMap, setColMap]       = useState<Partial<ColumnMap>>({})
+  const [selectedJobId, setSelectedJobId] = useState<string>('')
+  const [fileErr, setFileErr]     = useState('')
 
-  const [draftNotes, setDraftNotes]   = useState<Record<string, string>>({})
-  const [savingNote, setSavingNote]   = useState<string | null>(null)
-  const [editContact, setEditContact] = useState(false)
-  const [contactForm, setContactForm] = useState({ phone: '', linkedin_url: '', email: '' })
-  const [stageOpen, setStageOpen]     = useState(false)
-
-  const { data: candidate, isLoading } = useCandidate(id!)
-  const updateStage = useUpdateStage()
-
-  const { data: allUsers = [] } = useQuery({
-    queryKey: ['users', 'all-active'],
+  const { data: jobs = [] } = useQuery({
+    queryKey: ['jobs', 'open'],
     queryFn: async () => {
-      const { data } = await supabase.from('users').select('id,full_name,role').eq('is_active', true)
+      const { data } = await supabase.from('jobs').select('id,title').eq('status','open').order('title')
       return data ?? []
     },
   })
+  const [isAirtable, setIsAirtable] = useState(false)
+  const [transformed, setTransformed] = useState<any[]>([])
+  const [dupMap, setDupMap] = useState<Record<string, string>>({}) // email -> existing candidate name
 
-  const hrUsers     = (allUsers as any[]).filter(u => ['hr_team','admin','super_admin'].includes(u.role))
-  const interviewerUsers = (allUsers as any[]).filter(u => u.role === 'interviewer')
-
-  const updateContact = useMutation({
-    mutationFn: async (data: any) => {
-      const { error } = await supabase.from('candidates').update(data).eq('id', id!)
-      if (error) throw error
-    },
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['candidate', id] }); setEditContact(false) },
+  const mutation = useMutation({
+    mutationFn: (payload: any[]) => candidateService.bulkCreate(payload),
+    onSuccess: () => { qc.invalidateQueries({queryKey:['candidates']}); qc.invalidateQueries({queryKey:['widget']}); setStep(4) },
   })
 
-  const updateField = useMutation({
-    mutationFn: async ({ field, value }: { field: string; value: any }) => {
-      const { error } = await supabase.from('candidates').update({ [field]: value }).eq('id', id!)
-      if (error) throw error
-    },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['candidate', id] }),
-  })
+  const onFile = useCallback((file: File) => {
+    const reader = new FileReader()
+    reader.onload = e => {
+      const text = e.target?.result as string
+      const parsed = parseCSVRobust(text)
+      if (!parsed.length) { setFileErr('CSV empty or invalid.'); return }
 
-  const saveNote = async (sectionKey: string) => {
-    const draft = draftNotes[sectionKey]?.trim()
-    if (!draft) return
-    setSavingNote(sectionKey)
-    const existing = (candidate as any)?.interview_notes ?? {}
-    const entries: NoteEntry[] = existing[sectionKey] ?? []
-    await supabase.from('candidates').update({
-      interview_notes: { ...existing, [sectionKey]: [...entries, {
-        text: draft, author: user!.full_name,
-        authorId: user!.id, timestamp: new Date().toISOString(),
-      }]}
-    }).eq('id', id!)
-    qc.invalidateQueries({ queryKey: ['candidate', id] })
-    setDraftNotes(p => ({ ...p, [sectionKey]: '' }))
-    setSavingNote(null)
+      const hdrs = Object.keys(parsed[0])
+      const detected = autoDetectColumns(hdrs)
+
+      // Detect Airtable format
+      const isAt = hdrs.some(h => h.includes('Airtable') || h.includes('Why') || h.includes('CGPA') || h.includes('relocat'))
+      setIsAirtable(isAt)
+      setRows(parsed)
+      setHeaders(hdrs)
+      setColMap(detected)
+      setFileErr('')
+      setStep(2)
+    }
+    reader.readAsText(file)
+  }, [])
+
+  const onDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    const file = e.dataTransfer.files[0]
+    if (file?.name.endsWith('.csv') || file?.type === 'text/csv') onFile(file)
+    else setFileErr('Please upload a .csv file.')
+  }, [onFile])
+
+  const preview = async () => {
+    const result = rows.map(r => transformRow(r, colMap, user!.id, null))
+    setTransformed(result)
+
+    // Check for duplicates in bulk
+    const emails = result.filter(r => r.email).map(r => r.email)
+    const phones = result.filter(r => r.phone).map(r => r.phone.replace(/\D/g,'').slice(-10)).filter(p => p.length >= 10)
+
+    if (emails.length > 0 || phones.length > 0) {
+      const filters: string[] = []
+      if (emails.length) emails.forEach(e => filters.push(`email.ilike.${e}`))
+      if (phones.length) phones.forEach(p => filters.push(`phone.ilike.%${p}`))
+
+      const { data } = await supabase
+        .from('candidates')
+        .select('id, full_name, email, phone')
+        .or(filters.slice(0, 20).join(',')) // Supabase limit
+        .limit(50)
+
+      const map: Record<string, string> = {}
+      data?.forEach(existing => {
+        if (existing.email) map[existing.email.toLowerCase()] = existing.full_name
+        if (existing.phone) {
+          const p = existing.phone.replace(/\D/g,'').slice(-10)
+          if (p.length >= 10) map[`phone:${p}`] = existing.full_name
+        }
+      })
+      setDupMap(map)
+    }
+
+    setStep(3)
   }
 
-  if (isLoading) return <div className="flex justify-center py-24"><Loader2 className="w-6 h-6 animate-spin text-blue-500"/></div>
-  if (!candidate) return <p className="text-gray-500 py-8 text-center">Candidate not found.</p>
+  const valid   = transformed.filter(r => r.full_name && r.email)
+  const invalid = transformed.filter(r => !r.full_name || !r.email)
 
-  const stages = (candidate as any)?.job?.pipeline_stages ?? [...INTERVIEW_STAGES]
-  const interviewNotes = (candidate as any).interview_notes ?? {}
-  const initialNotes = (candidate as any).notes // from add-candidate form
-  const drivePreviewUrl = candidate.resume_url
-    ? candidate.resume_url.replace('/view','').replace('?usp=sharing','') + (candidate.resume_url.includes('drive.google.com') ? '?embedded=true' : '')
-    : null
-
-  const assignedInterviewerIds: string[] = (candidate as any).assigned_interviewers ?? []
-  const hrOwnerId: string | null = (candidate as any).hr_owner ?? null
-
-  // Multi-select toggle for interviewers
-  const toggleInterviewer = (userId: string) => {
-    const current = assignedInterviewerIds
-    const next = current.includes(userId) ? current.filter(i => i !== userId) : [...current, userId]
-    updateField.mutate({ field: 'assigned_interviewers', value: next })
-  }
-
-  return (
+  // ─── Step 1 ───────────────────────────────────────────────
+  if (step === 1) return (
     <div>
-      <button onClick={() => navigate(-1)} className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700 mb-4 transition-colors">
-        <ArrowLeft className="w-4 h-4"/> Back
-      </button>
+      <div onDrop={onDrop} onDragOver={e=>e.preventDefault()}
+        onClick={()=>document.getElementById('csv-inp')?.click()}
+        className="border-2 border-dashed border-gray-200 rounded-xl p-12 text-center hover:border-blue-400 transition-colors cursor-pointer bg-gray-50/50 hover:bg-blue-50/20">
+        <Upload className="w-8 h-8 text-gray-400 mx-auto mb-3"/>
+        <p className="text-sm font-semibold text-gray-700 mb-1">Drop your CSV here or click to browse</p>
+        <p className="text-xs text-gray-400">Supports Airtable exports, LinkedIn exports, and custom CSV files</p>
+        <input type="file" accept=".csv" id="csv-inp" className="hidden" onChange={e=>{const f=e.target.files?.[0];if(f)onFile(f)}}/>
+      </div>
 
-      <div className="flex items-start justify-between gap-4 mb-5 flex-wrap">
-        <div>
-          <h1 className="text-xl font-semibold text-gray-900">{candidate.full_name}</h1>
-          <p className="text-sm text-gray-400 mt-0.5">{candidate.source_name} · {labelOf(candidate.source_category)}</p>
+      {fileErr && <p className="mt-3 text-sm text-red-600 flex items-center gap-1"><AlertTriangle className="w-4 h-4"/>{fileErr}</p>}
+
+      <div className="mt-4 grid grid-cols-3 gap-3 text-center">
+        {[['✅','Airtable exports','Auto-detected'],['✅','LinkedIn CSV','Auto-detected'],['✅','Custom CSV','Column mapper']].map(([icon,title,sub])=>(
+          <div key={title} className="bg-gray-50 rounded-lg p-3">
+            <p className="text-lg mb-1">{icon}</p>
+            <p className="text-xs font-semibold text-gray-700">{title}</p>
+            <p className="text-xs text-gray-400">{sub}</p>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+
+  // ─── Step 2: Map ──────────────────────────────────────────
+  if (step === 2) return (
+    <div>
+      <Breadcrumb step={2} total={rows.length} onBack={()=>setStep(1)}/>
+
+      {isAirtable && (
+        <div className="flex items-center gap-2 bg-blue-50 border border-blue-200 rounded-xl px-4 py-3 mb-4">
+          <Sparkles className="w-4 h-4 text-blue-500 flex-shrink-0"/>
+          <p className="text-sm text-blue-700">
+            <strong>Airtable format detected!</strong> Columns auto-mapped. Verify below and click Preview.
+          </p>
         </div>
-        {/* Stage dropdown — top right */}
-        <div className="relative">
-          {canEdit ? (
-            <>
-              <button onClick={() => setStageOpen(!stageOpen)}
-                className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-sm font-medium ${STAGE_COLOURS[candidate.current_stage] ?? 'bg-gray-100 text-gray-700'}`}>
-                {candidate.current_stage}
-                <ChevronDown className="w-4 h-4"/>
-              </button>
-              {stageOpen && (
-                <>
-                  <div className="fixed inset-0 z-40" onClick={() => setStageOpen(false)}/>
-                  <div className="absolute right-0 top-full mt-1 bg-white border border-gray-200 rounded-xl shadow-xl z-50 py-1 w-52 max-h-80 overflow-y-auto">
-                    {stages.map((s: string) => (
-                      <button key={s} onClick={() => { updateStage.mutate({ id: candidate.id, stage: s }); setStageOpen(false) }}
-                        className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50 flex items-center justify-between">
-                        <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${STAGE_COLOURS[s] ?? 'bg-gray-100 text-gray-600'}`}>{s}</span>
-                        {s === candidate.current_stage && <Check className="w-3.5 h-3.5 text-blue-500"/>}
-                      </button>
-                    ))}
-                  </div>
-                </>
-              )}
-            </>
-          ) : (
-            <span className={`px-3 py-1.5 rounded-xl text-sm font-medium ${STAGE_COLOURS[candidate.current_stage] ?? 'bg-gray-100 text-gray-700'}`}>
-              {candidate.current_stage}
-            </span>
-          )}
+      )}
+
+      <div className="space-y-2 text-sm">
+        {([
+          ['full_name',   'Full Name *'],
+          ['email',       'Email *'],
+          ['phone',       'Phone'],
+          ['linkedin',    'LinkedIn URL'],
+          ['source',      'Source Type'],
+          ['source_name', 'Source / College Name'],
+          ['resume',      'Resume / CV'],
+          ['notes',       'Notes / About'],
+        ] as [keyof ColumnMap, string][]).map(([key, label]) => (
+          <div key={key} className="flex items-center gap-3">
+            <span className="text-gray-600 w-36 flex-shrink-0 text-xs">{label}</span>
+            <select value={colMap[key]??''}
+              onChange={e=>setColMap(p=>({...p,[key]:e.target.value}))}
+              className={`flex-1 px-3 py-2 border rounded-lg text-xs bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+                colMap[key] ? 'border-green-300 bg-green-50/50' : 'border-gray-200'
+              }`}>
+              <option value="">— skip —</option>
+              {headers.map(h=><option key={h} value={h}>{h}</option>)}
+            </select>
+            {colMap[key] && <span className="text-green-500 text-xs flex-shrink-0">✓</span>}
+          </div>
+        ))}
+      </div>
+
+      <div className="flex justify-end mt-5">
+        <Button onClick={preview} icon={<ChevronRight className="w-4 h-4"/>}>Preview {rows.length} rows</Button>
+      </div>
+    </div>
+  )
+
+  // ─── Step 3: Preview ──────────────────────────────────────
+  if (step === 3) return (
+    <div>
+      <Breadcrumb step={3} total={rows.length} onBack={()=>setStep(2)}/>
+
+      <div className="grid grid-cols-3 gap-3 my-4">
+        <div className="bg-green-50 rounded-xl p-3 text-center">
+          <p className="text-2xl font-bold text-green-700">{valid.length}</p>
+          <p className="text-xs text-green-600">Ready to upload</p>
+        </div>
+        <div className={`${invalid.length>0?'bg-red-50':'bg-gray-50'} rounded-xl p-3 text-center`}>
+          <p className={`text-2xl font-bold ${invalid.length>0?'text-red-600':'text-gray-400'}`}>{invalid.length}</p>
+          <p className={`text-xs ${invalid.length>0?'text-red-500':'text-gray-400'}`}>Skipped (no name/email)</p>
+        </div>
+        <div className="bg-blue-50 rounded-xl p-3 text-center">
+          <p className="text-2xl font-bold text-blue-700">{rows.length}</p>
+          <p className="text-xs text-blue-600">Total rows</p>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-5 gap-5">
-        {/* ── Left column ── */}
-        <div className="lg:col-span-2 space-y-4">
-
-          {/* Contact */}
-          <div className="bg-white rounded-xl border border-gray-200 p-5">
-            <div className="flex items-center justify-between mb-3">
-              <p className="text-sm font-semibold text-gray-700">Contact</p>
-              {canEdit && !editContact && (
-                <button onClick={() => { setContactForm({ phone: candidate.phone ?? '', linkedin_url: candidate.linkedin_url ?? '', email: candidate.email }); setEditContact(true) }}
-                  className="text-gray-400 hover:text-blue-600 transition-colors p-1 rounded hover:bg-blue-50">
-                  <Pencil className="w-3.5 h-3.5"/>
-                </button>
-              )}
-            </div>
-            {editContact ? (
-              <div className="space-y-2.5">
-                {[['email','Email','text'],['phone','Phone','tel'],['linkedin_url','LinkedIn URL','url']].map(([k,label,type]) => (
-                  <div key={k}>
-                    <label className="block text-xs text-gray-500 mb-1">{label}</label>
-                    <input value={(contactForm as any)[k]} type={type}
-                      onChange={e => setContactForm(p => ({...p,[k]:e.target.value}))}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"/>
-                  </div>
-                ))}
-                <div className="flex gap-2 pt-1">
-                  <Button size="sm" loading={updateContact.isPending}
-                    onClick={() => updateContact.mutate({ phone: contactForm.phone||null, linkedin_url: contactForm.linkedin_url||null, email: contactForm.email })}>
-                    Save
-                  </Button>
-                  <Button variant="ghost" size="sm" onClick={() => setEditContact(false)}>Cancel</Button>
-                </div>
-              </div>
-            ) : (
-              <div className="space-y-2.5">
-                <a href={`mailto:${candidate.email}`} className="flex items-center gap-2.5 text-sm text-gray-600 hover:text-blue-600 transition-colors">
-                  <Mail className="w-4 h-4 text-gray-400 flex-shrink-0"/>{candidate.email}
-                </a>
-                {candidate.phone && (
-                  <a href={`tel:${candidate.phone}`} className="flex items-center gap-2.5 text-sm text-gray-600 hover:text-blue-600">
-                    <Phone className="w-4 h-4 text-gray-400 flex-shrink-0"/>{candidate.phone}
-                  </a>
-                )}
-                {candidate.linkedin_url && (
-                  <a href={candidate.linkedin_url} target="_blank" rel="noreferrer" className="flex items-center gap-2.5 text-sm text-blue-600 hover:underline">
-                    <Linkedin className="w-4 h-4 flex-shrink-0"/>LinkedIn Profile
-                  </a>
-                )}
-              </div>
-            )}
-          </div>
-
-          {/* Assignment — HR + Interviewers (multi) */}
-          {!isInterviewer && (
-            <div className="bg-white rounded-xl border border-gray-200 p-5 space-y-4">
-              <p className="text-sm font-semibold text-gray-700">Assignment</p>
-
-              {/* HR Owner — single */}
-              <div>
-                <p className="text-xs text-gray-400 mb-1.5">HR Owner</p>
-                {canEdit ? (
-                  <select value={hrOwnerId ?? ''}
-                    onChange={e => updateField.mutate({ field: 'hr_owner', value: e.target.value || null })}
-                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
-                    <option value="">— Unassigned —</option>
-                    {hrUsers.map((u: any) => <option key={u.id} value={u.id}>{u.full_name}</option>)}
-                  </select>
-                ) : (
-                  <p className="text-sm text-gray-700">{hrUsers.find((u:any) => u.id === hrOwnerId)?.full_name ?? '—'}</p>
-                )}
-              </div>
-
-              {/* Interviewers — multi-select */}
-              <div>
-                <p className="text-xs text-gray-400 mb-1.5">Interviewers <span className="text-gray-300">(select multiple)</span></p>
-                <div className="flex flex-wrap gap-1.5">
-                  {interviewerUsers.map((u: any) => {
-                    const selected = assignedInterviewerIds.includes(u.id)
-                    return (
-                      <button key={u.id}
-                        onClick={() => canEdit && toggleInterviewer(u.id)}
-                        disabled={!canEdit}
-                        className={`px-2.5 py-1 rounded-full text-xs font-medium border transition-all ${
-                          selected ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-200 hover:border-blue-300'
-                        } ${!canEdit ? 'cursor-default' : 'cursor-pointer'}`}>
-                        {u.full_name}
-                      </button>
-                    )
-                  })}
-                  {interviewerUsers.length === 0 && <p className="text-xs text-gray-400">No interviewers added in Settings</p>}
-                </div>
-              </div>
-
-              {/* Interview Date + Time */}
-              <div>
-                <p className="text-xs text-gray-400 mb-1.5">Interview Date</p>
-                {canEdit ? (
-                  <input type="datetime-local"
-                    value={(candidate as any).interview_date ?? ''}
-                    onChange={e => updateField.mutate({ field: 'interview_date', value: e.target.value || null })}
-                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"/>
-                ) : (
-                  <p className="text-sm text-gray-700">{(candidate as any).interview_date ? formatDate((candidate as any).interview_date) : '—'}</p>
-                )}
-              </div>
-            </div>
-          )}
-
-          {/* Meta */}
-          <div className="bg-white rounded-xl border border-gray-200 p-5 space-y-2 text-sm">
-            <Row label="Source" value={`${labelOf(candidate.source_category)} — ${candidate.source_name}`}/>
-            <Row label="Job" value={(candidate as any).job?.title ?? '—'}/>
-            <Row label="Added" value={formatDate(candidate.created_at)}/>
+      {/* Duplicate summary */}
+      {Object.keys(dupMap).length > 0 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 mb-3 flex items-start gap-2">
+          <span className="text-amber-500 text-base flex-shrink-0">⚠️</span>
+          <div>
+            <p className="text-sm font-semibold text-amber-800">Possible duplicates detected</p>
+            <p className="text-xs text-amber-600 mt-0.5">
+              Rows marked with ⚠️ may already exist. Review before uploading.
+            </p>
           </div>
         </div>
+      )}
 
-        {/* ── Right column ── */}
-        <div className="lg:col-span-3 space-y-4">
+      <div className="overflow-x-auto rounded-xl border border-gray-200">
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="bg-gray-50 border-b border-gray-100">
+              <th className="text-left px-3 py-2.5 font-medium text-gray-500">Status</th>
+              <th className="text-left px-3 py-2.5 font-medium text-gray-500">Name</th>
+              <th className="text-left px-3 py-2.5 font-medium text-gray-500">Email</th>
+              <th className="text-left px-3 py-2.5 font-medium text-gray-500">Phone</th>
+              <th className="text-left px-3 py-2.5 font-medium text-gray-500">Source</th>
+              <th className="text-left px-3 py-2.5 font-medium text-gray-500">Source Name</th>
+              <th className="text-left px-3 py-2.5 font-medium text-gray-500">LinkedIn</th>
+              <th className="text-left px-3 py-2.5 font-medium text-gray-500">Resume</th>
+            </tr>
+          </thead>
+          <tbody>
+            {transformed.slice(0,20).map((r,i)=>{
+              const emailDup = r.email && dupMap[r.email.toLowerCase()]
+              const phoneDup = r.phone && dupMap[`phone:${r.phone.replace(/\D/g,'').slice(-10)}`]
+              const isDup = !!(emailDup || phoneDup)
+              const dupName = emailDup || phoneDup
+              return (
+              <tr key={i} className={`border-b border-gray-50 ${!r.full_name||!r.email?'bg-red-50 opacity-60':isDup?'bg-amber-50':''}`}>
+                <td className="px-3 py-2">
+                  {!r.full_name||!r.email
+                    ? <span className="text-red-500 text-xs">✗ skip</span>
+                    : isDup
+                    ? <span className="text-amber-600 text-xs" title={`Matches: ${dupName}`}>⚠️ dup</span>
+                    : <span className="text-green-500 text-xs">✓</span>
+                  }
+                </td>
+                <td className="px-3 py-2 text-gray-600 max-w-[120px] truncate">{r.source_name}</td>
+                <td className="px-3 py-2">{r.linkedin_url?<span className="text-blue-500">✓</span>:'—'}</td>
+                <td className="px-3 py-2">{r.resume_url?<span className="text-green-500">✓</span>:'—'}</td>
+              </tr>
+            )})}
+          </tbody>
+        </table>
+        {transformed.length>20&&<p className="text-xs text-center text-gray-400 py-2">+{transformed.length-20} more rows</p>}
+      </div>
 
-          {/* Resume */}
-          <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-            <div className="flex items-center justify-between px-5 py-3 border-b border-gray-100">
-              <p className="text-sm font-semibold text-gray-700">Resume</p>
-              {candidate.resume_url && (
-                <a href={candidate.resume_url} target="_blank" rel="noreferrer">
-                  <Button variant="ghost" size="sm" icon={<ExternalLink className="w-3.5 h-3.5"/>}>Open</Button>
-                </a>
-              )}
-            </div>
-            {drivePreviewUrl ? (
-              <iframe src={drivePreviewUrl} className="w-full border-0" style={{ height: '320px' }} title="Resume"/>
-            ) : (
-              <div className="flex items-center justify-center h-20 text-gray-400">
-                <p className="text-sm">No resume link</p>
-              </div>
-            )}
-          </div>
+      {mutation.error && (
+        <div className="mt-3 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+          <p className="text-sm text-red-600">{(mutation.error as Error).message}</p>
+        </div>
+      )}
 
-          {/* Notes — from add-candidate form (general notes) */}
-          {(initialNotes || canEdit) && (
-            <div className="bg-white rounded-xl border border-gray-200 p-5">
-              <p className="text-sm font-semibold text-gray-700 mb-2">General Notes</p>
-              {canEdit ? (
-                <textarea
-                  defaultValue={initialNotes ?? ''}
-                  rows={3}
-                  onBlur={e => updateField.mutate({ field: 'notes', value: e.target.value || null })}
-                  placeholder="General notes about this candidate…"
-                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"/>
-              ) : (
-                <p className="text-sm text-gray-700">{initialNotes}</p>
-              )}
-            </div>
+      <div className="flex justify-between mt-5 items-center">
+        <Button variant="secondary" onClick={()=>setStep(2)}>← Back</Button>
+        <div className="text-right">
+          {Object.keys(dupMap).length > 0 && (
+            <p className="text-xs text-amber-600 mb-1">⚠️ {Object.keys(dupMap).length} possible duplicates — will still upload</p>
           )}
-
-          {/* Interview Notes — per round */}
-          <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-            <p className="text-sm font-semibold text-gray-700 px-5 py-3 border-b border-gray-100">Interview Notes</p>
-            <div className="divide-y divide-gray-50">
-              {NOTES_SECTIONS.map(({ key, label }) => {
-                const entries: NoteEntry[] = interviewNotes[key] ?? []
-                const draft = draftNotes[key] ?? ''
-                return (
-                  <div key={key} className="px-5 py-4">
-                    <div className="flex items-center gap-2 mb-2">
-                      <span className={`w-2 h-2 rounded-full flex-shrink-0 ${entries.length > 0 ? 'bg-blue-400' : 'bg-gray-200'}`}/>
-                      <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">{label}</p>
-                      {entries.length > 0 && <span className="text-xs text-gray-400 ml-auto">{entries.length} note{entries.length > 1 ? 's' : ''}</span>}
-                    </div>
-
-                    {entries.length > 0 && (
-                      <div className="space-y-2 mb-3">
-                        {entries.map((e, i) => (
-                          <div key={i} className="bg-gray-50 rounded-lg px-3 py-2.5">
-                            <p className="text-sm text-gray-700 whitespace-pre-wrap">{e.text}</p>
-                            <p className="text-xs text-gray-400 mt-1">
-                              <span className="font-medium text-gray-500">{e.author}</span> · {formatRelative(e.timestamp)}
-                            </p>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-
-                    {canAddNotes && (
-                      <div className="flex gap-2 items-end">
-                        <textarea rows={2} value={draft}
-                          onChange={e => setDraftNotes(p => ({...p,[key]:e.target.value}))}
-                          placeholder={`Add ${label} notes…`}
-                          onKeyDown={e => { if(e.key==='Enter'&&(e.metaKey||e.ctrlKey)) saveNote(key) }}
-                          className="flex-1 px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none bg-white"/>
-                        <button onClick={() => saveNote(key)} disabled={!draft.trim()||savingNote===key}
-                          className="flex-shrink-0 w-8 h-8 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:bg-gray-200 flex items-center justify-center transition-colors">
-                          {savingNote===key ? <Loader2 className="w-3.5 h-3.5 text-white animate-spin"/> : <Send className="w-3.5 h-3.5 text-white"/>}
-                        </button>
-                      </div>
-                    )}
-                    {entries.length === 0 && !canAddNotes && <p className="text-xs text-gray-400">No notes yet</p>}
-                  </div>
-                )
-              })}
-            </div>
-          </div>
+          <Button onClick={()=>mutation.mutate(valid)} loading={mutation.isPending} disabled={valid.length===0}>
+            Upload {valid.length} candidates
+          </Button>
         </div>
       </div>
     </div>
   )
+
+  // ─── Step 4: Done ─────────────────────────────────────────
+  return (
+    <div className="flex flex-col items-center justify-center py-12 gap-3">
+      <CheckCircle className="w-12 h-12 text-green-500"/>
+      <p className="text-lg font-semibold text-gray-900">Upload complete!</p>
+      <p className="text-sm text-gray-500">{valid.length} candidates added to your ATS.</p>
+      <Button variant="secondary" onClick={()=>{setStep(1);setRows([]);setTransformed([])}}>Upload another file</Button>
+    </div>
+  )
 }
 
-function Row({ label, value }: { label: string; value: string }) {
+function Breadcrumb({step,total,onBack}:{step:number;total:number;onBack:()=>void}) {
+  const steps = ['Upload file','Map columns','Preview','Done']
   return (
-    <div className="flex items-start gap-2">
-      <span className="text-gray-400 w-16 flex-shrink-0 text-xs">{label}</span>
-      <span className="text-gray-700 font-medium text-sm">{value}</span>
+    <div className="mb-4">
+      <div className="flex items-center gap-1 text-xs text-gray-400 mb-1">
+        {steps.map((s,i)=>(
+          <span key={i} className={`flex items-center gap-1 ${i+1===step?'text-blue-600 font-semibold':''}`}>
+            {i>0&&<ChevronRight className="w-3 h-3"/>}{s}
+          </span>
+        ))}
+      </div>
+      <p className="text-xs text-gray-400">{total} rows detected</p>
     </div>
   )
 }
