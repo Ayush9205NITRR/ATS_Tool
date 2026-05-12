@@ -1,12 +1,14 @@
 import { useState, useRef, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Search, Upload, UserPlus, Loader2, ExternalLink, FileText, Eye, X, Archive, Trash2, Filter, ChevronDown, Plus } from 'lucide-react'
+import { Search, Upload, UserPlus, Loader2, ExternalLink, FileText, Eye, X, Archive, Trash2, Filter, ChevronDown } from 'lucide-react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useCandidates } from './useCandidates'
 import { PageHeader } from '../../shared/components/PageHeader'
 import { Button } from '../../shared/components/Button'
 import { EmptyState } from '../../shared/components/EmptyState'
 import { Modal } from '../../shared/components/Modal'
+import { FilterBar, applyFilters } from '../../shared/components/FilterBar'
+import type { ActiveFilter } from '../../shared/components/FilterBar'
 import { useAuthStore } from '../auth/authStore'
 import { supabase } from '../../lib/supabaseClient'
 import type { CandidateFilters } from './candidateService'
@@ -16,31 +18,6 @@ import { formatDate } from '../../shared/utils/helpers'
 
 const SOURCES: SourceCategory[] = ['platform', 'agency', 'college']
 
-// ── Airtable-style filter system ─────────────────────────────
-type FilterOp = 'is' | 'is_not' | 'contains' | 'not_contains' | 'is_empty' | 'is_not_empty'
-interface ActiveFilter { id: string; field: string; op: FilterOp; value: string }
-
-const FILTER_FIELDS = [
-  { key: 'full_name',       label: 'Name',       type: 'text' },
-  { key: 'email',           label: 'Email',      type: 'text' },
-  { key: 'current_stage',   label: 'Stage',      type: 'select' },
-  { key: 'source_category', label: 'Source',     type: 'select' },
-  { key: 'source_name',     label: 'Sub-Source', type: 'text' },
-]
-
-const OPS_FOR: Record<string, { op: FilterOp; label: string }[]> = {
-  text: [
-    { op: 'contains',     label: 'contains' },
-    { op: 'not_contains', label: 'does not contain' },
-    { op: 'is',           label: 'is exactly' },
-    { op: 'is_empty',     label: 'is empty' },
-    { op: 'is_not_empty', label: 'is not empty' },
-  ],
-  select: [
-    { op: 'is',     label: 'is' },
-    { op: 'is_not', label: 'is not' },
-  ],
-}
 
 const DEFAULT_COLS = new Set(['stage','job','source','subsource','hr_owner','interviewer','interview_date'])
 const ALL_COLUMNS = [
@@ -159,88 +136,6 @@ function DateCell({ candidateId, value, canEdit, onUpdate }: { candidateId: stri
   )
 }
 
-// ── Airtable Filter Bar ───────────────────────────────────────
-function FilterBar({ filters, onChange }: { filters: ActiveFilter[]; onChange: (f: ActiveFilter[]) => void }) {
-  const addFilter = () => {
-    onChange([...filters, { id: Date.now().toString(), field: 'full_name', op: 'contains', value: '' }])
-  }
-  const updateFilter = (id: string, patch: Partial<ActiveFilter>) => {
-    onChange(filters.map(f => f.id === id ? { ...f, ...patch } : f))
-  }
-  const removeFilter = (id: string) => onChange(filters.filter(f => f.id !== id))
-
-  return (
-    <div className="bg-white border border-gray-200 rounded-xl shadow-lg p-3 w-[480px] z-50">
-      <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Filter candidates</p>
-      {filters.length === 0 && (
-        <p className="text-xs text-gray-400 py-2">No filters yet. Add one below.</p>
-      )}
-      <div className="space-y-2">
-        {filters.map(f => {
-          const fieldDef = FILTER_FIELDS.find(ff => ff.key === f.field)
-          const ops = OPS_FOR[fieldDef?.type ?? 'text']
-          const showValue = !['is_empty','is_not_empty'].includes(f.op)
-          return (
-            <div key={f.id} className="flex items-center gap-2">
-              {/* Field */}
-              <select value={f.field} onChange={e => updateFilter(f.id, { field: e.target.value, op: 'contains', value: '' })}
-                className="flex-1 px-2 py-1.5 border border-gray-200 rounded-lg text-xs bg-white focus:outline-none focus:ring-1 focus:ring-blue-400">
-                {FILTER_FIELDS.map(ff => <option key={ff.key} value={ff.key}>{ff.label}</option>)}
-              </select>
-              {/* Op */}
-              <select value={f.op} onChange={e => updateFilter(f.id, { op: e.target.value as FilterOp })}
-                className="flex-1 px-2 py-1.5 border border-gray-200 rounded-lg text-xs bg-white focus:outline-none focus:ring-1 focus:ring-blue-400">
-                {ops.map(o => <option key={o.op} value={o.op}>{o.label}</option>)}
-              </select>
-              {/* Value */}
-              {showValue && (
-                fieldDef?.type === 'select' ? (
-                  <select value={f.value} onChange={e => updateFilter(f.id, { value: e.target.value })}
-                    className="flex-1 px-2 py-1.5 border border-gray-200 rounded-lg text-xs bg-white focus:outline-none focus:ring-1 focus:ring-blue-400">
-                    <option value="">Choose…</option>
-                    {f.field === 'current_stage'
-                      ? INTERVIEW_STAGES.map(s => <option key={s} value={s}>{s}</option>)
-                      : SOURCES.map(s => <option key={s} value={s} className="capitalize">{s}</option>)
-                    }
-                  </select>
-                ) : (
-                  <input value={f.value} onChange={e => updateFilter(f.id, { value: e.target.value })}
-                    placeholder="value…"
-                    className="flex-1 px-2 py-1.5 border border-gray-200 rounded-lg text-xs focus:outline-none focus:ring-1 focus:ring-blue-400"/>
-                )
-              )}
-              {!showValue && <div className="flex-1"/>}
-              <button onClick={() => removeFilter(f.id)} className="text-gray-300 hover:text-red-500 transition-colors flex-shrink-0">
-                <X className="w-3.5 h-3.5"/>
-              </button>
-            </div>
-          )
-        })}
-      </div>
-      <button onClick={addFilter} className="mt-3 flex items-center gap-1.5 text-xs text-blue-600 hover:text-blue-700 font-medium transition-colors">
-        <Plus className="w-3.5 h-3.5"/> Add filter
-      </button>
-    </div>
-  )
-}
-
-// ── Apply filters client-side ─────────────────────────────────
-function applyFilters(candidates: any[], filters: ActiveFilter[]): any[] {
-  return candidates.filter(c => filters.every(f => {
-    const raw = (c[f.field] ?? '').toString().toLowerCase()
-    const val = f.value.toLowerCase()
-    switch (f.op) {
-      case 'contains':     return raw.includes(val)
-      case 'not_contains': return !raw.includes(val)
-      case 'is':           return raw === val
-      case 'is_not':       return raw !== val
-      case 'is_empty':     return !raw
-      case 'is_not_empty': return !!raw
-      default:             return true
-    }
-  }))
-}
-
 // ── Main Component ────────────────────────────────────────────
 export function CandidatesPage() {
   const navigate = useNavigate()
@@ -279,7 +174,7 @@ export function CandidatesPage() {
   const { data: candidates = [], isLoading } = useCandidates({ ...filters, search: search||undefined })
 
   let displayed = candidates.filter((c:any) => showArchived ? !!c.archived_at : !c.archived_at)
-  if (activeFilters.length > 0) displayed = applyFilters(displayed, activeFilters)
+  if (activeFilters.length > 0) displayed = applyFilters(displayed, activeFilters, jobs as any[])
 
   const updateField = useMutation({
     mutationFn: async ({ id, field, value }: { id: string; field: string; value: any }) => {
@@ -463,7 +358,7 @@ export function CandidatesPage() {
           </Button>
           {showFilterBar && (
             <div className="absolute left-0 top-full mt-1 z-50">
-              <FilterBar filters={activeFilters} onChange={setActiveFilters}/>
+              <FilterBar filters={activeFilters} onChange={setActiveFilters} jobs={jobs as any[]}/>
             </div>
           )}
         </div>
