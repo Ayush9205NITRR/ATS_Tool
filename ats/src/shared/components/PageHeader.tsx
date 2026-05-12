@@ -1,5 +1,6 @@
 // ============================================================
 // PAGE HEADER — consistent top section for every page
+import React from 'react'
 // ============================================================
 interface Props {
   title: string
