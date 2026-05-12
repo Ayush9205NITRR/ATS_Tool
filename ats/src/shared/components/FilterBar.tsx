@@ -1,3 +1,4 @@
+import React from 'react'
 import { X, Plus } from 'lucide-react'
 import { INTERVIEW_STAGES } from '../../types/database.types'
 
