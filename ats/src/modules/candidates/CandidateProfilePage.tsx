@@ -8,7 +8,7 @@ import { useCandidate, useUpdateStage } from './useCandidates'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Button } from '../../shared/components/Button'
 import { useAuthStore } from '../auth/authStore'
-import { formatDate, formatRelative, labelOf } from '../../shared/utils/helpers'
+import { formatDate, formatDateTime, formatRelative, labelOf } from '../../shared/utils/helpers'
 import { supabase } from '../../lib/supabaseClient'
 import { INTERVIEW_STAGES } from '../../types/database.types'
 
@@ -188,7 +188,13 @@ export function CandidateProfilePage() {
   const stages = (candidate as any)?.job?.pipeline_stages ?? [...INTERVIEW_STAGES]
   const interviewNotes = (candidate as any).interview_notes ?? {}
   const assignedInterviewers: string[] = (candidate as any).assigned_interviewers ?? []
-  const hrOwnerId: string | null = (candidate as any).hr_owner ?? null
+  // Multi HR owner — uses assigned_hr_owners array; falls back to legacy hr_owner
+  const assignedHROwners: string[] = (() => {
+    const arr = (candidate as any).assigned_hr_owners
+    if (arr && arr.length > 0) return arr
+    const single = (candidate as any).hr_owner
+    return single ? [single] : []
+  })()
 
   const drivePreviewUrl = candidate.resume_url
     ? candidate.resume_url.includes('drive.google.com')
@@ -308,24 +314,61 @@ export function CandidateProfilePage() {
             <div className="bg-white rounded-xl border border-gray-200 p-5 space-y-4">
               <p className="text-sm font-semibold text-gray-700">Assignment</p>
 
-              {/* HR Owner — single select, only admin/super_admin can change */}
+              {/* HR Owner — pill multi-select, only admin/super_admin can change */}
               <div>
-                <p className="text-xs text-gray-400 mb-1.5">HR Owner</p>
-                {canAssignHR ? (
-                  <select value={hrOwnerId ?? ''}
-                    onChange={e => updateField.mutate({ field: 'hr_owner', value: e.target.value || null })}
-                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
-                    <option value="">— Unassigned —</option>
-                    {hrUsers.map(u => <option key={u.id} value={u.id}>{u.full_name}</option>)}
-                  </select>
+                <p className="text-xs text-gray-400 mb-1.5">
+                  HR Owner
+                  {assignedHROwners.length > 0 && (
+                    <span className="ml-1.5 text-green-600 font-medium">({assignedHROwners.length} assigned)</span>
+                  )}
+                </p>
+                {hrUsers.length === 0 ? (
+                  <p className="text-xs text-gray-400">No HR members found</p>
+                ) : canAssignHR ? (
+                  <div className="flex flex-wrap gap-1.5">
+                    {hrUsers.map(u => {
+                      const sel = assignedHROwners.includes(u.id)
+                      return (
+                        <button key={u.id}
+                          onClick={() => {
+                            const next = sel
+                              ? assignedHROwners.filter(i => i !== u.id)
+                              : [...assignedHROwners, u.id]
+                            // Update both columns for backward compat
+                            updateField.mutate({ field: 'assigned_hr_owners', value: next })
+                            updateField.mutate({ field: 'hr_owner', value: next[0] ?? null })
+                          }}
+                          disabled={updateField.isPending}
+                          className={`px-2.5 py-1 rounded-full text-xs font-medium border transition-all ${
+                            sel
+                              ? 'bg-green-600 text-white border-green-600 shadow-sm'
+                              : 'bg-white text-gray-600 border-gray-200 hover:border-green-300 hover:text-green-600'
+                          } disabled:cursor-not-allowed disabled:opacity-60`}>
+                          {sel && <Check className="w-3 h-3 inline mr-1"/>}
+                          {u.full_name}
+                        </button>
+                      )
+                    })}
+                  </div>
                 ) : (
-                  <p className="text-sm text-gray-700 px-1">
-                    {hrUsers.find(u => u.id === hrOwnerId)?.full_name ?? '—'}
-                  </p>
+                  // HR Team: read-only view
+                  <div className="flex flex-wrap gap-1.5">
+                    {assignedHROwners.length > 0
+                      ? assignedHROwners.map(uid => {
+                          const u = hrUsers.find(h => h.id === uid)
+                          return u ? (
+                            <span key={uid} className="px-2.5 py-1 rounded-full text-xs font-medium bg-green-50 text-green-700 border border-green-200">
+                              {u.full_name}
+                            </span>
+                          ) : null
+                        })
+                      : <p className="text-sm text-gray-400">—</p>
+                    }
+                  </div>
                 )}
               </div>
 
-              {/* Interviewers — TRUE multi-select pill toggle */}
+              {/* Interviewers — multi-select pill toggle */}
               <div>
                 <p className="text-xs text-gray-400 mb-1.5">
                   Interviewers
@@ -357,17 +400,17 @@ export function CandidateProfilePage() {
                 )}
               </div>
 
-              {/* Interview Date — synced ISO */}
+              {/* Interview Date — LOCKED unless editMode is ON */}
               <div>
                 <p className="text-xs text-gray-400 mb-1.5">Interview Date & Time</p>
-                {canEdit ? (
+                {editMode && canEdit ? (
                   <input type="datetime-local"
                     value={toDatetimeLocal((candidate as any).interview_date)}
                     onChange={e => updateField.mutate({ field: 'interview_date', value: toISO(e.target.value) })}
                     className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"/>
                 ) : (
                   <p className="text-sm text-gray-700">
-                    {(candidate as any).interview_date ? formatDate((candidate as any).interview_date) : '—'}
+                    {(candidate as any).interview_date ? formatDateTime((candidate as any).interview_date) : '—'}
                   </p>
                 )}
               </div>
