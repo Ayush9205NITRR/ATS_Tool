@@ -1,6 +1,3 @@
-// ============================================================
-// JOBS SERVICE
-// ============================================================
 import { supabase } from '../../lib/supabaseClient'
 import type { Job } from '../../types/database.types'
 
@@ -14,15 +11,16 @@ export const jobService = {
     return data ?? []
   },
 
-  create: async (payload: Omit<Job, 'id' | 'created_at' | 'updated_at'>) => {
+  create: async (payload: any) => {
     const { data, error } = await supabase.from('jobs').insert(payload).select().single()
     if (error) throw error
     return data
   },
 
-  update: async (id: string, payload: Partial<Job>) => {
+  update: async (id: string, payload: any) => {
     const { data, error } = await supabase
-      .from('jobs').update(payload).eq('id', id).select().single()
+      .from('jobs').update({ ...payload, updated_at: new Date().toISOString() })
+      .eq('id', id).select().single()
     if (error) throw error
     return data
   },
