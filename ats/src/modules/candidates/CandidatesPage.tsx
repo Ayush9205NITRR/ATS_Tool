@@ -21,7 +21,7 @@ import { supabase } from '../../lib/supabaseClient'
 import type { CandidateFilters } from './candidateService'
 import type { SourceCategory } from '../../types/database.types'
 import { INTERVIEW_STAGES } from '../../types/database.types'
-import { formatDate } from '../../shared/utils/helpers'
+import { formatDate, formatDateTime } from '../../shared/utils/helpers'
 
 const SOURCES: SourceCategory[] = ['platform', 'agency', 'college']
 
@@ -135,24 +135,78 @@ function SelectCell({ cid, field, display, options, canEdit, onUpdate, placehold
   )
 }
 
+// ── Multi-Select Cell — pill-based, array field ───────────────
+function MultiSelectCell({ cid, field, selectedIds, options, canEdit, onUpdate }: {
+  cid: string; field: string; selectedIds: string[]
+  options: { label: string; value: string }[]
+  canEdit: boolean
+  onUpdate: (id: string, f: string, v: string[]) => void
+}) {
+  const display = selectedIds.length > 0
+    ? options.filter(o => selectedIds.includes(o.value)).map(o => o.label).join(', ')
+    : null
+
+  const trigger = (
+    <button className="flex items-center gap-1 text-xs text-gray-700 hover:text-blue-600 transition-colors group max-w-[140px]">
+      <span className="truncate">{display ?? <span className="text-gray-300">—</span>}</span>
+      {canEdit && <ChevronDown className="w-3 h-3 text-gray-300 group-hover:text-blue-400 flex-shrink-0"/>}
+    </button>
+  )
+
+  if (!canEdit) return <span className="text-xs text-gray-600">{display ?? '—'}</span>
+
+  return (
+    <PopupSelect trigger={trigger}>
+      <p className="px-3 py-1.5 text-xs text-gray-400 border-b border-gray-100">Select multiple</p>
+      {options.map(o => {
+        const sel = selectedIds.includes(o.value)
+        return (
+          <button key={o.value}
+            onClick={(e) => {
+              e.stopPropagation()
+              const next = sel
+                ? selectedIds.filter(i => i !== o.value)
+                : [...selectedIds, o.value]
+              onUpdate(cid, field, next)
+            }}
+            className={`w-full text-left px-3 py-1.5 text-xs hover:bg-gray-50 flex items-center justify-between gap-2 ${sel ? 'text-blue-700 font-medium' : 'text-gray-700'}`}>
+            <span>{o.label}</span>
+            {sel && <Check className="w-3 h-3 text-blue-500 flex-shrink-0"/>}
+          </button>
+        )
+      })}
+      {selectedIds.length > 0 && (
+        <button onClick={() => onUpdate(cid, field, [])}
+          className="w-full text-left px-3 py-1.5 text-xs text-gray-400 hover:bg-red-50 hover:text-red-500 border-t border-gray-100">
+          Clear all
+        </button>
+      )}
+    </PopupSelect>
+  )
+}
+
 // ── Date Cell ─────────────────────────────────────────────────
 function DateCell({ cid, value, canEdit, onUpdate }: { cid: string; value: string | null; canEdit: boolean; onUpdate: (id: string, f: string, v: any) => void }) {
   const [editing, setEditing] = useState(false)
-  if (!canEdit) return <span className="text-xs text-gray-500">{value ? formatDate(value) : '—'}</span>
+  // Display: always show date + time for sync with profile
+  const display = value ? formatDateTime(value) : null
+
+  if (!canEdit) return <span className="text-xs text-gray-500">{display ?? '—'}</span>
   if (editing) return (
-    <input type="date" defaultValue={value ? value.split('T')[0] : ''} autoFocus
+    <input type="datetime-local"
+      defaultValue={value ? value.replace(' ', 'T').slice(0, 16) : ''}
+      autoFocus
       onBlur={e => {
-        // Save as full ISO string so it's in sync with datetime-local in profile
         const v = e.target.value ? new Date(e.target.value).toISOString() : null
         onUpdate(cid, 'interview_date', v)
         setEditing(false)
       }}
-      className="w-28 px-2 py-0.5 border border-blue-400 rounded text-xs bg-white focus:outline-none"/>
+      className="w-44 px-2 py-0.5 border border-blue-400 rounded text-xs bg-white focus:outline-none"/>
   )
   return (
     <button onClick={() => setEditing(true)}
       className="text-xs text-gray-500 hover:text-blue-600 transition-colors whitespace-nowrap">
-      {value ? formatDate(value) : <span className="text-gray-300">Set date</span>}
+      {display ?? <span className="text-gray-300">Set date & time</span>}
     </button>
   )
 }
@@ -552,13 +606,23 @@ export function CandidatesPage() {
                           options={SOURCES.map(s => ({ label: s.charAt(0).toUpperCase() + s.slice(1), value: s }))}/>
                       </td>}
                       {show('subsource') && <td className="px-3 py-2.5 text-xs text-gray-600">{c.source_name}</td>}
-                      {show('hr_owner') && <td className="px-3 py-2.5 min-w-[120px]">
+                      {show('hr_owner') && <td className="px-3 py-2.5 min-w-[140px]">
                         {/* HR Team can VIEW but not change hr_owner */}
-                        <SelectCell cid={c.id} field="hr_owner"
-                          display={getName(hrUsers as any[], c.hr_owner)}
+                        <MultiSelectCell
+                          cid={c.id}
+                          field="assigned_hr_owners"
+                          selectedIds={
+                            c.assigned_hr_owners?.length > 0
+                              ? c.assigned_hr_owners
+                              : (c.hr_owner ? [c.hr_owner] : [])
+                          }
                           canEdit={canAssignHR}
-                          onUpdate={onUpdate}
-                          options={(hrUsers as any[]).map(u => ({ label: u.full_name, value: u.id }))}/>
+                          onUpdate={(id, _, arr) => {
+                            onUpdate(id, 'assigned_hr_owners', arr)
+                            onUpdate(id, 'hr_owner', arr[0] ?? null) // backward compat
+                          }}
+                          options={(hrUsers as any[]).map(u => ({ label: u.full_name, value: u.id }))}
+                        />
                       </td>}
                       {show('interviewer') && <td className="px-3 py-2.5 min-w-[140px]">
                         {/* Multi-select: shows all assigned, click to toggle */}
