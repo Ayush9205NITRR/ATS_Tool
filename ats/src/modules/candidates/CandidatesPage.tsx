@@ -140,8 +140,13 @@ function DateCell({ cid, value, canEdit, onUpdate }: { cid: string; value: strin
   const [editing, setEditing] = useState(false)
   if (!canEdit) return <span className="text-xs text-gray-500">{value ? formatDate(value) : '—'}</span>
   if (editing) return (
-    <input type="date" defaultValue={value?.split('T')[0] ?? ''} autoFocus
-      onBlur={e => { onUpdate(cid, 'interview_date', e.target.value || null); setEditing(false) }}
+    <input type="date" defaultValue={value ? value.split('T')[0] : ''} autoFocus
+      onBlur={e => {
+        // Save as full ISO string so it's in sync with datetime-local in profile
+        const v = e.target.value ? new Date(e.target.value).toISOString() : null
+        onUpdate(cid, 'interview_date', v)
+        setEditing(false)
+      }}
       className="w-28 px-2 py-0.5 border border-blue-400 rounded text-xs bg-white focus:outline-none"/>
   )
   return (
@@ -180,8 +185,8 @@ export function CandidatesPage() {
   const qc = useQueryClient()
   const canEdit      = hasRole(['admin', 'super_admin', 'hr_team'])
   const canAssign    = hasRole(['admin', 'super_admin'])
+  const canAssignHR  = hasRole(['admin', 'super_admin'])  // HR Team cannot change hr_owner
   const isSuperAdmin = hasRole(['super_admin'])
-  const isHRTeam     = hasRole(['hr_team'])
 
   const [filters, setFilters]         = useState<CandidateFilters>({})
   const [search, setSearch]           = useState('')
@@ -236,12 +241,13 @@ export function CandidatesPage() {
   const displayed = useMemo(() => {
     let list = candidates.filter((c: any) => showArchived ? !!c.archived_at : !c.archived_at)
     if (!activeFilters.length) return list
-    return applyFilters(list, activeFilters, jobs as any[], filterMode)
-  }, [candidates, showArchived, activeFilters, jobs, filterMode])
+    return applyFilters(list, activeFilters, jobs as any[], interviewers as any[], filterMode)
+  }, [candidates, showArchived, activeFilters, jobs, interviewers, filterMode])
 
   const updateField = useMutation({
     mutationFn: async ({ id, field, value }: { id: string; field: string; value: any }) => {
-      const payload = field === 'assigned_interviewers' ? { [field]: value ? [value] : [] } : { [field]: value }
+      // assigned_interviewers is always an array
+      const payload = { [field]: value }
       const { error } = await supabase.from('candidates').update(payload).eq('id', id)
       if (error) throw error
     },
@@ -342,7 +348,7 @@ export function CandidatesPage() {
                       {[
                         ['current_stage', 'Change Stage'],
                         ['job_id', 'Assign Job'],
-                        ['hr_owner', 'Assign HR Owner'],
+                        ...(canAssignHR ? [['hr_owner', 'Assign HR Owner']] : []),
                         ['assigned_interviewers', 'Assign Interviewer'],
                       ].map(([f, label]) => (
                         <button key={f} onClick={() => setBulkField(f)}
@@ -431,6 +437,7 @@ export function CandidatesPage() {
                 filters={activeFilters}
                 onChange={setActiveFilters}
                 jobs={jobs as any[]}
+                interviewers={interviewers as any[]}
                 mode={filterMode}
                 onModeChange={setFilterMode}
               />
@@ -546,24 +553,27 @@ export function CandidatesPage() {
                       </td>}
                       {show('subsource') && <td className="px-3 py-2.5 text-xs text-gray-600">{c.source_name}</td>}
                       {show('hr_owner') && <td className="px-3 py-2.5 min-w-[120px]">
+                        {/* HR Team can VIEW but not change hr_owner */}
                         <SelectCell cid={c.id} field="hr_owner"
                           display={getName(hrUsers as any[], c.hr_owner)}
-                          canEdit={canAssign} onUpdate={onUpdate}
+                          canEdit={canAssignHR}
+                          onUpdate={onUpdate}
                           options={(hrUsers as any[]).map(u => ({ label: u.full_name, value: u.id }))}/>
                       </td>}
-                      {show('interviewer') && <td className="px-3 py-2.5 min-w-[120px]">
-                        {/* HR Team + Admin can see and assign interviewers */}
+                      {show('interviewer') && <td className="px-3 py-2.5 min-w-[140px]">
+                        {/* Multi-select: shows all assigned, click to toggle */}
                         <SelectCell cid={c.id} field="assigned_interviewers"
                           display={interviewerNames || null}
-                          canEdit={canEdit} onUpdate={(id, _, v) => {
-                            // Toggle in array
-                            const curr = c.assigned_interviewers ?? []
+                          canEdit={canEdit}
+                          onUpdate={(id, _, v) => {
+                            const curr: string[] = c.assigned_interviewers ?? []
                             const next = curr.includes(v) ? curr.filter((i: string) => i !== v) : [...curr, v]
                             onUpdate(id, 'assigned_interviewers', next)
                           }}
                           options={(interviewers as any[]).map(u => ({ label: u.full_name, value: u.id }))}/>
                       </td>}
                       {show('interview_date') && <td className="px-3 py-2.5 min-w-[110px]">
+                        {/* Reads ISO timestamp, displays formatted */}
                         <DateCell cid={c.id} value={c.interview_date} canEdit={canEdit} onUpdate={onUpdate}/>
                       </td>}
                       {show('notes') && <td className="px-3 py-2.5 max-w-[140px]">
