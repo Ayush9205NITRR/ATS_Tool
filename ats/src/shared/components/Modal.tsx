@@ -1,6 +1,7 @@
 // ============================================================
 // MODAL — accessible dialog wrapper
 // ============================================================
+import React from 'react'
 import { useEffect } from 'react'
 import { X } from 'lucide-react'
 
