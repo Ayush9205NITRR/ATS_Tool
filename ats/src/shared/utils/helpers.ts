@@ -3,8 +3,18 @@
 // ============================================================
 
 export function formatDate(iso: string): string {
+  if (!iso) return '—'
   return new Date(iso).toLocaleDateString('en-IN', {
     day: 'numeric', month: 'short', year: 'numeric',
+  })
+}
+
+// Date + Time — used for interview_date cells that have time component
+export function formatDateTime(iso: string): string {
+  if (!iso) return '—'
+  return new Date(iso).toLocaleString('en-IN', {
+    day: 'numeric', month: 'short', year: 'numeric',
+    hour: '2-digit', minute: '2-digit',
   })
 }
 
@@ -26,7 +36,6 @@ export function labelOf(value: string): string {
   return value.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
 }
 
-// CSV parser — returns array of objects keyed by header row
 export function parseCSV(text: string): Record<string, string>[] {
   const lines = text.trim().split('\n')
   if (lines.length < 2) return []
