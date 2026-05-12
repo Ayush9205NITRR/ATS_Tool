@@ -11,6 +11,7 @@ export interface CandidateFilters {
   source_category?: SourceCategory
   job_id?: string
   search?: string
+  hr_owner?: string
 }
 
 export const candidateService = {
@@ -24,6 +25,7 @@ export const candidateService = {
     if (filters.status)          query = query.eq('status', filters.status)
     if (filters.source_category) query = query.eq('source_category', filters.source_category)
     if (filters.job_id)          query = query.eq('job_id', filters.job_id)
+    if (filters.hr_owner)          query = query.eq('hr_owner', filters.hr_owner)
     if (filters.search) {
       query = query.or(`full_name.ilike.%${filters.search}%,email.ilike.%${filters.search}%`)
     }
@@ -82,3 +84,5 @@ export const candidateService = {
     if (error) throw error
   },
 }
+
+// Extended filter — hr_owner
