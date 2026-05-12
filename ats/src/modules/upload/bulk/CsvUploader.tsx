@@ -1,9 +1,10 @@
 import { useState, useCallback } from 'react'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQueryClient, useQuery } from '@tanstack/react-query'
 import { Upload, CheckCircle, AlertTriangle, ChevronRight, Sparkles } from 'lucide-react'
 import { candidateService } from '../../candidates/candidateService'
 import { useAuthStore } from '../../auth/authStore'
 import { Button } from '../../../shared/components/Button'
+import { supabase } from '../../../lib/supabaseClient'
 import type { SourceCategory } from '../../../types/database.types'
 
 type Step = 1 | 2 | 3 | 4
@@ -147,9 +148,18 @@ export function CsvUploader() {
   const [rows, setRows]           = useState<Record<string, string>[]>([])
   const [headers, setHeaders]     = useState<string[]>([])
   const [colMap, setColMap]       = useState<Partial<ColumnMap>>({})
-  const [fileErr, setFileErr]     = useState('')
+  const [selectedJobId, setSelectedJobId] = useState<string>('')
+
+  const { data: jobs = [] } = useQuery({
+    queryKey: ['jobs', 'open'],
+    queryFn: async () => {
+      const { data } = await supabase.from('jobs').select('id,title').eq('status','open').order('title')
+      return data ?? []
+    },
+  })
   const [isAirtable, setIsAirtable] = useState(false)
   const [transformed, setTransformed] = useState<any[]>([])
+  const [dupMap, setDupMap] = useState<Record<string, string>>({}) // email -> existing candidate name
 
   const mutation = useMutation({
     mutationFn: (payload: any[]) => candidateService.bulkCreate(payload),
@@ -185,9 +195,36 @@ export function CsvUploader() {
     else setFileErr('Please upload a .csv file.')
   }, [onFile])
 
-  const preview = () => {
+  const preview = async () => {
     const result = rows.map(r => transformRow(r, colMap, user!.id, null))
     setTransformed(result)
+
+    // Check for duplicates in bulk
+    const emails = result.filter(r => r.email).map(r => r.email)
+    const phones = result.filter(r => r.phone).map(r => r.phone.replace(/\D/g,'').slice(-10)).filter(p => p.length >= 10)
+
+    if (emails.length > 0 || phones.length > 0) {
+      const filters: string[] = []
+      if (emails.length) emails.forEach(e => filters.push(`email.ilike.${e}`))
+      if (phones.length) phones.forEach(p => filters.push(`phone.ilike.%${p}`))
+
+      const { data } = await supabase
+        .from('candidates')
+        .select('id, full_name, email, phone')
+        .or(filters.slice(0, 20).join(',')) // Supabase limit
+        .limit(50)
+
+      const map: Record<string, string> = {}
+      data?.forEach(existing => {
+        if (existing.email) map[existing.email.toLowerCase()] = existing.full_name
+        if (existing.phone) {
+          const p = existing.phone.replace(/\D/g,'').slice(-10)
+          if (p.length >= 10) map[`phone:${p}`] = existing.full_name
+        }
+      })
+      setDupMap(map)
+    }
+
     setStep(3)
   }
 
@@ -286,10 +323,24 @@ export function CsvUploader() {
         </div>
       </div>
 
+      {/* Duplicate summary */}
+      {Object.keys(dupMap).length > 0 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 mb-3 flex items-start gap-2">
+          <span className="text-amber-500 text-base flex-shrink-0">⚠️</span>
+          <div>
+            <p className="text-sm font-semibold text-amber-800">Possible duplicates detected</p>
+            <p className="text-xs text-amber-600 mt-0.5">
+              Rows marked with ⚠️ may already exist. Review before uploading.
+            </p>
+          </div>
+        </div>
+      )}
+
       <div className="overflow-x-auto rounded-xl border border-gray-200">
         <table className="w-full text-xs">
           <thead>
             <tr className="bg-gray-50 border-b border-gray-100">
+              <th className="text-left px-3 py-2.5 font-medium text-gray-500">Status</th>
               <th className="text-left px-3 py-2.5 font-medium text-gray-500">Name</th>
               <th className="text-left px-3 py-2.5 font-medium text-gray-500">Email</th>
               <th className="text-left px-3 py-2.5 font-medium text-gray-500">Phone</th>
@@ -300,17 +351,26 @@ export function CsvUploader() {
             </tr>
           </thead>
           <tbody>
-            {transformed.slice(0,20).map((r,i)=>(
-              <tr key={i} className={`border-b border-gray-50 ${!r.full_name||!r.email?'bg-red-50 opacity-60':''}`}>
-                <td className="px-3 py-2 font-medium text-gray-900">{r.full_name||<span className="text-red-400">—</span>}</td>
-                <td className="px-3 py-2 text-gray-600 max-w-[160px] truncate">{r.email||<span className="text-red-400">—</span>}</td>
-                <td className="px-3 py-2 text-gray-500">{r.phone||'—'}</td>
-                <td className="px-3 py-2"><span className="bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded text-xs">{r.source_category}</span></td>
+            {transformed.slice(0,20).map((r,i)=>{
+              const emailDup = r.email && dupMap[r.email.toLowerCase()]
+              const phoneDup = r.phone && dupMap[`phone:${r.phone.replace(/\D/g,'').slice(-10)}`]
+              const isDup = !!(emailDup || phoneDup)
+              const dupName = emailDup || phoneDup
+              return (
+              <tr key={i} className={`border-b border-gray-50 ${!r.full_name||!r.email?'bg-red-50 opacity-60':isDup?'bg-amber-50':''}`}>
+                <td className="px-3 py-2">
+                  {!r.full_name||!r.email
+                    ? <span className="text-red-500 text-xs">✗ skip</span>
+                    : isDup
+                    ? <span className="text-amber-600 text-xs" title={`Matches: ${dupName}`}>⚠️ dup</span>
+                    : <span className="text-green-500 text-xs">✓</span>
+                  }
+                </td>
                 <td className="px-3 py-2 text-gray-600 max-w-[120px] truncate">{r.source_name}</td>
                 <td className="px-3 py-2">{r.linkedin_url?<span className="text-blue-500">✓</span>:'—'}</td>
                 <td className="px-3 py-2">{r.resume_url?<span className="text-green-500">✓</span>:'—'}</td>
               </tr>
-            ))}
+            )})}
           </tbody>
         </table>
         {transformed.length>20&&<p className="text-xs text-center text-gray-400 py-2">+{transformed.length-20} more rows</p>}
@@ -322,11 +382,16 @@ export function CsvUploader() {
         </div>
       )}
 
-      <div className="flex justify-between mt-5">
+      <div className="flex justify-between mt-5 items-center">
         <Button variant="secondary" onClick={()=>setStep(2)}>← Back</Button>
-        <Button onClick={()=>mutation.mutate(valid)} loading={mutation.isPending} disabled={valid.length===0}>
-          Upload {valid.length} candidates
-        </Button>
+        <div className="text-right">
+          {Object.keys(dupMap).length > 0 && (
+            <p className="text-xs text-amber-600 mb-1">⚠️ {Object.keys(dupMap).length} possible duplicates — will still upload</p>
+          )}
+          <Button onClick={()=>mutation.mutate(valid)} loading={mutation.isPending} disabled={valid.length===0}>
+            Upload {valid.length} candidates
+          </Button>
+        </div>
       </div>
     </div>
   )
