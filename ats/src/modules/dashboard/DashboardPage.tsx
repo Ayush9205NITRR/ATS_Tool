@@ -1,231 +1,147 @@
-// ── Airtable-style Filter Bar ─────────────────────────────────
-// Supports: text (contains/not_contains/is/is_empty/is_not_empty)
-//           single-select (is/is_not)
-//           multi-select (is_any_of/is_none_of)
+import { useState, useEffect } from 'react'
+import { Settings2, X, SlidersHorizontal } from 'lucide-react'
+import { WIDGET_REGISTRY, type WidgetConfig } from './widgetRegistry'
+import { useAuthStore } from '../auth/authStore'
+import { Button } from '../../shared/components/Button'
+import { useQuery } from '@tanstack/react-query'
+import { supabase } from '../../lib/supabaseClient'
 
-import { X, Plus } from 'lucide-react'
-import { INTERVIEW_STAGES } from '../../types/database.types'
+const STORAGE_KEY = 'ats_dashboard_v3'
 
-export type FilterOp =
-  | 'contains' | 'not_contains'
-  | 'is' | 'is_not'
-  | 'is_any_of' | 'is_none_of'
-  | 'is_empty' | 'is_not_empty'
-
-export interface ActiveFilter {
-  id: string
-  field: string
-  op: FilterOp
-  value: string      // single value
-  values: string[]   // multi values (is_any_of / is_none_of)
+function loadConfig(role: string): string[] {
+  try { const s = localStorage.getItem(`${STORAGE_KEY}_${role}`); if (s) return JSON.parse(s) } catch {}
+  return WIDGET_REGISTRY.filter(w => w.roles.includes(role)).map(w => w.id)
+}
+function saveConfig(role: string, ids: string[]) {
+  try { localStorage.setItem(`${STORAGE_KEY}_${role}`, JSON.stringify(ids)) } catch {}
+}
+function getGreeting() {
+  const h = new Date().getHours()
+  return h < 12 ? 'morning' : h < 17 ? 'afternoon' : 'evening'
 }
 
-export const FILTER_FIELDS = [
-  { key: 'full_name',       label: 'Name',         type: 'text'   },
-  { key: 'email',           label: 'Email',        type: 'text'   },
-  { key: 'phone',           label: 'Phone',        type: 'text'   },
-  { key: 'current_stage',   label: 'Stage',        type: 'multi'  },
-  { key: 'source_category', label: 'Source',       type: 'single' },
-  { key: 'source_name',     label: 'Sub-Source',   type: 'text'   },
-  { key: 'job_id',          label: 'Job',          type: 'single' }, // handled via jobs list
-]
+// Context for widgets to consume job filter
+export const DashboardContext = { jobId: null as string | null }
 
-export const OPS_FOR_TYPE: Record<string, { op: FilterOp; label: string }[]> = {
-  text: [
-    { op: 'contains',     label: 'contains' },
-    { op: 'not_contains', label: 'does not contain' },
-    { op: 'is',           label: 'is exactly' },
-    { op: 'is_not',       label: 'is not' },
-    { op: 'is_empty',     label: 'is empty' },
-    { op: 'is_not_empty', label: 'is not empty' },
-  ],
-  single: [
-    { op: 'is',     label: 'is' },
-    { op: 'is_not', label: 'is not' },
-  ],
-  multi: [
-    { op: 'is_any_of',  label: 'is any of' },
-    { op: 'is_none_of', label: 'is none of' },
-    { op: 'is',         label: 'is exactly' },
-  ],
-}
+export function DashboardPage() {
+  const { user } = useAuthStore()
+  const isSuperAdmin = user?.role === 'super_admin'
+  const [customizing, setCustomizing] = useState(false)
+  const [visibleIds, setVisibleIds] = useState<string[]>([])
+  const [jobFilter, setJobFilter] = useState('')
 
-const SOURCES = ['platform', 'agency', 'college']
+  const { data: jobs = [] } = useQuery({
+    queryKey: ['jobs', 'filter'],
+    queryFn: async () => { const { data } = await supabase.from('jobs').select('id,title').order('title'); return data ?? [] },
+  })
 
-export function applyFilters(candidates: any[], filters: ActiveFilter[], jobs: any[]): any[] {
-  return candidates.filter(c =>
-    filters.every(f => {
-      const raw = (c[f.field] ?? '').toString().toLowerCase().trim()
-      const val = f.value.toLowerCase().trim()
+  useEffect(() => { if (user) setVisibleIds(loadConfig(user.role)) }, [user?.role])
 
-      switch (f.op) {
-        case 'contains':      return raw.includes(val)
-        case 'not_contains':  return !raw.includes(val)
-        case 'is':            return raw === val
-        case 'is_not':        return raw !== val
-        case 'is_empty':      return !raw
-        case 'is_not_empty':  return !!raw
-        case 'is_any_of':
-          return f.values.length === 0 || f.values.some(v => raw === v.toLowerCase())
-        case 'is_none_of':
-          return f.values.length === 0 || !f.values.some(v => raw === v.toLowerCase())
-        default: return true
-      }
-    })
-  )
-}
+  if (!user) return null
 
-interface FilterBarProps {
-  filters: ActiveFilter[]
-  onChange: (f: ActiveFilter[]) => void
-  jobs: { id: string; title: string }[]
-}
+  const available = WIDGET_REGISTRY.filter(w => w.roles.includes(user.role))
+  const visible = visibleIds.map(id => available.find(w => w.id === id)).filter(Boolean) as WidgetConfig[]
 
-export function FilterBar({ filters, onChange, jobs }: FilterBarProps) {
-  const add = () => onChange([...filters, {
-    id: Date.now().toString(),
-    field: 'full_name',
-    op: 'contains',
-    value: '',
-    values: [],
-  }])
-
-  const update = (id: string, patch: Partial<ActiveFilter>) =>
-    onChange(filters.map(f => f.id === id ? { ...f, ...patch } : f))
-
-  const remove = (id: string) => onChange(filters.filter(f => f.id !== id))
-
-  const toggleMultiValue = (filterId: string, val: string) => {
-    const f = filters.find(ff => ff.id === filterId)
-    if (!f) return
-    const next = f.values.includes(val)
-      ? f.values.filter(v => v !== val)
-      : [...f.values, val]
-    update(filterId, { values: next })
+  const toggle = (id: string) => {
+    const next = visibleIds.includes(id) ? visibleIds.filter(i => i !== id) : [...visibleIds, id]
+    setVisibleIds(next); saveConfig(user.role, next)
   }
+  const reset = () => { const def = available.map(w => w.id); setVisibleIds(def); saveConfig(user.role, def) }
+
+  const smWidgets = visible.filter(w => w.size === 'sm')
+  const mdWidgets = visible.filter(w => w.size === 'md')
+  const lgWidgets = visible.filter(w => w.size === 'lg')
 
   return (
-    <div className="bg-white border border-gray-200 rounded-xl shadow-xl p-4 w-[520px] z-50">
-      <p className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-3">Filter Candidates</p>
-
-      {filters.length === 0 && (
-        <p className="text-xs text-gray-400 py-1 mb-2">No filters active. Add one below.</p>
-      )}
-
-      <div className="space-y-3">
-        {filters.map(f => {
-          const fieldDef = FILTER_FIELDS.find(ff => ff.key === f.field) ?? { type: 'text' }
-          const ops = OPS_FOR_TYPE[fieldDef.type] ?? OPS_FOR_TYPE.text
-          const showValue = !['is_empty', 'is_not_empty'].includes(f.op)
-          const isMulti = ['is_any_of', 'is_none_of'].includes(f.op)
-
-          // Option lists for select fields
-          const getOptions = (field: string) => {
-            if (field === 'current_stage') return [...INTERVIEW_STAGES]
-            if (field === 'source_category') return SOURCES
-            if (field === 'job_id') return jobs.map(j => j.title)
-            return []
-          }
-          const getOptionValue = (field: string, label: string) => {
-            if (field === 'job_id') return jobs.find(j => j.title === label)?.id ?? label
-            return label
-          }
-
-          return (
-            <div key={f.id} className="space-y-2">
-              <div className="flex items-center gap-2">
-                {/* Field selector */}
-                <select
-                  value={f.field}
-                  onChange={e => {
-                    const newField = e.target.value
-                    const newDef = FILTER_FIELDS.find(ff => ff.key === newField)
-                    const newOps = OPS_FOR_TYPE[newDef?.type ?? 'text']
-                    update(f.id, { field: newField, op: newOps[0].op, value: '', values: [] })
-                  }}
-                  className="flex-1 px-2.5 py-1.5 border border-gray-200 rounded-lg text-xs bg-white focus:outline-none focus:ring-2 focus:ring-blue-400"
-                >
-                  {FILTER_FIELDS.map(ff => (
-                    <option key={ff.key} value={ff.key}>{ff.label}</option>
-                  ))}
-                </select>
-
-                {/* Op selector */}
-                <select
-                  value={f.op}
-                  onChange={e => update(f.id, { op: e.target.value as FilterOp, value: '', values: [] })}
-                  className="flex-1 px-2.5 py-1.5 border border-gray-200 rounded-lg text-xs bg-white focus:outline-none focus:ring-2 focus:ring-blue-400"
-                >
-                  {ops.map(o => <option key={o.op} value={o.op}>{o.label}</option>)}
-                </select>
-
-                {/* Single text value */}
-                {showValue && !isMulti && fieldDef.type === 'text' && (
-                  <input
-                    value={f.value}
-                    onChange={e => update(f.id, { value: e.target.value })}
-                    placeholder="value…"
-                    className="flex-1 px-2.5 py-1.5 border border-gray-200 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-blue-400"
-                  />
-                )}
-
-                {/* Single select value */}
-                {showValue && !isMulti && (fieldDef.type === 'single' || fieldDef.type === 'multi') && (
-                  <select
-                    value={f.value}
-                    onChange={e => update(f.id, { value: e.target.value })}
-                    className="flex-1 px-2.5 py-1.5 border border-gray-200 rounded-lg text-xs bg-white focus:outline-none focus:ring-2 focus:ring-blue-400"
-                  >
-                    <option value="">Choose…</option>
-                    {getOptions(f.field).map(opt => (
-                      <option key={opt} value={getOptionValue(f.field, opt)}>{opt}</option>
-                    ))}
-                  </select>
-                )}
-
-                {!showValue && <div className="flex-1"/>}
-
-                <button onClick={() => remove(f.id)} className="text-gray-300 hover:text-red-500 transition-colors flex-shrink-0">
-                  <X className="w-4 h-4"/>
+    <div className="space-y-5">
+      {/* Header */}
+      <div className="flex items-start justify-between gap-4 flex-wrap">
+        <div>
+          <h1 className="text-xl font-semibold text-gray-900">
+            Good {getGreeting()}, {user.full_name.split(' ')[0]} 👋
+          </h1>
+          <p className="text-sm text-gray-400 mt-0.5">Here's what's happening in your pipeline today.</p>
+        </div>
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* Job filter */}
+          {available.some(w => ['job-breakdown','funnel-stages','hr-dashboard','source-funnel'].includes(w.id)) && (
+            <div className="flex items-center gap-2 bg-white border border-gray-200 rounded-lg px-3 py-2">
+              <SlidersHorizontal className="w-3.5 h-3.5 text-gray-400"/>
+              <select value={jobFilter} onChange={e => setJobFilter(e.target.value)}
+                className="text-sm bg-transparent border-none outline-none text-gray-700 pr-1">
+                <option value="">All Jobs</option>
+                {(jobs as any[]).map(j => <option key={j.id} value={j.id}>{j.title}</option>)}
+              </select>
+              {jobFilter && (
+                <button onClick={() => setJobFilter('')} className="text-gray-400 hover:text-gray-600">
+                  <X className="w-3.5 h-3.5"/>
                 </button>
-              </div>
-
-              {/* Multi-select checkboxes */}
-              {showValue && isMulti && (
-                <div className="ml-2 flex flex-wrap gap-1.5 p-2 bg-gray-50 rounded-lg">
-                  {getOptions(f.field).map(opt => {
-                    const val = getOptionValue(f.field, opt)
-                    const selected = f.values.includes(val)
-                    return (
-                      <button
-                        key={opt}
-                        onClick={() => toggleMultiValue(f.id, val)}
-                        className={`px-2.5 py-1 rounded-full text-xs font-medium border transition-all ${
-                          selected
-                            ? 'bg-blue-600 text-white border-blue-600'
-                            : 'bg-white text-gray-600 border-gray-200 hover:border-blue-300 hover:text-blue-600'
-                        }`}
-                      >
-                        {opt}
-                      </button>
-                    )
-                  })}
-                  {f.values.length > 0 && (
-                    <span className="text-xs text-gray-400 self-center ml-1">{f.values.length} selected</span>
-                  )}
-                </div>
               )}
             </div>
-          )
-        })}
+          )}
+
+          {isSuperAdmin && (
+            <>
+              {customizing && <Button variant="ghost" size="sm" onClick={reset}>Reset</Button>}
+              <Button variant={customizing ? 'primary' : 'secondary'} size="sm"
+                icon={customizing ? <X className="w-3.5 h-3.5"/> : <Settings2 className="w-3.5 h-3.5"/>}
+                onClick={() => setCustomizing(!customizing)}>
+                {customizing ? 'Done' : 'Customize'}
+              </Button>
+            </>
+          )}
+        </div>
       </div>
 
-      <button
-        onClick={add}
-        className="mt-3 flex items-center gap-1.5 text-xs text-blue-600 hover:text-blue-700 font-medium transition-colors"
-      >
-        <Plus className="w-3.5 h-3.5"/> Add filter
-      </button>
+      {/* Widget picker */}
+      {customizing && (
+        <div className="bg-white border border-gray-200 rounded-xl p-4">
+          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Toggle Widgets</p>
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2">
+            {available.map(w => {
+              const isOn = visibleIds.includes(w.id)
+              return (
+                <button key={w.id} onClick={() => toggle(w.id)}
+                  className={`text-left p-3 rounded-xl border-2 transition-all ${isOn ? 'border-blue-500 bg-blue-50/40' : 'border-gray-100 opacity-50 hover:opacity-70'}`}>
+                  <div className="flex items-center justify-between gap-2 mb-1">
+                    <p className="text-xs font-semibold text-gray-800 truncate">{w.title}</p>
+                    <div className={`w-3.5 h-3.5 rounded-full flex-shrink-0 border-2 ${isOn ? 'bg-blue-500 border-blue-500' : 'border-gray-300'}`}/>
+                  </div>
+                  <p className="text-xs text-gray-400 leading-tight">{w.description}</p>
+                </button>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Stat cards */}
+      {smWidgets.length > 0 && (
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          {smWidgets.map(({ id, component: W }) => <W key={id}/>)}
+        </div>
+      )}
+
+      {/* Medium — 2 col */}
+      {mdWidgets.length > 0 && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {mdWidgets.map(({ id, component: W }) => <W key={id}/>)}
+        </div>
+      )}
+
+      {/* Large — full width */}
+      {lgWidgets.length > 0 && (
+        <div className="space-y-4">
+          {lgWidgets.map(({ id, component: W }) => <W key={id}/>)}
+        </div>
+      )}
+
+      {visible.length === 0 && (
+        <div className="flex flex-col items-center justify-center py-20 text-gray-400">
+          <p className="text-sm">No widgets visible.</p>
+          {isSuperAdmin && <p className="text-xs mt-1">Click <strong>Customize</strong> to add widgets.</p>}
+        </div>
+      )}
     </div>
   )
 }
