@@ -1,6 +1,9 @@
 // ============================================================
 // INTERVIEWS PAGE — Interviewer's focused view
-// Improvements: collapsible sections, search, filter by job/stage
+// Fixes:
+//  - "Feedback Submitted" section now driven by interview_feedback table
+//  - Interviewer submits feedback via profile page → this list updates
+//  - Section counts are accurate
 // ============================================================
 import { useState, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
@@ -95,7 +98,6 @@ export function InterviewsPage() {
   const { user } = useAuthStore()
   const navigate = useNavigate()
 
-  // Filter state
   const [search, setSearch]           = useState('')
   const [jobFilter, setJobFilter]     = useState('')
   const [stageFilter, setStageFilter] = useState('')
@@ -103,26 +105,32 @@ export function InterviewsPage() {
   const { data, isLoading } = useQuery({
     queryKey: ['my-interviews', user?.id],
     queryFn: async () => {
+      // All candidates assigned to me
       const { data: candidates } = await supabase
         .from('candidates')
-        .select('id, full_name, current_stage, interview_date, job:jobs(id, title)')
+        .select('id, full_name, current_stage, interview_date, assigned_interviewers, job:jobs(id, title)')
         .contains('assigned_interviewers', [user!.id])
-        .eq('status', 'active')
+        .is('archived_at', null)
         .order('interview_date', { ascending: true, nullsFirst: false })
 
+      // My submitted feedbacks
       const { data: feedback } = await supabase
         .from('interview_feedback')
         .select('candidate_id')
         .eq('interviewer_id', user!.id)
 
-      const doneIds = new Set((feedback ?? []).map(f => f.candidate_id))
+      const doneIds = new Set((feedback ?? []).map((f: any) => f.candidate_id))
       const all     = candidates ?? []
 
+      // ── Categorise ───────────────────────────────────────────
+      // "Completed" = I have submitted feedback
+      const completed = all.filter(c => doneIds.has(c.id))
+      // "Pending" = assigned to me, no feedback yet
       const pending   = all.filter(c => !doneIds.has(c.id))
-      const completed = all.filter(c =>  doneIds.has(c.id))
+      // "Upcoming" = pending AND has an interview date
       const upcoming  = pending
         .filter(c => c.interview_date)
-        .sort((a, b) => new Date(a.interview_date).getTime() - new Date(b.interview_date).getTime())
+        .sort((a, b) => new Date(a.interview_date!).getTime() - new Date(b.interview_date!).getTime())
 
       // Unique jobs for filter dropdown
       const jobs = Array.from(
@@ -139,6 +147,8 @@ export function InterviewsPage() {
       return { pending, completed, upcoming, total: all.length, jobs, stages }
     },
     enabled: !!user,
+    // Refetch when user navigates back to this page (e.g. after submitting feedback)
+    refetchOnWindowFocus: true,
   })
 
   // Client-side filter applied to all three sections
@@ -185,14 +195,12 @@ export function InterviewsPage() {
             </div>
             <div className="bg-white rounded-xl border border-gray-200 p-4 text-center">
               <p className="text-3xl font-bold text-green-600">{data?.completed.length ?? 0}</p>
-              <p className="text-sm text-gray-500 mt-1">Completed</p>
+              <p className="text-sm text-gray-500 mt-1">Feedback submitted</p>
             </div>
           </div>
 
           {/* Search + Filters */}
           <div className="flex flex-wrap gap-2 items-center">
-
-            {/* Search */}
             <div className="relative flex-1 min-w-48">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400"/>
               <input
@@ -203,7 +211,6 @@ export function InterviewsPage() {
               />
             </div>
 
-            {/* Job filter */}
             <select
               value={jobFilter}
               onChange={e => setJobFilter(e.target.value)}
@@ -215,7 +222,6 @@ export function InterviewsPage() {
               ))}
             </select>
 
-            {/* Stage filter */}
             <select
               value={stageFilter}
               onChange={e => setStageFilter(e.target.value)}
@@ -227,7 +233,6 @@ export function InterviewsPage() {
               ))}
             </select>
 
-            {/* Clear filters */}
             {hasFilters && (
               <button
                 onClick={() => { setSearch(''); setJobFilter(''); setStageFilter('') }}
@@ -251,7 +256,7 @@ export function InterviewsPage() {
           }
 
           {/* Upcoming Interviews */}
-          {(hasFilters ? filteredUpcoming.length > 0 : (data?.upcoming?.length ?? 0) > 0) && (
+          {filteredUpcoming.length > 0 && (
             <Section
               title="📅 Upcoming Interviews"
               count={filteredUpcoming.length}
@@ -270,7 +275,7 @@ export function InterviewsPage() {
           )}
 
           {/* Pending Feedback */}
-          {(hasFilters ? filteredPending.length > 0 : (data?.pending?.length ?? 0) > 0) && (
+          {filteredPending.length > 0 && (
             <Section
               title="⏳ Pending Feedback"
               count={filteredPending.length}
@@ -287,8 +292,8 @@ export function InterviewsPage() {
             </Section>
           )}
 
-          {/* Feedback Submitted — collapsed by default, out of sight */}
-          {(hasFilters ? filteredCompleted.length > 0 : (data?.completed?.length ?? 0) > 0) && (
+          {/* Feedback Submitted — collapsed by default */}
+          {filteredCompleted.length > 0 && (
             <Section
               title="✅ Feedback Submitted"
               count={filteredCompleted.length}
