@@ -27,7 +27,7 @@ export const FILTER_FIELDS = [
   { key: 'current_stage',   label: 'Stage',        type: 'multi'  },
   { key: 'source_category', label: 'Source',       type: 'single' },
   { key: 'source_name',     label: 'Sub-Source',   type: 'text'   },
-  { key: 'job_id',          label: 'Job',          type: 'single' }, // handled via jobs list
+  { key: 'job_id',          label: 'Job',          type: 'multi'  },
 ]
 
 export const OPS_FOR_TYPE: Record<string, { op: FilterOp; label: string }[]> = {
@@ -53,9 +53,18 @@ export const OPS_FOR_TYPE: Record<string, { op: FilterOp; label: string }[]> = {
 const SOURCES = ['platform', 'agency', 'college']
 
 export function applyFilters(candidates: any[], filters: ActiveFilter[], jobs: any[]): any[] {
+  if (filters.length === 0) return candidates
+
   return candidates.filter(c =>
     filters.every(f => {
-      const raw = (c[f.field] ?? '').toString().toLowerCase().trim()
+      // job_id special case — compare UUID directly
+      let raw: string
+      if (f.field === 'job_id') {
+        raw = (c.job_id ?? c.job?.id ?? '').toString().toLowerCase().trim()
+      } else {
+        raw = (c[f.field] ?? '').toString().toLowerCase().trim()
+      }
+
       const val = f.value.toLowerCase().trim()
 
       switch (f.op) {
@@ -66,9 +75,11 @@ export function applyFilters(candidates: any[], filters: ActiveFilter[], jobs: a
         case 'is_empty':      return !raw
         case 'is_not_empty':  return !!raw
         case 'is_any_of':
-          return f.values.length === 0 || f.values.some(v => raw === v.toLowerCase())
+          if (f.values.length === 0) return true
+          return f.values.some(v => raw === v.toLowerCase())
         case 'is_none_of':
-          return f.values.length === 0 || !f.values.some(v => raw === v.toLowerCase())
+          if (f.values.length === 0) return true
+          return !f.values.some(v => raw === v.toLowerCase())
         default: return true
       }
     })
@@ -120,15 +131,11 @@ export function FilterBar({ filters, onChange, jobs }: FilterBarProps) {
           const isMulti = ['is_any_of', 'is_none_of'].includes(f.op)
 
           // Option lists for select fields
-          const getOptions = (field: string) => {
-            if (field === 'current_stage') return [...INTERVIEW_STAGES]
-            if (field === 'source_category') return SOURCES
-            if (field === 'job_id') return jobs.map(j => j.title)
+          const getOptions = (field: string): { label: string; value: string }[] => {
+            if (field === 'current_stage') return [...INTERVIEW_STAGES].map(s => ({ label: s, value: s }))
+            if (field === 'source_category') return SOURCES.map(s => ({ label: s.charAt(0).toUpperCase()+s.slice(1), value: s }))
+            if (field === 'job_id') return jobs.map(j => ({ label: j.title, value: j.id }))
             return []
-          }
-          const getOptionValue = (field: string, label: string) => {
-            if (field === 'job_id') return jobs.find(j => j.title === label)?.id ?? label
-            return label
           }
 
           return (
@@ -178,7 +185,7 @@ export function FilterBar({ filters, onChange, jobs }: FilterBarProps) {
                   >
                     <option value="">Choose…</option>
                     {getOptions(f.field).map(opt => (
-                      <option key={opt} value={getOptionValue(f.field, opt)}>{opt}</option>
+                      <option key={opt.value} value={opt.value}>{opt.label}</option>
                     ))}
                   </select>
                 )}
@@ -190,23 +197,22 @@ export function FilterBar({ filters, onChange, jobs }: FilterBarProps) {
                 </button>
               </div>
 
-              {/* Multi-select checkboxes */}
+              {/* Multi-select pills */}
               {showValue && isMulti && (
                 <div className="ml-2 flex flex-wrap gap-1.5 p-2 bg-gray-50 rounded-lg">
                   {getOptions(f.field).map(opt => {
-                    const val = getOptionValue(f.field, opt)
-                    const selected = f.values.includes(val)
+                    const selected = f.values.includes(opt.value)
                     return (
                       <button
-                        key={opt}
-                        onClick={() => toggleMultiValue(f.id, val)}
+                        key={opt.value}
+                        onClick={() => toggleMultiValue(f.id, opt.value)}
                         className={`px-2.5 py-1 rounded-full text-xs font-medium border transition-all ${
                           selected
                             ? 'bg-blue-600 text-white border-blue-600'
                             : 'bg-white text-gray-600 border-gray-200 hover:border-blue-300 hover:text-blue-600'
                         }`}
                       >
-                        {opt}
+                        {opt.label}
                       </button>
                     )
                   })}
