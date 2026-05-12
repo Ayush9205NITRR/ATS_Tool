@@ -354,19 +354,29 @@ export function CandidatesPage() {
                         <td key={f.id} className="px-3 py-2.5 text-xs text-gray-600">{c.custom_data?.[f.field_name]??'—'}</td>
                       ))}
                       <td className="px-3 py-2.5">
-                        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <div className="flex items-center gap-1">
                           {canAssign&&(
-                            <button onClick={async()=>{await createMagicLink.mutateAsync(c.id); alert('Link copied to clipboard!')}}
-                              className="p-1.5 rounded text-gray-400 hover:text-blue-600 hover:bg-blue-50 transition-colors text-xs font-medium" title="Copy shareable link">
+                            <button
+                              onClick={async()=>{
+                                try { await createMagicLink.mutateAsync(c.id); alert('🔗 Link copied to clipboard!') }
+                                catch { alert('Could not copy link') }
+                              }}
+                              className="p-1.5 rounded-lg border border-gray-200 text-gray-500 hover:text-blue-600 hover:border-blue-300 hover:bg-blue-50 transition-colors text-xs"
+                              title="Copy interview link">
                               🔗
                             </button>
                           )}
-                          <button onClick={()=>archiveOne.mutate({id:c.id,archive:!c.archived_at})}
-                            className="p-1.5 rounded text-gray-400 hover:text-amber-600 hover:bg-amber-50 transition-colors" title={c.archived_at?'Unarchive':'Archive'}>
+                          <button
+                            onClick={()=>archiveOne.mutate({id:c.id,archive:!c.archived_at})}
+                            className="p-1.5 rounded-lg border border-gray-200 text-gray-500 hover:text-amber-600 hover:border-amber-300 hover:bg-amber-50 transition-colors"
+                            title={c.archived_at?'Unarchive':'Archive'}>
                             <Archive className="w-3.5 h-3.5"/>
                           </button>
                           {isSuperAdmin&&(
-                            <button onClick={()=>setConfirmDelete(c.id)} className="p-1.5 rounded text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors" title="Delete">
+                            <button
+                              onClick={()=>setConfirmDelete(c.id)}
+                              className="p-1.5 rounded-lg border border-gray-200 text-gray-500 hover:text-red-600 hover:border-red-300 hover:bg-red-50 transition-colors"
+                              title="Delete permanently">
                               <Trash2 className="w-3.5 h-3.5"/>
                             </button>
                           )}
