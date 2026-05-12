@@ -566,20 +566,23 @@ export function CandidatesPage() {
                       <td className="px-3 py-2.5">
                         <div className="flex items-center gap-1 justify-end">
                           {canAssign && (
-                            <button onClick={async () => { try { await createMagicLink.mutateAsync(c.id); alert('🔗 Interview link copied!') } catch { alert('Could not copy link') } }}
-                              className="p-1.5 rounded-lg border border-gray-200 text-gray-400 hover:text-blue-600 hover:border-blue-300 hover:bg-blue-50 transition-colors text-xs" title="Copy interview link">
+                            <ActionBtn
+                              label="Copy interview link"
+                              colour="blue"
+                              onClick={async () => { try { await createMagicLink.mutateAsync(c.id); alert('🔗 Interview link copied!') } catch { alert('Could not copy link') } }}>
                               🔗
-                            </button>
+                            </ActionBtn>
                           )}
-                          <button onClick={() => archiveOne.mutate({ id: c.id, archive: !c.archived_at })}
-                            className="p-1.5 rounded-lg border border-gray-200 text-gray-400 hover:text-amber-600 hover:border-amber-300 hover:bg-amber-50 transition-colors" title={c.archived_at ? 'Unarchive' : 'Archive candidate'}>
+                          <ActionBtn
+                            label={c.archived_at ? 'Unarchive' : 'Archive'}
+                            colour="amber"
+                            onClick={() => archiveOne.mutate({ id: c.id, archive: !c.archived_at })}>
                             <Archive className="w-3.5 h-3.5"/>
-                          </button>
+                          </ActionBtn>
                           {isSuperAdmin && (
-                            <button onClick={() => setConfirmDelete(c.id)}
-                              className="p-1.5 rounded-lg border border-gray-200 text-gray-400 hover:text-red-600 hover:border-red-300 hover:bg-red-50 transition-colors" title="Delete permanently">
+                            <ActionBtn label="Delete permanently" colour="red" onClick={() => setConfirmDelete(c.id)}>
                               <Trash2 className="w-3.5 h-3.5"/>
-                            </button>
+                            </ActionBtn>
                           )}
                         </div>
                       </td>
@@ -603,6 +606,32 @@ export function CandidatesPage() {
           <Button variant="danger" loading={deleteOne.isPending} onClick={() => confirmDelete && deleteOne.mutate(confirmDelete)}>Delete Permanently</Button>
         </div>
       </Modal>
+    </div>
+  )
+}
+
+// ── Tooltip Action Button ─────────────────────────────────────
+const COLOUR_MAP = {
+  blue:  { base: 'text-gray-400 hover:text-blue-600 hover:border-blue-300 hover:bg-blue-50', tip: 'bg-blue-600' },
+  amber: { base: 'text-gray-400 hover:text-amber-600 hover:border-amber-300 hover:bg-amber-50', tip: 'bg-amber-500' },
+  red:   { base: 'text-gray-400 hover:text-red-600 hover:border-red-300 hover:bg-red-50', tip: 'bg-red-600' },
+}
+
+function ActionBtn({ label, colour, onClick, children }: {
+  label: string; colour: 'blue' | 'amber' | 'red'; onClick: () => void; children: React.ReactNode
+}) {
+  const c = COLOUR_MAP[colour]
+  return (
+    <div className="relative group/btn">
+      <button onClick={onClick}
+        className={`p-1.5 rounded-lg border border-gray-200 transition-all ${c.base}`}>
+        {children}
+      </button>
+      {/* Tooltip */}
+      <div className={`absolute bottom-full right-0 mb-1.5 px-2 py-1 ${c.tip} text-white text-xs rounded-lg whitespace-nowrap opacity-0 group-hover/btn:opacity-100 transition-opacity pointer-events-none z-50 shadow-lg`}>
+        {label}
+        <div className={`absolute top-full right-2 w-0 h-0 border-l-4 border-r-4 border-t-4 border-l-transparent border-r-transparent ${colour === 'blue' ? 'border-t-blue-600' : colour === 'amber' ? 'border-t-amber-500' : 'border-t-red-600'}`}/>
+      </div>
     </div>
   )
 }
