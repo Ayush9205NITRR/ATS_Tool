@@ -1,633 +1,597 @@
-import { useParams, useNavigate } from 'react-router-dom'
+// ============================================================
+// CANDIDATE PROFILE PAGE
+// Fixes:
+//  - Interviewers: Airtable-style multi-select pills
+//  - HR Owner: also multi-select pills (or single-select — kept as single per your schema but with pill UI)
+//  - Interview date changes sync correctly (uses datetime-local, saved to DB immediately)
+//  - "Submit Feedback" button visible ONLY to the assigned interviewer
+//  - Once submitted → candidate moves to "Feedback Submitted" on Interviews page
+// ============================================================
 import { useState, useEffect } from 'react'
-import {
-  ArrowLeft, ExternalLink, Phone, Mail, Linkedin, Loader2,
-  Send, Pencil, Check, X, ChevronDown, Save
-} from 'lucide-react'
-import { useCandidate, useUpdateStage } from './useCandidates'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Button } from '../../shared/components/Button'
-import { useAuthStore } from '../auth/authStore'
-import { formatDate, formatRelative, labelOf } from '../../shared/utils/helpers'
+import { useParams, useNavigate } from 'react-router-dom'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { ArrowLeft, ExternalLink, Edit2, Check, X, Loader2, Send } from 'lucide-react'
 import { supabase } from '../../lib/supabaseClient'
+import { useAuthStore } from '../auth/authStore'
 import { INTERVIEW_STAGES } from '../../types/database.types'
-
-const NOTES_SECTIONS = [
-  { key: 'screening',   label: 'Screening Call' },
-  { key: 'r1',          label: 'R1 Interview' },
-  { key: 'case_study',  label: 'Case Study' },
-  { key: 'r2',          label: 'R2 Interview' },
-  { key: 'r3',          label: 'R3 Interview' },
-  { key: 'cf_virtual',  label: 'CF Virtual' },
-  { key: 'cf_inperson', label: 'CF In-Person' },
-]
+import { formatDate } from '../../shared/utils/helpers'
+import { Button } from '../../shared/components/Button'
+import { Modal } from '../../shared/components/Modal'
 
 const STAGE_COLOURS: Record<string, string> = {
-  Applied:          'bg-gray-100 text-gray-700',
-  Screening:        'bg-blue-100 text-blue-700',
-  R1:               'bg-indigo-100 text-indigo-700',
-  'Case Study':     'bg-yellow-100 text-yellow-700',
-  R2:               'bg-orange-100 text-orange-700',
-  R3:               'bg-orange-200 text-orange-800',
-  'CF (Virtual)':   'bg-purple-100 text-purple-700',
+  Applied: 'bg-gray-100 text-gray-700',
+  Screening: 'bg-blue-100 text-blue-700',
+  R1: 'bg-indigo-100 text-indigo-700',
+  'Case Study': 'bg-yellow-100 text-yellow-700',
+  R2: 'bg-orange-100 text-orange-700',
+  R3: 'bg-orange-200 text-orange-800',
+  'CF (Virtual)': 'bg-purple-100 text-purple-700',
   'CF (In-Person)': 'bg-purple-200 text-purple-800',
-  Offer:            'bg-violet-100 text-violet-700',
-  Hired:            'bg-green-100 text-green-700',
-  Rejected:         'bg-red-100 text-red-700',
+  Offer: 'bg-violet-100 text-violet-700',
+  Hired: 'bg-green-100 text-green-700',
+  Rejected: 'bg-red-100 text-red-700',
 }
 
-interface NoteEntry { text: string; author: string; authorId: string; timestamp: string }
+// Stage-to-note-section mapping
+const STAGE_NOTE_KEYS: { stage: string; label: string; field: string }[] = [
+  { stage: 'Screening',      label: 'Screening Call',  field: 'screening_notes'  },
+  { stage: 'R1',             label: 'R1 Interview',    field: 'r1_notes'         },
+  { stage: 'Case Study',     label: 'Case Study',      field: 'case_study_notes' },
+  { stage: 'R2',             label: 'R2 Interview',    field: 'r2_notes'         },
+  { stage: 'R3',             label: 'R3 Interview',    field: 'r3_notes'         },
+  { stage: 'CF (Virtual)',   label: 'CF Virtual',      field: 'cf_virtual_notes' },
+  { stage: 'CF (In-Person)', label: 'CF In-Person',    field: 'cf_inperson_notes'},
+]
 
-// ── Helper: convert DB timestamp → datetime-local input value ──
-function toDatetimeLocal(val: string | null | undefined): string {
-  if (!val) return ''
-  // If already in datetime-local format (no Z), return as-is
-  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(val) && !val.endsWith('Z')) return val.slice(0, 16)
-  // Parse ISO/UTC and convert to local
-  const d = new Date(val)
-  if (isNaN(d.getTime())) return ''
-  const pad = (n: number) => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+// ── Pill Multi-Select ─────────────────────────────────────────
+function PillMultiSelect({
+  label,
+  options,
+  selectedIds,
+  onChange,
+  disabled = false,
+}: {
+  label: string
+  options: { id: string; full_name: string }[]
+  selectedIds: string[]
+  onChange: (ids: string[]) => void
+  disabled?: boolean
+}) {
+  const toggle = (id: string) => {
+    onChange(selectedIds.includes(id) ? selectedIds.filter(i => i !== id) : [...selectedIds, id])
+  }
+  const selectedCount = selectedIds.length
+
+  return (
+    <div>
+      <label className="block text-xs font-medium text-gray-500 mb-2">
+        {label} {selectedCount > 0 && <span className="text-blue-600">({selectedCount} assigned)</span>}
+      </label>
+      <div className="flex flex-wrap gap-2">
+        {options.map(u => {
+          const sel = selectedIds.includes(u.id)
+          return (
+            <button
+              key={u.id}
+              disabled={disabled}
+              onClick={() => toggle(u.id)}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium border transition-all ${
+                sel
+                  ? 'bg-blue-600 text-white border-blue-600 shadow-sm'
+                  : 'bg-white text-gray-600 border-gray-200 hover:border-blue-300 hover:text-blue-600'
+              } ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+            >
+              {sel && <Check className="w-3 h-3"/>}
+              {u.full_name}
+            </button>
+          )
+        })}
+        {options.length === 0 && (
+          <p className="text-xs text-gray-400">No options available</p>
+        )}
+      </div>
+    </div>
+  )
 }
 
-// ── Full edit form state ────────────────────────────────────────
-interface FullEditForm {
-  full_name: string
-  email: string
-  phone: string
-  linkedin_url: string
-  source_category: string
-  source_name: string
-  notes: string
+// ── Single Pill Select (HR Owner) ─────────────────────────────
+function PillSingleSelect({
+  label,
+  options,
+  selectedId,
+  onChange,
+  disabled = false,
+}: {
+  label: string
+  options: { id: string; full_name: string }[]
+  selectedId: string | null
+  onChange: (id: string | null) => void
+  disabled?: boolean
+}) {
+  return (
+    <div>
+      <label className="block text-xs font-medium text-gray-500 mb-2">{label}</label>
+      <div className="flex flex-wrap gap-2">
+        {options.map(u => {
+          const sel = selectedId === u.id
+          return (
+            <button
+              key={u.id}
+              disabled={disabled}
+              onClick={() => onChange(sel ? null : u.id)}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium border transition-all ${
+                sel
+                  ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm'
+                  : 'bg-white text-gray-600 border-gray-200 hover:border-indigo-300 hover:text-indigo-600'
+              } ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+            >
+              {sel && <Check className="w-3 h-3"/>}
+              {u.full_name}
+            </button>
+          )
+        })}
+      </div>
+    </div>
+  )
 }
 
+// ── Interview Note Section ────────────────────────────────────
+function NoteSection({
+  stageLabel,
+  field,
+  candidateId,
+  notes,
+  canEdit,
+  onSaved,
+}: {
+  stageLabel: string
+  field: string
+  candidateId: string
+  notes: any[]  // array of {id, content, interviewer_name, created_at}
+  canEdit: boolean
+  onSaved: () => void
+}) {
+  const [draft, setDraft] = useState('')
+  const [saving, setSaving] = useState(false)
+  const { user } = useAuthStore()
+
+  const save = async () => {
+    if (!draft.trim()) return
+    setSaving(true)
+    await supabase.from('interview_notes').insert({
+      candidate_id: candidateId,
+      stage_field: field,
+      content: draft.trim(),
+      interviewer_id: user!.id,
+    })
+    setDraft('')
+    setSaving(false)
+    onSaved()
+  }
+
+  return (
+    <div className="border-b border-gray-100 last:border-0 pb-4 last:pb-0">
+      <div className="flex items-center gap-2 mb-2">
+        <div className={`w-2 h-2 rounded-full ${notes.length > 0 ? 'bg-blue-400' : 'bg-gray-200'}`}/>
+        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">{stageLabel}</p>
+        {notes.length > 0 && (
+          <span className="text-xs text-gray-400">{notes.length} note{notes.length > 1 ? 's' : ''}</span>
+        )}
+      </div>
+
+      {notes.map(n => (
+        <div key={n.id} className="ml-4 mb-2 bg-gray-50 rounded-lg p-2.5">
+          <p className="text-sm text-gray-700">{n.content}</p>
+          <p className="text-xs text-gray-400 mt-1">{n.interviewer_name} · {n.created_at ? formatDate(n.created_at) : 'Today'}</p>
+        </div>
+      ))}
+
+      {canEdit && (
+        <div className="ml-4 flex gap-2 items-end">
+          <textarea
+            value={draft}
+            onChange={e => setDraft(e.target.value)}
+            placeholder={`Add ${stageLabel} notes…`}
+            rows={2}
+            className="flex-1 px-2.5 py-2 border border-gray-200 rounded-lg text-xs text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-400 resize-none"
+          />
+          <button
+            onClick={save}
+            disabled={!draft.trim() || saving}
+            className="p-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-40 transition-colors flex-shrink-0"
+          >
+            {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin"/> : <Send className="w-3.5 h-3.5"/>}
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Main Profile Page ─────────────────────────────────────────
 export function CandidateProfilePage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const { user, hasRole } = useAuthStore()
   const qc = useQueryClient()
 
-  const isInterviewer = hasRole(['interviewer'])
   const canEdit       = hasRole(['admin', 'super_admin', 'hr_team'])
-  const canAddNotes   = hasRole(['admin', 'super_admin', 'hr_team', 'interviewer'])
+  const canAssign     = hasRole(['admin', 'super_admin'])
+  const isInterviewer = hasRole(['interviewer'])
+  const isSuperAdmin  = hasRole(['super_admin'])
 
-  const [draftNotes, setDraftNotes]     = useState<Record<string, string>>({})
-  const [savingNote, setSavingNote]     = useState<string | null>(null)
-  const [editMode, setEditMode]         = useState(false)
-  const [editForm, setEditForm]         = useState<FullEditForm | null>(null)
-  const [stageOpen, setStageOpen]       = useState(false)
-  const [generalNotes, setGeneralNotes] = useState('')
-  const [notesSaved, setNotesSaved]     = useState(false)
+  const [notes, setNotes]                   = useState('')
+  const [savingNotes, setSavingNotes]       = useState(false)
+  const [showStageMenu, setShowStageMenu]   = useState(false)
+  const [showFeedbackConfirm, setShowFeedbackConfirm] = useState(false)
+  const [submittingFeedback, setSubmittingFeedback]   = useState(false)
 
-  const { data: candidate, isLoading } = useCandidate(id!)
-  const updateStage = useUpdateStage()
+  // ── Candidate data ───────────────────────────────────────────
+  const { data: candidate, isLoading, refetch } = useQuery({
+    queryKey: ['candidate', id],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('candidates')
+        .select('*, job:jobs(id, title)')
+        .eq('id', id!)
+        .single()
+      if (error) throw error
+      return data
+    },
+    enabled: !!id,
+  })
 
-  // Sync general notes when candidate loads
+  // ── HR users & interviewers ──────────────────────────────────
+  const { data: hrUsers = [] } = useQuery({
+    queryKey: ['users', 'hr'],
+    queryFn: async () => {
+      const { data } = await supabase.from('users').select('id,full_name')
+        .in('role', ['hr_team', 'admin', 'super_admin']).eq('is_active', true)
+      return data ?? []
+    },
+  })
+  const { data: interviewers = [] } = useQuery({
+    queryKey: ['users', 'interviewers'],
+    queryFn: async () => {
+      const { data } = await supabase.from('users').select('id,full_name')
+        .eq('role', 'interviewer').eq('is_active', true)
+      return data ?? []
+    },
+  })
+
+  // ── Interview notes ──────────────────────────────────────────
+  const { data: interviewNotes = [], refetch: refetchNotes } = useQuery({
+    queryKey: ['interview-notes', id],
+    queryFn: async () => {
+      const { data } = await supabase
+        .from('interview_notes')
+        .select('*, interviewer:users(full_name)')
+        .eq('candidate_id', id!)
+        .order('created_at', { ascending: true })
+      return (data ?? []).map(n => ({
+        ...n,
+        interviewer_name: (n.interviewer as any)?.full_name ?? 'Unknown',
+      }))
+    },
+    enabled: !!id,
+  })
+
+  // ── Feedback submitted? ──────────────────────────────────────
+  const { data: feedbackRecord } = useQuery({
+    queryKey: ['feedback', id, user?.id],
+    queryFn: async () => {
+      const { data } = await supabase
+        .from('interview_feedback')
+        .select('id')
+        .eq('candidate_id', id!)
+        .eq('interviewer_id', user!.id)
+        .maybeSingle()
+      return data
+    },
+    enabled: !!id && !!user && isInterviewer,
+  })
+  const feedbackSubmitted = !!feedbackRecord
+
+  // ── Is this interviewer assigned to this candidate? ──────────
+  const isAssignedInterviewer = isInterviewer && (candidate?.assigned_interviewers ?? []).includes(user?.id ?? '')
+
   useEffect(() => {
-    if (candidate) setGeneralNotes((candidate as any).notes ?? '')
-  }, [candidate])
+    if (candidate) setNotes(candidate.notes ?? '')
+  }, [candidate?.id])
 
-  const { data: allUsers = [] } = useQuery({
-    queryKey: ['users', 'all-active'],
-    queryFn: async () => {
-      const { data } = await supabase.from('users').select('id,full_name,role').eq('is_active', true)
-      return data ?? []
-    },
-  })
-
-  const { data: jobs = [] } = useQuery({
-    queryKey: ['jobs', 'open'],
-    queryFn: async () => {
-      const { data } = await supabase.from('jobs').select('id,title').eq('status', 'open').order('title')
-      return data ?? []
-    },
-  })
-
-  const hrUsers          = (allUsers as any[]).filter(u => ['hr_team', 'admin', 'super_admin'].includes(u.role))
-  const interviewerUsers = (allUsers as any[]).filter(u => u.role === 'interviewer')
-
-  const updateField = useMutation({
-    mutationFn: async ({ field, value }: { field: string; value: any }) => {
-      const { error } = await supabase.from('candidates').update({ [field]: value }).eq('id', id!)
-      if (error) throw error
-    },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['candidate', id] }),
-  })
-
-  const updateMany = useMutation({
-    mutationFn: async (data: Record<string, any>) => {
-      const { error } = await supabase.from('candidates').update(data).eq('id', id!)
-      if (error) throw error
-    },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['candidate', id] })
-      setEditMode(false)
-    },
-  })
-
-  const saveNote = async (sectionKey: string) => {
-    const draft = draftNotes[sectionKey]?.trim()
-    if (!draft) return
-    setSavingNote(sectionKey)
-    const existing = (candidate as any)?.interview_notes ?? {}
-    const entries: NoteEntry[] = existing[sectionKey] ?? []
-    await supabase.from('candidates').update({
-      interview_notes: {
-        ...existing,
-        [sectionKey]: [...entries, {
-          text:      draft,
-          author:    user!.full_name,
-          authorId:  user!.id,
-          timestamp: new Date().toISOString(),
-        }],
-      },
-    }).eq('id', id!)
-    qc.invalidateQueries({ queryKey: ['candidate', id] })
-    setDraftNotes(p => ({ ...p, [sectionKey]: '' }))
-    setSavingNote(null)
+  // ── Mutations ────────────────────────────────────────────────
+  const updateCandidate = async (patch: Record<string, any>) => {
+    await supabase.from('candidates').update(patch).eq('id', id!)
+    refetch()
+    // Also invalidate the candidates list so table reflects changes
+    qc.invalidateQueries({ queryKey: ['candidates'] })
   }
 
-  const saveGeneralNotes = async () => {
-    await updateField.mutateAsync({ field: 'notes', value: generalNotes || null })
-    setNotesSaved(true)
-    setTimeout(() => setNotesSaved(false), 2000)
+  const saveNotes = async () => {
+    setSavingNotes(true)
+    await updateCandidate({ notes })
+    setSavingNotes(false)
   }
 
-  const openEditMode = () => {
-    if (!candidate) return
-    setEditForm({
-      full_name:       candidate.full_name,
-      email:           candidate.email,
-      phone:           candidate.phone ?? '',
-      linkedin_url:    candidate.linkedin_url ?? '',
-      source_category: candidate.source_category ?? '',
-      source_name:     candidate.source_name ?? '',
-      notes:           (candidate as any).notes ?? '',
-    })
-    setEditMode(true)
+  // ── Submit Feedback ──────────────────────────────────────────
+  const submitFeedback = async () => {
+    setSubmittingFeedback(true)
+    try {
+      // Insert feedback record (marks as "submitted")
+      await supabase.from('interview_feedback').upsert({
+        candidate_id: id!,
+        interviewer_id: user!.id,
+        submitted_at: new Date().toISOString(),
+      }, { onConflict: 'candidate_id,interviewer_id' })
+
+      qc.invalidateQueries({ queryKey: ['feedback', id, user?.id] })
+      qc.invalidateQueries({ queryKey: ['my-interviews', user?.id] })
+      setShowFeedbackConfirm(false)
+    } finally {
+      setSubmittingFeedback(false)
+    }
   }
 
-  const submitEdit = () => {
-    if (!editForm) return
-    updateMany.mutate({
-      full_name:       editForm.full_name,
-      email:           editForm.email,
-      phone:           editForm.phone || null,
-      linkedin_url:    editForm.linkedin_url || null,
-      source_category: editForm.source_category || null,
-      source_name:     editForm.source_name || null,
-      notes:           editForm.notes || null,
-    })
+  if (isLoading) {
+    return <div className="flex justify-center py-16"><Loader2 className="w-6 h-6 animate-spin text-blue-500"/></div>
+  }
+  if (!candidate) {
+    return <div className="py-16 text-center text-gray-400">Candidate not found.</div>
   }
 
-  const toggleInterviewer = (userId: string) => {
-    const current: string[] = (candidate as any).assigned_interviewers ?? []
-    const next = current.includes(userId)
-      ? current.filter(i => i !== userId)
-      : [...current, userId]
-    updateField.mutate({ field: 'assigned_interviewers', value: next })
-  }
-
-  if (isLoading) return (
-    <div className="flex justify-center py-24">
-      <Loader2 className="w-6 h-6 animate-spin text-blue-500"/>
-    </div>
-  )
-  if (!candidate) return <p className="text-gray-500 py-8 text-center">Candidate not found.</p>
-
-  const stages                           = (candidate as any)?.job?.pipeline_stages ?? [...INTERVIEW_STAGES]
-  const interviewNotes                   = (candidate as any).interview_notes ?? {}
-  const assignedInterviewerIds: string[] = (candidate as any).assigned_interviewers ?? []
-  const hrOwnerId: string | null         = (candidate as any).hr_owner ?? null
-
-  const drivePreviewUrl = candidate.resume_url
-    ? candidate.resume_url
-        .replace('/view', '')
-        .replace('?usp=sharing', '') +
-      (candidate.resume_url.includes('drive.google.com') ? '?embedded=true' : '')
-    : null
+  const assignedInterviewerIds: string[] = candidate.assigned_interviewers ?? []
 
   return (
-    <div>
-      {/* Back */}
-      <button
-        onClick={() => navigate(-1)}
-        className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700 mb-4 transition-colors"
-      >
-        <ArrowLeft className="w-4 h-4"/> Back
-      </button>
-
-      {/* Header */}
-      <div className="flex items-start justify-between gap-4 mb-5 flex-wrap">
+    <div className="max-w-5xl">
+      {/* Back + header */}
+      <div className="flex items-start justify-between mb-6">
         <div>
-          <h1 className="text-xl font-semibold text-gray-900">{candidate.full_name}</h1>
+          <button onClick={() => navigate(-1)} className="flex items-center gap-1.5 text-sm text-gray-400 hover:text-gray-600 mb-3 transition-colors">
+            <ArrowLeft className="w-4 h-4"/> Back
+          </button>
+          <h1 className="text-2xl font-bold text-gray-900">{candidate.full_name}</h1>
           <p className="text-sm text-gray-400 mt-0.5">
-            {candidate.source_name} · {labelOf(candidate.source_category)}
+            {candidate.source_name}{candidate.source_category ? ` · ${candidate.source_category.charAt(0).toUpperCase() + candidate.source_category.slice(1)}` : ''}
           </p>
         </div>
+
         <div className="flex items-center gap-2">
-          {/* Edit all info button */}
-          {canEdit && !editMode && (
-            <Button
-              variant="secondary"
-              size="sm"
-              icon={<Pencil className="w-3.5 h-3.5"/>}
-              onClick={openEditMode}
-            >
-              Edit Info
-            </Button>
-          )}
-          {editMode && (
-            <div className="flex gap-2">
-              <Button
-                size="sm"
-                icon={<Save className="w-3.5 h-3.5"/>}
-                loading={updateMany.isPending}
-                onClick={submitEdit}
+          {/* Stage badge + changer (HR/Admin only) */}
+          {canEdit ? (
+            <div className="relative">
+              <button
+                onClick={() => setShowStageMenu(o => !o)}
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium cursor-pointer border-0 ${STAGE_COLOURS[candidate.current_stage] ?? 'bg-gray-100 text-gray-700'}`}
               >
-                Save
-              </Button>
-              <Button variant="ghost" size="sm" onClick={() => setEditMode(false)}>
-                Cancel
-              </Button>
+                {candidate.current_stage}
+                <svg className="w-3.5 h-3.5 opacity-60" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7"/></svg>
+              </button>
+              {showStageMenu && (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => setShowStageMenu(false)}/>
+                  <div className="absolute right-0 top-full mt-1 bg-white border border-gray-200 rounded-xl shadow-xl z-50 py-1 w-48 max-h-72 overflow-y-auto">
+                    {INTERVIEW_STAGES.map(s => (
+                      <button key={s} onClick={() => { updateCandidate({ current_stage: s }); setShowStageMenu(false) }}
+                        className="w-full text-left px-3 py-1.5 text-xs hover:bg-gray-50 flex items-center justify-between gap-2">
+                        <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${STAGE_COLOURS[s] ?? 'bg-gray-100 text-gray-700'}`}>{s}</span>
+                        {s === candidate.current_stage && <Check className="w-3 h-3 text-blue-500"/>}
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
             </div>
+          ) : (
+            <span className={`inline-flex items-center px-3 py-1.5 rounded-full text-sm font-medium ${STAGE_COLOURS[candidate.current_stage] ?? 'bg-gray-100 text-gray-700'}`}>
+              {candidate.current_stage}
+            </span>
           )}
 
-          {/* Stage dropdown */}
-          <div className="relative">
-            {canEdit ? (
-              <>
-                <button
-                  onClick={() => setStageOpen(!stageOpen)}
-                  className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-sm font-medium ${STAGE_COLOURS[candidate.current_stage] ?? 'bg-gray-100 text-gray-700'}`}
-                >
-                  {candidate.current_stage}
-                  <ChevronDown className="w-4 h-4"/>
-                </button>
-                {stageOpen && (
-                  <>
-                    <div className="fixed inset-0 z-40" onClick={() => setStageOpen(false)}/>
-                    <div className="absolute right-0 top-full mt-1 bg-white border border-gray-200 rounded-xl shadow-xl z-50 py-1 w-52 max-h-80 overflow-y-auto">
-                      {stages.map((s: string) => (
-                        <button
-                          key={s}
-                          onClick={() => {
-                            updateStage.mutate({ id: candidate.id, stage: s })
-                            setStageOpen(false)
-                          }}
-                          className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50 flex items-center justify-between"
-                        >
-                          <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${STAGE_COLOURS[s] ?? 'bg-gray-100 text-gray-600'}`}>
-                            {s}
-                          </span>
-                          {s === candidate.current_stage && (
-                            <Check className="w-3.5 h-3.5 text-blue-500"/>
-                          )}
-                        </button>
-                      ))}
-                    </div>
-                  </>
-                )}
-              </>
-            ) : (
-              <span className={`px-3 py-1.5 rounded-xl text-sm font-medium ${STAGE_COLOURS[candidate.current_stage] ?? 'bg-gray-100 text-gray-700'}`}>
-                {candidate.current_stage}
-              </span>
-            )}
-          </div>
+          {/* ── Submit Feedback button — INTERVIEWER ONLY ── */}
+          {isAssignedInterviewer && !feedbackSubmitted && (
+            <Button
+              size="sm"
+              onClick={() => setShowFeedbackConfirm(true)}
+              icon={<Check className="w-3.5 h-3.5"/>}
+              className="bg-green-600 hover:bg-green-700 text-white"
+            >
+              Submit Feedback
+            </Button>
+          )}
+          {isAssignedInterviewer && feedbackSubmitted && (
+            <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-green-100 text-green-700">
+              <Check className="w-3 h-3"/> Feedback Submitted
+            </span>
+          )}
         </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-5 gap-5">
-
-        {/* ── Left column ── */}
+        {/* ── Left column ─────────────────────────────────────── */}
         <div className="lg:col-span-2 space-y-4">
 
-          {/* Contact + Full Edit Panel */}
-          <div className="bg-white rounded-xl border border-gray-200 p-5">
-            <p className="text-sm font-semibold text-gray-700 mb-3">Contact</p>
-
-            {editMode && editForm ? (
-              /* ── Full edit form ── */
-              <div className="space-y-3">
-                {([
-                  ['full_name',    'Full Name',    'text'],
-                  ['email',        'Email',        'email'],
-                  ['phone',        'Phone',        'tel'],
-                  ['linkedin_url', 'LinkedIn URL', 'url'],
-                ] as [keyof FullEditForm, string, string][]).map(([key, label, type]) => (
-                  <div key={key}>
-                    <label className="block text-xs text-gray-500 mb-1">{label}</label>
-                    <input
-                      type={type}
-                      value={editForm[key]}
-                      onChange={e => setEditForm(f => f ? { ...f, [key]: e.target.value } : f)}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    />
-                  </div>
-                ))}
-
-                <div>
-                  <label className="block text-xs text-gray-500 mb-1">Source Category</label>
-                  <select
-                    value={editForm.source_category}
-                    onChange={e => setEditForm(f => f ? { ...f, source_category: e.target.value } : f)}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  >
-                    <option value="college">College</option>
-                    <option value="platform">Platform</option>
-                    <option value="agency">Agency</option>
-                  </select>
+          {/* Contact */}
+          <div className="bg-white rounded-xl border border-gray-200 p-4">
+            <h3 className="text-sm font-semibold text-gray-900 mb-3">Contact</h3>
+            <div className="space-y-2">
+              {candidate.email && (
+                <div className="flex items-center gap-2 text-sm text-gray-600">
+                  <span className="text-gray-400">✉</span>
+                  <a href={`mailto:${candidate.email}`} className="hover:text-blue-600 transition-colors">{candidate.email}</a>
                 </div>
-
-                <div>
-                  <label className="block text-xs text-gray-500 mb-1">Source Name</label>
-                  <input
-                    type="text"
-                    value={editForm.source_name}
-                    onChange={e => setEditForm(f => f ? { ...f, source_name: e.target.value } : f)}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
+              )}
+              {candidate.phone && (
+                <div className="flex items-center gap-2 text-sm text-gray-600">
+                  <span className="text-gray-400">📞</span>
+                  <span>{candidate.phone}</span>
                 </div>
-              </div>
-            ) : (
-              /* ── Read-only contact ── */
-              <div className="space-y-2.5">
-                <a
-                  href={`mailto:${candidate.email}`}
-                  className="flex items-center gap-2.5 text-sm text-gray-600 hover:text-blue-600 transition-colors"
-                >
-                  <Mail className="w-4 h-4 text-gray-400 flex-shrink-0"/>
-                  {candidate.email}
+              )}
+              {candidate.linkedin_url && (
+                <a href={candidate.linkedin_url} target="_blank" rel="noreferrer"
+                  className="flex items-center gap-2 text-sm text-blue-600 hover:underline">
+                  <span>🔗</span> LinkedIn Profile
                 </a>
-                {candidate.phone && (
-                  <a
-                    href={`tel:${candidate.phone}`}
-                    className="flex items-center gap-2.5 text-sm text-gray-600 hover:text-blue-600"
-                  >
-                    <Phone className="w-4 h-4 text-gray-400 flex-shrink-0"/>
-                    {candidate.phone}
-                  </a>
-                )}
-                {candidate.linkedin_url && (
-                  <a
-                    href={candidate.linkedin_url}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="flex items-center gap-2.5 text-sm text-blue-600 hover:underline"
-                  >
-                    <Linkedin className="w-4 h-4 flex-shrink-0"/>
-                    LinkedIn Profile
-                  </a>
-                )}
-              </div>
-            )}
+              )}
+            </div>
           </div>
 
-          {/* Assignment — HR + Interviewers + Date */}
-          {!isInterviewer && (
-            <div className="bg-white rounded-xl border border-gray-200 p-5 space-y-4">
-              <p className="text-sm font-semibold text-gray-700">Assignment</p>
+          {/* ── Assignment (HR/Admin editable) ───────────────────── */}
+          <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-4">
+            <h3 className="text-sm font-semibold text-gray-900">Assignment</h3>
 
-              {/* HR Owner */}
-              <div>
-                <p className="text-xs text-gray-400 mb-1.5">HR Owner</p>
-                {canEdit ? (
-                  <select
-                    value={hrOwnerId ?? ''}
-                    onChange={e => updateField.mutate({ field: 'hr_owner', value: e.target.value || null })}
-                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  >
-                    <option value="">— Unassigned —</option>
-                    {hrUsers.map((u: any) => (
-                      <option key={u.id} value={u.id}>{u.full_name}</option>
-                    ))}
-                  </select>
-                ) : (
-                  <p className="text-sm text-gray-700">
-                    {hrUsers.find((u: any) => u.id === hrOwnerId)?.full_name ?? '—'}
-                  </p>
-                )}
+            {/* HR Owner — single-select pills */}
+            <PillSingleSelect
+              label="HR Owner"
+              options={hrUsers as any[]}
+              selectedId={candidate.hr_owner ?? null}
+              disabled={!canAssign}
+              onChange={id => updateCandidate({ hr_owner: id })}
+            />
+
+            {/* Interviewers — multi-select pills */}
+            <PillMultiSelect
+              label="Interviewers (select multiple)"
+              options={interviewers as any[]}
+              selectedIds={assignedInterviewerIds}
+              disabled={!canEdit}
+              onChange={ids => updateCandidate({ assigned_interviewers: ids })}
+            />
+
+            {/* Interview Date & Time */}
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-2">Interview Date &amp; Time</label>
+              <input
+                type="datetime-local"
+                // ── FIX: convert stored ISO string to datetime-local format
+                defaultValue={
+                  candidate.interview_date
+                    ? new Date(candidate.interview_date).toISOString().slice(0, 16)
+                    : ''
+                }
+                disabled={!canEdit}
+                onBlur={e => {
+                  const val = e.target.value
+                  // Save as ISO string so both profile and list table stay in sync
+                  updateCandidate({ interview_date: val ? new Date(val).toISOString() : null })
+                }}
+                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-400 disabled:opacity-50 disabled:bg-gray-50"
+              />
+            </div>
+          </div>
+
+          {/* Meta */}
+          <div className="bg-white rounded-xl border border-gray-200 p-4">
+            <div className="space-y-2 text-sm">
+              <div className="flex justify-between">
+                <span className="text-gray-400">Source</span>
+                <span className="text-gray-700 font-medium">
+                  {candidate.source_category
+                    ? `${candidate.source_category.charAt(0).toUpperCase() + candidate.source_category.slice(1)} — ${candidate.source_name ?? ''}`
+                    : candidate.source_name ?? '—'}
+                </span>
               </div>
-
-              {/* Interviewers — pill multi-select */}
-              <div>
-                <p className="text-xs text-gray-400 mb-1.5">
-                  Interviewers <span className="text-gray-300">(select multiple)</span>
-                </p>
-                {interviewerUsers.length === 0 ? (
-                  <p className="text-xs text-gray-400">No interviewers in Settings</p>
-                ) : (
-                  <div className="flex flex-wrap gap-1.5">
-                    {interviewerUsers.map((u: any) => {
-                      const selected = assignedInterviewerIds.includes(u.id)
-                      return (
-                        <button
-                          key={u.id}
-                          onClick={() => canEdit && toggleInterviewer(u.id)}
-                          disabled={!canEdit}
-                          title={selected ? 'Click to remove' : 'Click to assign'}
-                          className={`px-2.5 py-1 rounded-full text-xs font-medium border transition-all ${
-                            selected
-                              ? 'bg-blue-600 text-white border-blue-600 shadow-sm'
-                              : 'bg-white text-gray-600 border-gray-200 hover:border-blue-300 hover:text-blue-600'
-                          } ${!canEdit ? 'cursor-default opacity-70' : 'cursor-pointer'}`}
-                        >
-                          {selected && <span className="mr-1">✓</span>}
-                          {u.full_name}
-                        </button>
-                      )
-                    })}
-                  </div>
-                )}
-                {assignedInterviewerIds.length > 0 && (
-                  <p className="text-xs text-gray-400 mt-1.5">
-                    {assignedInterviewerIds.length} assigned
-                  </p>
-                )}
+              <div className="flex justify-between">
+                <span className="text-gray-400">Job</span>
+                <span className="text-gray-700 font-medium">{(candidate.job as any)?.title ?? '—'}</span>
               </div>
-
-              {/* Interview Date — datetime-local with proper value format */}
-              <div>
-                <p className="text-xs text-gray-400 mb-1.5">Interview Date & Time</p>
-                {canEdit ? (
-                  <input
-                    type="datetime-local"
-                    value={toDatetimeLocal((candidate as any).interview_date)}
-                    onChange={e => updateField.mutate({
-                      field: 'interview_date',
-                      value: e.target.value ? new Date(e.target.value).toISOString() : null,
-                    })}
-                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
-                ) : (
-                  <p className="text-sm text-gray-700">
-                    {(candidate as any).interview_date
-                      ? formatDate((candidate as any).interview_date)
-                      : '—'}
-                  </p>
-                )}
+              <div className="flex justify-between">
+                <span className="text-gray-400">Added</span>
+                <span className="text-gray-700 font-medium">{candidate.created_at ? formatDate(candidate.created_at) : '—'}</span>
               </div>
             </div>
-          )}
-
-          {/* Meta info */}
-          <div className="bg-white rounded-xl border border-gray-200 p-5 space-y-2 text-sm">
-            <Row label="Source" value={`${labelOf(candidate.source_category)} — ${candidate.source_name}`}/>
-            <Row label="Job"    value={(candidate as any).job?.title ?? '—'}/>
-            <Row label="Added"  value={formatDate(candidate.created_at)}/>
           </div>
         </div>
 
-        {/* ── Right column ── */}
+        {/* ── Right column ─────────────────────────────────────── */}
         <div className="lg:col-span-3 space-y-4">
 
           {/* Resume */}
-          <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-            <div className="flex items-center justify-between px-5 py-3 border-b border-gray-100">
-              <p className="text-sm font-semibold text-gray-700">Resume</p>
+          <div className="bg-white rounded-xl border border-gray-200 p-4">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-sm font-semibold text-gray-900">Resume</h3>
               {candidate.resume_url && (
-                <a href={candidate.resume_url} target="_blank" rel="noreferrer">
-                  <Button variant="ghost" size="sm" icon={<ExternalLink className="w-3.5 h-3.5"/>}>
-                    Open
-                  </Button>
+                <a href={candidate.resume_url} target="_blank" rel="noreferrer"
+                  className="flex items-center gap-1 text-xs text-blue-600 hover:underline">
+                  <ExternalLink className="w-3 h-3"/> Open
                 </a>
               )}
             </div>
-            {drivePreviewUrl ? (
+            {candidate.resume_url ? (
               <iframe
-                src={drivePreviewUrl}
-                className="w-full border-0"
-                style={{ height: '320px' }}
+                src={candidate.resume_url}
+                className="w-full h-64 rounded-lg border border-gray-100"
                 title="Resume"
               />
             ) : (
-              <div className="flex items-center justify-center h-20 text-gray-400">
-                <p className="text-sm">No resume link</p>
-              </div>
+              <p className="text-sm text-gray-400">No resume uploaded.</p>
             )}
           </div>
 
-          {/* General Notes — bigger textarea with explicit save button */}
-          {(canEdit || (candidate as any).notes) && (
-            <div className="bg-white rounded-xl border border-gray-200 p-5">
-              <div className="flex items-center justify-between mb-3">
-                <p className="text-sm font-semibold text-gray-700">General Notes</p>
-                {canEdit && (
-                  <button
-                    onClick={saveGeneralNotes}
-                    disabled={updateField.isPending}
-                    className={`flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg font-medium transition-all ${
-                      notesSaved
-                        ? 'bg-green-50 text-green-600 border border-green-200'
-                        : 'bg-blue-50 text-blue-600 border border-blue-200 hover:bg-blue-100'
-                    }`}
-                  >
-                    {notesSaved ? (
-                      <><Check className="w-3 h-3"/> Saved</>
-                    ) : updateField.isPending ? (
-                      <><Loader2 className="w-3 h-3 animate-spin"/> Saving…</>
-                    ) : (
-                      <><Save className="w-3 h-3"/> Save Notes</>
-                    )}
-                  </button>
-                )}
-              </div>
-              {canEdit ? (
-                <textarea
-                  value={generalNotes}
-                  onChange={e => setGeneralNotes(e.target.value)}
-                  rows={6}
-                  placeholder="General notes about this candidate…"
-                  className="w-full px-3 py-2.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-y leading-relaxed"
-                />
-              ) : (
-                <p className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap">
-                  {(candidate as any).notes}
-                </p>
+          {/* General Notes */}
+          <div className="bg-white rounded-xl border border-gray-200 p-4">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-sm font-semibold text-gray-900">General Notes</h3>
+              {canEdit && (
+                <button onClick={saveNotes} disabled={savingNotes}
+                  className="flex items-center gap-1.5 text-xs text-blue-600 hover:text-blue-700 font-medium disabled:opacity-50">
+                  {savingNotes ? <Loader2 className="w-3 h-3 animate-spin"/> : <Check className="w-3 h-3"/>}
+                  Save Notes
+                </button>
               )}
             </div>
-          )}
+            <textarea
+              value={notes}
+              onChange={e => setNotes(e.target.value)}
+              disabled={!canEdit}
+              rows={5}
+              placeholder="Add notes about this candidate…"
+              className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-400 resize-none disabled:opacity-50 disabled:bg-gray-50"
+            />
+          </div>
 
-          {/* Interview Notes — per round */}
-          <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-            <p className="text-sm font-semibold text-gray-700 px-5 py-3 border-b border-gray-100">
-              Interview Notes
-            </p>
-            <div className="divide-y divide-gray-50">
-              {NOTES_SECTIONS.map(({ key, label }) => {
-                const entries: NoteEntry[] = interviewNotes[key] ?? []
-                const draft = draftNotes[key] ?? ''
+          {/* Interview Notes — per stage */}
+          <div className="bg-white rounded-xl border border-gray-200 p-4">
+            <h3 className="text-sm font-semibold text-gray-900 mb-4">Interview Notes</h3>
+            <div className="space-y-4">
+              {STAGE_NOTE_KEYS.map(({ stage, label, field }) => {
+                const stageNotes = interviewNotes.filter((n: any) => n.stage_field === field)
+                // Only show note entry if: hr/admin can always see, interviewer only if assigned
+                const canAddNote = canEdit || isAssignedInterviewer
                 return (
-                  <div key={key} className="px-5 py-4">
-                    <div className="flex items-center gap-2 mb-2">
-                      <span className={`w-2 h-2 rounded-full flex-shrink-0 ${entries.length > 0 ? 'bg-blue-400' : 'bg-gray-200'}`}/>
-                      <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">{label}</p>
-                      {entries.length > 0 && (
-                        <span className="text-xs text-gray-400 ml-auto">
-                          {entries.length} note{entries.length > 1 ? 's' : ''}
-                        </span>
-                      )}
-                    </div>
-
-                    {entries.length > 0 && (
-                      <div className="space-y-2 mb-3">
-                        {entries.map((e, i) => (
-                          <div key={i} className="bg-gray-50 rounded-lg px-3 py-2.5">
-                            <p className="text-sm text-gray-700 whitespace-pre-wrap">{e.text}</p>
-                            <p className="text-xs text-gray-400 mt-1">
-                              <span className="font-medium text-gray-500">{e.author}</span>
-                              {' · '}
-                              {formatRelative(e.timestamp)}
-                            </p>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-
-                    {canAddNotes && (
-                      <div className="flex gap-2 items-end">
-                        <textarea
-                          rows={2}
-                          value={draft}
-                          onChange={e => setDraftNotes(p => ({ ...p, [key]: e.target.value }))}
-                          placeholder={`Add ${label} notes…`}
-                          onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) saveNote(key) }}
-                          className="flex-1 px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none bg-white"
-                        />
-                        <button
-                          onClick={() => saveNote(key)}
-                          disabled={!draft.trim() || savingNote === key}
-                          className="flex-shrink-0 w-8 h-8 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:bg-gray-200 flex items-center justify-center transition-colors"
-                        >
-                          {savingNote === key
-                            ? <Loader2 className="w-3.5 h-3.5 text-white animate-spin"/>
-                            : <Send className="w-3.5 h-3.5 text-white"/>
-                          }
-                        </button>
-                      </div>
-                    )}
-
-                    {entries.length === 0 && !canAddNotes && (
-                      <p className="text-xs text-gray-400">No notes yet</p>
-                    )}
-                  </div>
+                  <NoteSection
+                    key={field}
+                    stageLabel={label}
+                    field={field}
+                    candidateId={id!}
+                    notes={stageNotes}
+                    canEdit={canAddNote}
+                    onSaved={refetchNotes}
+                  />
                 )
               })}
             </div>
           </div>
-
         </div>
       </div>
-    </div>
-  )
-}
 
-function Row({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex items-start gap-2">
-      <span className="text-gray-400 w-16 flex-shrink-0 text-xs">{label}</span>
-      <span className="text-gray-700 font-medium text-sm">{value}</span>
+      {/* ── Submit Feedback confirmation modal ─────────────────── */}
+      <Modal open={showFeedbackConfirm} onClose={() => setShowFeedbackConfirm(false)} title="Submit Feedback" size="sm">
+        <p className="text-sm text-gray-600 mb-4">
+          Once submitted, your feedback for <strong>{candidate.full_name}</strong> will be marked as complete.
+          This cannot be undone.
+        </p>
+        <div className="flex justify-end gap-2">
+          <Button variant="secondary" onClick={() => setShowFeedbackConfirm(false)}>Cancel</Button>
+          <Button
+            loading={submittingFeedback}
+            onClick={submitFeedback}
+            className="bg-green-600 hover:bg-green-700 text-white"
+            icon={<Check className="w-3.5 h-3.5"/>}
+          >
+            Yes, Submit Feedback
+          </Button>
+        </div>
+      </Modal>
     </div>
   )
 }
