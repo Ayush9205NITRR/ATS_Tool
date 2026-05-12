@@ -6,7 +6,7 @@ import { useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { Loader2, CheckCircle, Clock, ChevronRight } from 'lucide-react'
 import { supabase } from '../../lib/supabaseClient'
-import { useAuthStore } from '../auth/authStore'
+import { useAuthStore } from "../../modules/auth/authStore"
 import { formatDate } from '../../shared/utils/helpers'
 import { PageHeader } from '../../shared/components/PageHeader'
 
