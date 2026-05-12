@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
@@ -8,6 +9,9 @@ import { candidateService } from '../../candidates/candidateService'
 import { supabase } from '../../../lib/supabaseClient'
 import { useAuthStore } from '../../auth/authStore'
 import { Button } from '../../../shared/components/Button'
+import { DuplicateWarning } from '../../../shared/components/DuplicateWarning'
+import { useDuplicateCheck } from '../../../shared/hooks/useDuplicateCheck'
+import { useNavigate } from 'react-router-dom'
 
 const schema = z.object({
   full_name:       z.string().min(2, 'Required'),
@@ -29,8 +33,10 @@ interface Props { onSuccess?: () => void }
 export function SingleEntryForm({ onSuccess }: Props) {
   const { user } = useAuthStore()
   const qc = useQueryClient()
+  const navigate = useNavigate()
   const [done, setDone] = useState(false)
   const [customValues, setCustomValues] = useState<Record<string, any>>({})
+  const { duplicates, checking, check, reset } = useDuplicateCheck()
 
   const { data: jobs = [] } = useQuery({
     queryKey: ['jobs', 'open'],
@@ -48,10 +54,18 @@ export function SingleEntryForm({ onSuccess }: Props) {
     },
   })
 
-  const { register, handleSubmit, reset, formState: { errors } } = useForm<FormData>({
+  const { register, handleSubmit, reset: resetForm, watch, formState: { errors } } = useForm<FormData>({
     resolver: zodResolver(schema),
     defaultValues: { source_category: 'platform' },
   })
+
+  // Watch email + phone for real-time duplicate check
+  const watchEmail = watch('email')
+  const watchPhone = watch('phone')
+
+  useEffect(() => {
+    check(watchEmail ?? '', watchPhone ?? '')
+  }, [watchEmail, watchPhone, check])
 
   const mutation = useMutation({
     mutationFn: (data: FormData) =>
@@ -76,67 +90,63 @@ export function SingleEntryForm({ onSuccess }: Props) {
       qc.invalidateQueries({ queryKey: ['candidates'] })
       qc.invalidateQueries({ queryKey: ['widget'] })
       setDone(true)
-      setCustomValues({})
       reset()
+      resetForm()
+      setCustomValues({})
       setTimeout(() => { setDone(false); onSuccess?.() }, 2000)
     },
   })
 
   const renderCustomField = (field: any) => {
     const value = customValues[field.field_name] ?? ''
-    const onChange = (v: any) => setCustomValues((p) => ({ ...p, [field.field_name]: v }))
-
+    const onChange = (v: any) => setCustomValues(p => ({ ...p, [field.field_name]: v }))
     switch (field.field_type) {
-      case 'number':
-        return <input type="number" value={value} onChange={(e) => onChange(e.target.value)}
-          placeholder={`Enter ${field.field_label.toLowerCase()}`} className={inputCls} />
-      case 'date':
-        return <input type="date" value={value} onChange={(e) => onChange(e.target.value)} className={inputCls} />
-      case 'url':
-        return <input type="url" value={value} onChange={(e) => onChange(e.target.value)}
-          placeholder="https://" className={inputCls} />
-      case 'boolean':
-        return (
-          <div className="flex items-center gap-2 py-2">
-            <input type="checkbox" id={field.field_name} checked={!!value}
-              onChange={(e) => onChange(e.target.checked)}
-              className="rounded border-gray-300 text-blue-600 w-4 h-4" />
-            <label htmlFor={field.field_name} className="text-sm text-gray-600">Yes</label>
-          </div>
-        )
-      default:
-        return <input type="text" value={value} onChange={(e) => onChange(e.target.value)}
-          placeholder={`Enter ${field.field_label.toLowerCase()}`} className={inputCls} />
+      case 'number': return <input type="number" value={value} onChange={e=>onChange(e.target.value)} className={inputCls}/>
+      case 'date':   return <input type="date" value={value} onChange={e=>onChange(e.target.value)} className={inputCls}/>
+      case 'url':    return <input type="url" value={value} onChange={e=>onChange(e.target.value)} placeholder="https://" className={inputCls}/>
+      case 'boolean': return (
+        <div className="flex items-center gap-2 py-2">
+          <input type="checkbox" id={field.field_name} checked={!!value} onChange={e=>onChange(e.target.checked)} className="rounded border-gray-300 text-blue-600 w-4 h-4"/>
+          <label htmlFor={field.field_name} className="text-sm text-gray-600">Yes</label>
+        </div>
+      )
+      default: return <input type="text" value={value} onChange={e=>onChange(e.target.value)} placeholder={`Enter ${field.field_label.toLowerCase()}`} className={inputCls}/>
     }
   }
 
   if (done) {
     return (
       <div className="flex flex-col items-center justify-center py-12 gap-3">
-        <CheckCircle className="w-10 h-10 text-green-500" />
+        <CheckCircle className="w-10 h-10 text-green-500"/>
         <p className="text-sm font-medium text-gray-700">Candidate added successfully!</p>
       </div>
     )
   }
 
   return (
-    <form onSubmit={handleSubmit((d) => mutation.mutate(d))} className="space-y-4">
+    <form onSubmit={handleSubmit(d => mutation.mutate(d))} className="space-y-4">
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <Field label="Full Name *" error={errors.full_name?.message}>
-          <input {...register('full_name')} placeholder="Rahul Sharma" className={inputCls} />
+          <input {...register('full_name')} placeholder="Rahul Sharma" className={inputCls}/>
         </Field>
+
+        {/* Email — with duplicate check */}
         <Field label="Email *" error={errors.email?.message}>
-          <input {...register('email')} type="email" placeholder="rahul@example.com" className={inputCls} />
+          <input {...register('email')} type="email" placeholder="rahul@example.com" className={inputCls}/>
         </Field>
+
+        {/* Phone — with duplicate check */}
         <Field label="Phone">
-          <input {...register('phone')} placeholder="+91 98765 43210" className={inputCls} />
+          <input {...register('phone')} placeholder="+91 98765 43210" className={inputCls}/>
         </Field>
+
         <Field label="Job Opening">
           <select {...register('job_id')} className={inputCls}>
             <option value="">— No specific role —</option>
-            {(jobs as any[]).map((j) => <option key={j.id} value={j.id}>{j.title}</option>)}
+            {(jobs as any[]).map(j => <option key={j.id} value={j.id}>{j.title}</option>)}
           </select>
         </Field>
+
         <Field label="Source Type *" error={errors.source_category?.message}>
           <select {...register('source_category')} className={inputCls}>
             <option value="platform">Platform (LinkedIn, Naukri…)</option>
@@ -144,30 +154,33 @@ export function SingleEntryForm({ onSuccess }: Props) {
             <option value="college">College</option>
           </select>
         </Field>
+
         <Field label="Source Name *" error={errors.source_name?.message}>
-          <input {...register('source_name')} placeholder="e.g. LinkedIn / ABC Consultants / IIT Delhi" className={inputCls} />
-        </Field>
-        <Field label="Resume URL (Google Drive)" error={errors.resume_url?.message} className="sm:col-span-2">
-          <input {...register('resume_url')} placeholder="https://drive.google.com/file/d/…" className={inputCls} />
-        </Field>
-        <Field label="LinkedIn URL" error={errors.linkedin_url?.message} className="sm:col-span-2">
-          <input {...register('linkedin_url')} placeholder="https://linkedin.com/in/…" className={inputCls} />
-        </Field>
-        <Field label="Notes" className="sm:col-span-2">
-          <textarea {...register('notes')} rows={3} placeholder="Any initial notes…" className={inputCls} />
+          <input {...register('source_name')} placeholder="LinkedIn / ABC Consultants / IIT Delhi" className={inputCls}/>
         </Field>
 
-        {/* Custom Fields */}
+        <Field label="Resume URL (Google Drive)" error={errors.resume_url?.message} className="sm:col-span-2">
+          <input {...register('resume_url')} placeholder="https://drive.google.com/file/d/…" className={inputCls}/>
+        </Field>
+
+        <Field label="LinkedIn URL" error={errors.linkedin_url?.message} className="sm:col-span-2">
+          <input {...register('linkedin_url')} placeholder="https://linkedin.com/in/…" className={inputCls}/>
+        </Field>
+
+        <Field label="Notes" className="sm:col-span-2">
+          <textarea {...register('notes')} rows={3} placeholder="Any initial notes…" className={inputCls}/>
+        </Field>
+
+        {/* Custom fields */}
         {(customFields as any[]).length > 0 && (
           <div className="sm:col-span-2">
-            <div className="border-t border-gray-100 pt-4 mt-1">
+            <div className="border-t border-gray-100 pt-4">
               <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Additional Fields</p>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                {(customFields as any[]).map((field) => (
+                {(customFields as any[]).map(field => (
                   <div key={field.id}>
                     <label className="block text-sm font-medium text-gray-700 mb-1">
-                      {field.field_label}
-                      {field.is_required && <span className="text-red-500 ml-0.5">*</span>}
+                      {field.field_label}{field.is_required && <span className="text-red-500 ml-0.5">*</span>}
                     </label>
                     {renderCustomField(field)}
                   </div>
@@ -178,6 +191,15 @@ export function SingleEntryForm({ onSuccess }: Props) {
         )}
       </div>
 
+      {/* Duplicate warning — shown inline after email/phone fields */}
+      {(duplicates.length > 0 || checking) && (
+        <DuplicateWarning
+          duplicates={duplicates}
+          checking={checking}
+          onViewProfile={id => window.open(`/candidates/${id}`, '_blank')}
+        />
+      )}
+
       {mutation.error && (
         <div className="bg-red-50 border border-red-200 rounded-lg px-3 py-2">
           <p className="text-sm text-red-600">{(mutation.error as Error).message}</p>
@@ -185,7 +207,9 @@ export function SingleEntryForm({ onSuccess }: Props) {
       )}
 
       <div className="flex justify-end pt-2">
-        <Button type="submit" loading={mutation.isPending}>Add Candidate</Button>
+        <Button type="submit" loading={mutation.isPending}>
+          {duplicates.length > 0 ? 'Add Anyway' : 'Add Candidate'}
+        </Button>
       </div>
     </form>
   )
