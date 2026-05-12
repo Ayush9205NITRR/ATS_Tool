@@ -112,7 +112,7 @@ export function CandidatesPage() {
   const toggleCol = (key:string) => setVisibleCols(p=>{const n=new Set(p);n.has(key)?n.delete(key):n.add(key);return n})
   const toggleSelect = (id:string) => setSelectedIds(p=>{const n=new Set(p);n.has(id)?n.delete(id):n.add(id);return n})
   const toggleAll = () => setSelectedIds(selectedIds.size===displayed.length?new Set():new Set(displayed.map((c:any)=>c.id)))
-  const getName = (list:any[],id:string|null) => id?list.find(u=>u.id===id)?.full_name??null:null
+  const getName = (list:any[],id:string|null) => { if(!id) return null; const item=list.find(u=>u.id===id); return item?.full_name??item?.title??null }
   const show = (key:string) => visibleCols.has(key)
 
   const ALL_COLUMNS = [
