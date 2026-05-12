@@ -96,8 +96,8 @@ export function InterviewsPage() {
   const navigate = useNavigate()
 
   // Filter state
-  const [search, setSearch]       = useState('')
-  const [jobFilter, setJobFilter] = useState('')
+  const [search, setSearch]           = useState('')
+  const [jobFilter, setJobFilter]     = useState('')
   const [stageFilter, setStageFilter] = useState('')
 
   const { data, isLoading } = useQuery({
@@ -126,7 +126,11 @@ export function InterviewsPage() {
 
       // Unique jobs for filter dropdown
       const jobs = Array.from(
-        new Map(all.map(c => [(c.job as any)?.id, (c.job as any)?.title]).filter(([id]) => id)).entries()
+        new Map(
+          all
+            .map(c => [(c.job as any)?.id, (c.job as any)?.title])
+            .filter(([id]) => id)
+        ).entries()
       ).map(([id, title]) => ({ id, title }))
 
       // Unique stages
@@ -187,6 +191,7 @@ export function InterviewsPage() {
 
           {/* Search + Filters */}
           <div className="flex flex-wrap gap-2 items-center">
+
             {/* Search */}
             <div className="relative flex-1 min-w-48">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400"/>
@@ -234,11 +239,16 @@ export function InterviewsPage() {
           </div>
 
           {/* Filtered empty state */}
-          {hasFilters && filteredUpcoming.length === 0 && filteredPending.length === 0 && filteredCompleted.length === 0 && (
-            <div className="text-center py-10 text-gray-400 bg-white rounded-xl border border-gray-200">
-              <p className="text-sm">No candidates match your filters.</p>
-            </div>
-          )}
+          {hasFilters
+            && filteredUpcoming.length === 0
+            && filteredPending.length === 0
+            && filteredCompleted.length === 0
+            && (
+              <div className="text-center py-10 text-gray-400 bg-white rounded-xl border border-gray-200">
+                <p className="text-sm">No candidates match your filters.</p>
+              </div>
+            )
+          }
 
           {/* Upcoming Interviews */}
           {(hasFilters ? filteredUpcoming.length > 0 : (data?.upcoming?.length ?? 0) > 0) && (
@@ -250,7 +260,9 @@ export function InterviewsPage() {
             >
               {filteredUpcoming.map(c => (
                 <CandidateRow
-                  key={c.id} c={c} showDate
+                  key={c.id}
+                  c={c}
+                  showDate
                   icon={<div className="w-2 h-2 rounded-full bg-blue-400"/>}
                 />
               ))}
@@ -267,24 +279,26 @@ export function InterviewsPage() {
             >
               {filteredPending.map(c => (
                 <CandidateRow
-                  key={c.id} c={c}
+                  key={c.id}
+                  c={c}
                   icon={<Clock className="w-4 h-4 text-amber-400"/>}
                 />
               ))}
             </Section>
           )}
 
-          {/* Feedback Submitted */}
+          {/* Feedback Submitted — collapsed by default, out of sight */}
           {(hasFilters ? filteredCompleted.length > 0 : (data?.completed?.length ?? 0) > 0) && (
             <Section
               title="✅ Feedback Submitted"
               count={filteredCompleted.length}
               colorClass="text-green-700"
-              defaultOpen={false}   {/* collapsed by default — out of sight */}
+              defaultOpen={false}
             >
               {filteredCompleted.map(c => (
                 <CandidateRow
-                  key={c.id} c={c}
+                  key={c.id}
+                  c={c}
                   icon={<CheckCircle className="w-4 h-4 text-green-500"/>}
                 />
               ))}
