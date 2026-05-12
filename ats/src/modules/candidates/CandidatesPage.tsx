@@ -187,24 +187,51 @@ export function CandidatesPage() {
                   <div className="absolute right-0 top-full mt-1 bg-white border border-gray-200 rounded-xl shadow-lg z-30 p-3 w-56">
                     <p className="text-xs font-semibold text-gray-500 mb-2">Bulk Actions</p>
                     <button onClick={()=>setBulkField('current_stage')} className="w-full text-left text-sm px-2 py-1.5 rounded hover:bg-gray-50 text-gray-700">Change Stage</button>
+                    {canAssign&&<button onClick={()=>setBulkField('job_id')} className="w-full text-left text-sm px-2 py-1.5 rounded hover:bg-gray-50 text-gray-700">Assign Job</button>}
                     {canAssign&&<button onClick={()=>setBulkField('hr_owner')} className="w-full text-left text-sm px-2 py-1.5 rounded hover:bg-gray-50 text-gray-700">Assign HR Owner</button>}
                     {canAssign&&<button onClick={()=>setBulkField('assigned_interviewers')} className="w-full text-left text-sm px-2 py-1.5 rounded hover:bg-gray-50 text-gray-700">Assign Interviewer</button>}
                     <button onClick={()=>bulkArchive.mutate(!showArchived)} className="w-full text-left text-sm px-2 py-1.5 rounded hover:bg-gray-50 text-amber-600">
                       {showArchived?'Unarchive selected':'Archive selected'}
                     </button>
-                    {bulkField&&(
+                    {isSuperAdmin&&(
+                      <button onClick={()=>setBulkField('__delete__')} className="w-full text-left text-sm px-2 py-1.5 rounded hover:bg-red-50 text-red-600 border-t border-gray-100 mt-1 pt-2">
+                        Delete selected permanently
+                      </button>
+                    )}
+                    {bulkField&&bulkField!=='__delete__'&&(
                       <div className="mt-2 pt-2 border-t border-gray-100">
-                        <p className="text-xs text-gray-500 mb-1">{bulkField==='current_stage'?'Select Stage':bulkField==='hr_owner'?'Select HR Owner':'Select Interviewer'}</p>
+                        <p className="text-xs text-gray-500 mb-1">
+                          {bulkField==='current_stage'?'Select Stage':bulkField==='hr_owner'?'Select HR Owner':bulkField==='job_id'?'Select Job':'Select Interviewer'}
+                        </p>
                         <select autoFocus defaultValue="" onChange={e=>{if(e.target.value) bulkUpdate.mutate({field:bulkField,value:bulkField==='assigned_interviewers'?[e.target.value]:e.target.value})}}
                           className="w-full px-2 py-1.5 border border-gray-300 rounded text-sm focus:outline-none">
                           <option value="" disabled>Choose…</option>
                           {bulkField==='current_stage'
                             ?INTERVIEW_STAGES.map(s=><option key={s} value={s}>{s}</option>)
+                            :bulkField==='job_id'
+                            ?(jobs as any[]).map(j=><option key={j.id} value={j.id}>{j.title}</option>)
                             :bulkField==='assigned_interviewers'
                             ?(interviewers as any[]).map(u=><option key={u.id} value={u.id}>{u.full_name}</option>)
                             :(hrUsers as any[]).map(u=><option key={u.id} value={u.id}>{u.full_name}</option>)
                           }
                         </select>
+                      </div>
+                    )}
+                    {bulkField==='__delete__'&&(
+                      <div className="mt-2 pt-2 border-t border-gray-100">
+                        <p className="text-xs text-red-600 mb-2 font-medium">Delete {selectedIds.size} candidates permanently?</p>
+                        <div className="flex gap-2">
+                          <button onClick={()=>setBulkField(null)} className="flex-1 px-2 py-1.5 border border-gray-200 rounded text-xs text-gray-600 hover:bg-gray-50">Cancel</button>
+                          <button
+                            onClick={async()=>{
+                              const {supabase} = await import('../../lib/supabaseClient')
+                              const {error} = await supabase.from('candidates').delete().in('id',Array.from(selectedIds))
+                              if(!error){qc.invalidateQueries({queryKey:['candidates']});setSelectedIds(new Set());setBulkField(null);setShowBulkMenu(false)}
+                            }}
+                            className="flex-1 px-2 py-1.5 bg-red-600 hover:bg-red-700 rounded text-xs text-white font-medium">
+                            Delete All
+                          </button>
+                        </div>
                       </div>
                     )}
                   </div>
