@@ -1,5 +1,5 @@
 import { useParams, useNavigate } from 'react-router-dom'
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import {
   ArrowLeft, ExternalLink, Phone, Mail, Linkedin,
   Loader2, Send, Pencil, Check, X, ChevronDown, CheckCircle
@@ -33,14 +33,10 @@ const STAGE_COLOURS: Record<string, string> = {
 
 interface NoteEntry { text: string; author: string; authorId: string; timestamp: string }
 
-// Convert stored value (string | null) → datetime-local input value
 function toDatetimeLocal(v: string | null | undefined): string {
   if (!v) return ''
-  // If already has T (ISO), trim to 16 chars for datetime-local
   return v.replace(' ', 'T').slice(0, 16)
 }
-
-// Convert datetime-local → ISO string for DB
 function toISO(v: string): string | null {
   if (!v) return null
   return new Date(v).toISOString()
@@ -53,17 +49,17 @@ export function CandidateProfilePage() {
   const qc = useQueryClient()
 
   const isInterviewer = hasRole(['interviewer'])
-  // HR team can edit candidates but NOT assign hr_owner
   const canEdit       = hasRole(['admin', 'super_admin', 'hr_team'])
-  const canAssignHR   = hasRole(['admin', 'super_admin'])  // ← HR Team excluded
+  const canAssignHR   = hasRole(['admin', 'super_admin'])
   const canAddNotes   = hasRole(['admin', 'super_admin', 'hr_team', 'interviewer'])
 
-  const [editMode, setEditMode]       = useState(false)
-  const [stageOpen, setStageOpen]     = useState(false)
-  const [draftNotes, setDraftNotes]   = useState<Record<string, string>>({})
-  const [savingNote, setSavingNote]   = useState<string | null>(null)
+  const [editMode, setEditMode]     = useState(false)
+  const [stageOpen, setStageOpen]   = useState(false)
+  const [draftNotes, setDraftNotes] = useState<Record<string, string>>({})
+  const [savingNote, setSavingNote] = useState<string | null>(null)
   const [contactDraft, setContactDraft] = useState({ email: '', phone: '', linkedin_url: '' })
   const [generalNotesDraft, setGeneralNotesDraft] = useState('')
+  const [feedbackDone, setFeedbackDone] = useState(false)
 
   const { data: candidate, isLoading } = useCandidate(id!)
   const updateStage = useUpdateStage()
@@ -76,31 +72,40 @@ export function CandidateProfilePage() {
     },
   })
 
-  // Check if current user (interviewer) has submitted feedback for this candidate
-  const { data: myFeedback } = useQuery({
+  // Check feedback status for current interviewer
+  const { data: myFeedback, refetch: refetchFeedback } = useQuery({
     queryKey: ['my-feedback', id, user?.id],
     queryFn: async () => {
-      if (!isInterviewer) return null
       const { data } = await supabase
         .from('interview_feedback')
-        .select('submitted_at')
+        .select('id, submitted_at')
         .eq('candidate_id', id!)
         .eq('interviewer_id', user!.id)
         .maybeSingle()
       return data
     },
-    enabled: !!user && isInterviewer,
+    enabled: !!user && !!id,
   })
+
+  // Sync local feedbackDone with query result
+  useEffect(() => {
+    setFeedbackDone(!!myFeedback?.submitted_at)
+  }, [myFeedback])
 
   const hrUsers          = allUsers.filter(u => ['hr_team','admin','super_admin'].includes(u.role))
   const interviewerUsers = allUsers.filter(u => u.role === 'interviewer')
 
+  // updateField — always invalidates BOTH candidate and candidates list
   const updateField = useMutation({
     mutationFn: async ({ field, value }: { field: string; value: unknown }) => {
       const { error } = await supabase.from('candidates').update({ [field]: value }).eq('id', id!)
       if (error) throw error
     },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['candidate', id] }),
+    onSuccess: () => {
+      // Invalidate both so main list and profile both reflect changes
+      qc.invalidateQueries({ queryKey: ['candidate', id] })
+      qc.invalidateQueries({ queryKey: ['candidates'] })
+    },
   })
 
   const saveAll = useMutation({
@@ -113,24 +118,34 @@ export function CandidateProfilePage() {
       }).eq('id', id!)
       if (error) throw error
     },
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['candidate', id] }); setEditMode(false) },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['candidate', id] })
+      qc.invalidateQueries({ queryKey: ['candidates'] })
+      setEditMode(false)
+    },
   })
 
-  // Submit feedback mutation
+  // Submit feedback — use insert with ON CONFLICT DO UPDATE via raw approach
   const submitFeedback = useMutation({
     mutationFn: async () => {
-      const { error } = await supabase
-        .from('interview_feedback')
-        .upsert({
-          candidate_id: id!,
-          interviewer_id: user!.id,
-          submitted_at: new Date().toISOString(),
-        }, { onConflict: 'candidate_id,interviewer_id' })
+      // First try to delete existing, then insert fresh (avoids constraint name issues)
+      await supabase.from('interview_feedback')
+        .delete()
+        .eq('candidate_id', id!)
+        .eq('interviewer_id', user!.id)
+
+      const { error } = await supabase.from('interview_feedback').insert({
+        candidate_id: id!,
+        interviewer_id: user!.id,
+        submitted_at: new Date().toISOString(),
+      })
       if (error) throw error
     },
-    onSuccess: () => {
+    onSuccess: async () => {
+      setFeedbackDone(true)
+      await refetchFeedback()
+      qc.invalidateQueries({ queryKey: ['my-interviews', user?.id] })
       qc.invalidateQueries({ queryKey: ['my-feedback', id, user?.id] })
-      qc.invalidateQueries({ queryKey: ['my-interviews'] })
     },
   })
 
@@ -140,14 +155,16 @@ export function CandidateProfilePage() {
     setSavingNote(sectionKey)
     const existing = (candidate as any)?.interview_notes ?? {}
     const entries: NoteEntry[] = existing[sectionKey] ?? []
-    await supabase.from('candidates').update({
+    const { error } = await supabase.from('candidates').update({
       interview_notes: { ...existing, [sectionKey]: [...entries, {
         text: draft, author: user!.full_name,
         authorId: user!.id, timestamp: new Date().toISOString(),
       }]}
     }).eq('id', id!)
-    qc.invalidateQueries({ queryKey: ['candidate', id] })
-    setDraftNotes(p => ({ ...p, [sectionKey]: '' }))
+    if (!error) {
+      qc.invalidateQueries({ queryKey: ['candidate', id] })
+      setDraftNotes(p => ({ ...p, [sectionKey]: '' }))
+    }
     setSavingNote(null)
   }
 
@@ -158,18 +175,11 @@ export function CandidateProfilePage() {
     setEditMode(true)
   }
 
+  // Toggle interviewer in array
   const toggleInterviewer = (uid: string) => {
     const curr: string[] = (candidate as any).assigned_interviewers ?? []
-    const next = curr.includes(uid) ? curr.filter((i: string) => i !== uid) : [...curr, uid]
+    const next = curr.includes(uid) ? curr.filter(i => i !== uid) : [...curr, uid]
     updateField.mutate({ field: 'assigned_interviewers', value: next })
-  }
-
-  // HR Owner — array stored but backward-compat: single UUID in hr_owner column
-  const toggleHROwner = (uid: string) => {
-    const curr: string | null = (candidate as any).hr_owner
-    // Toggle: if same person, remove; else assign new
-    const next = curr === uid ? null : uid
-    updateField.mutate({ field: 'hr_owner', value: next })
   }
 
   if (isLoading) return <div className="flex justify-center py-24"><Loader2 className="w-6 h-6 animate-spin text-blue-500"/></div>
@@ -179,7 +189,6 @@ export function CandidateProfilePage() {
   const interviewNotes = (candidate as any).interview_notes ?? {}
   const assignedInterviewers: string[] = (candidate as any).assigned_interviewers ?? []
   const hrOwnerId: string | null = (candidate as any).hr_owner ?? null
-  const feedbackSubmitted = !!myFeedback?.submitted_at
 
   const drivePreviewUrl = candidate.resume_url
     ? candidate.resume_url.includes('drive.google.com')
@@ -191,24 +200,19 @@ export function CandidateProfilePage() {
     <div>
       {/* Top bar */}
       <div className="flex items-center justify-between mb-4">
-        <button onClick={() => navigate(-1)} className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700 transition-colors">
+        <button onClick={() => navigate(-1)} className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700">
           <ArrowLeft className="w-4 h-4"/> Back
         </button>
         <div className="flex items-center gap-2">
-          {/* Submit Feedback button — only for interviewers who haven't submitted */}
           {isInterviewer && (
-            feedbackSubmitted ? (
+            feedbackDone ? (
               <div className="flex items-center gap-2 text-sm text-green-600 bg-green-50 border border-green-200 rounded-lg px-3 py-1.5">
-                <CheckCircle className="w-4 h-4"/>
-                Feedback Submitted
+                <CheckCircle className="w-4 h-4"/>Feedback Submitted
               </div>
             ) : (
-              <Button
-                size="sm"
-                loading={submitFeedback.isPending}
+              <Button size="sm" loading={submitFeedback.isPending}
                 icon={<CheckCircle className="w-3.5 h-3.5"/>}
-                onClick={() => submitFeedback.mutate()}
-              >
+                onClick={() => submitFeedback.mutate()}>
                 Submit Feedback
               </Button>
             )
@@ -226,7 +230,7 @@ export function CandidateProfilePage() {
         </div>
       </div>
 
-      {/* Header: name + stage */}
+      {/* Header */}
       <div className="flex items-start justify-between gap-4 mb-5 flex-wrap">
         <div>
           <h1 className="text-xl font-semibold text-gray-900">{candidate.full_name}</h1>
@@ -295,43 +299,42 @@ export function CandidateProfilePage() {
                     <Linkedin className="w-4 h-4 flex-shrink-0"/>LinkedIn Profile
                   </a>
                 )}
-                {!candidate.phone && !candidate.linkedin_url && canEdit && (
-                  <p className="text-xs text-gray-400">Click "Edit Info" to add phone / LinkedIn</p>
-                )}
               </div>
             )}
           </div>
 
-          {/* Assignment — hidden from interviewer */}
+          {/* Assignment */}
           {!isInterviewer && (
             <div className="bg-white rounded-xl border border-gray-200 p-5 space-y-4">
               <p className="text-sm font-semibold text-gray-700">Assignment</p>
 
-              {/* HR Owner — only admin/super_admin can change */}
+              {/* HR Owner — single select, only admin/super_admin can change */}
               <div>
                 <p className="text-xs text-gray-400 mb-1.5">HR Owner</p>
                 {canAssignHR ? (
-                  <select
-                    value={hrOwnerId ?? ''}
+                  <select value={hrOwnerId ?? ''}
                     onChange={e => updateField.mutate({ field: 'hr_owner', value: e.target.value || null })}
-                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  >
+                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
                     <option value="">— Unassigned —</option>
                     {hrUsers.map(u => <option key={u.id} value={u.id}>{u.full_name}</option>)}
                   </select>
                 ) : (
-                  // HR team can only VIEW, not change
                   <p className="text-sm text-gray-700 px-1">
                     {hrUsers.find(u => u.id === hrOwnerId)?.full_name ?? '—'}
                   </p>
                 )}
               </div>
 
-              {/* Interviewers — multi-select pills */}
+              {/* Interviewers — TRUE multi-select pill toggle */}
               <div>
-                <p className="text-xs text-gray-400 mb-1.5">Interviewers <span className="text-gray-300">(select multiple)</span></p>
+                <p className="text-xs text-gray-400 mb-1.5">
+                  Interviewers
+                  {assignedInterviewers.length > 0 && (
+                    <span className="ml-1.5 text-blue-600 font-medium">({assignedInterviewers.length} assigned)</span>
+                  )}
+                </p>
                 {interviewerUsers.length === 0 ? (
-                  <p className="text-xs text-gray-400">No interviewers added in Settings yet</p>
+                  <p className="text-xs text-gray-400">No interviewers in Settings yet</p>
                 ) : (
                   <div className="flex flex-wrap gap-1.5">
                     {interviewerUsers.map(u => {
@@ -339,10 +342,13 @@ export function CandidateProfilePage() {
                       return (
                         <button key={u.id}
                           onClick={() => canEdit && toggleInterviewer(u.id)}
-                          disabled={!canEdit}
+                          disabled={!canEdit || updateField.isPending}
                           className={`px-2.5 py-1 rounded-full text-xs font-medium border transition-all ${
-                            sel ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-200 hover:border-blue-300'
-                          } ${!canEdit ? 'cursor-default' : 'cursor-pointer'}`}>
+                            sel
+                              ? 'bg-blue-600 text-white border-blue-600 shadow-sm'
+                              : 'bg-white text-gray-600 border-gray-200 hover:border-blue-300 hover:text-blue-600'
+                          } disabled:cursor-not-allowed disabled:opacity-60`}>
+                          {sel && <Check className="w-3 h-3 inline mr-1"/>}
                           {u.full_name}
                         </button>
                       )
@@ -351,16 +357,14 @@ export function CandidateProfilePage() {
                 )}
               </div>
 
-              {/* Interview Date — synced ISO timestamp */}
+              {/* Interview Date — synced ISO */}
               <div>
                 <p className="text-xs text-gray-400 mb-1.5">Interview Date & Time</p>
                 {canEdit ? (
-                  <input
-                    type="datetime-local"
+                  <input type="datetime-local"
                     value={toDatetimeLocal((candidate as any).interview_date)}
                     onChange={e => updateField.mutate({ field: 'interview_date', value: toISO(e.target.value) })}
-                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
+                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"/>
                 ) : (
                   <p className="text-sm text-gray-700">
                     {(candidate as any).interview_date ? formatDate((candidate as any).interview_date) : '—'}
@@ -380,7 +384,6 @@ export function CandidateProfilePage() {
 
         {/* ── Right ── */}
         <div className="lg:col-span-3 space-y-4">
-
           {/* Resume */}
           <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
             <div className="flex items-center justify-between px-5 py-3 border-b border-gray-100">
@@ -404,13 +407,10 @@ export function CandidateProfilePage() {
           <div className="bg-white rounded-xl border border-gray-200 p-5">
             <p className="text-sm font-semibold text-gray-700 mb-2">General Notes</p>
             {editMode ? (
-              <textarea
-                value={generalNotesDraft}
+              <textarea value={generalNotesDraft}
                 onChange={e => setGeneralNotesDraft(e.target.value)}
-                rows={4}
-                placeholder="General notes about this candidate…"
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-y"
-              />
+                rows={4} placeholder="General notes about this candidate…"
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-y"/>
             ) : (
               (candidate as any).notes
                 ? <p className="text-sm text-gray-700 whitespace-pre-wrap">{(candidate as any).notes}</p>
@@ -418,7 +418,7 @@ export function CandidateProfilePage() {
             )}
           </div>
 
-          {/* Interview Notes — per round */}
+          {/* Interview Notes */}
           <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
             <p className="text-sm font-semibold text-gray-700 px-5 py-3 border-b border-gray-100">Interview Notes</p>
             <div className="divide-y divide-gray-50">
