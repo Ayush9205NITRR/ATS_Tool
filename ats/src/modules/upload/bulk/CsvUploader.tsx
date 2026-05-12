@@ -21,7 +21,7 @@ function parseCSVRobust(text: string): Record<string, string>[] {
     else if ((ch === '\n' || ch === '\r') && !inQuotes) {
       if (current.trim()) lines.push(current)
       current = ''
-      if (ch === '\r' && text[i + 1] === '\n') i++
+      if (ch === '\r' && text[i+1] === '\n') i++
       continue
     }
     current += ch
@@ -35,7 +35,7 @@ function parseCSVRobust(text: string): Record<string, string>[] {
     for (let i = 0; i < line.length; i++) {
       const ch = line[i]
       if (ch === '"') {
-        if (inQ && line[i + 1] === '"') { field += '"'; i++ }
+        if (inQ && line[i+1] === '"') { field += '"'; i++ }
         else inQ = !inQ
       } else if (ch === ',' && !inQ) {
         fields.push(field.trim())
@@ -68,10 +68,9 @@ function extractUrl(text: string): string | null {
 
 function normalizeSource(raw: string): SourceCategory {
   const v = (raw ?? '').toLowerCase().trim()
-  if (
-    v.includes('college') || v.includes('university') || v.includes('campus') ||
-    v.includes('iit') || v.includes('iim') || v.includes('institute') || v.includes('school')
-  ) return 'college'
+  if (v.includes('college') || v.includes('university') || v.includes('campus') ||
+      v.includes('iit') || v.includes('iim') || v.includes('institute') || v.includes('school'))
+    return 'college'
   if (v.includes('agency') || v.includes('consultant') || v.includes('recruiter') || v.includes('vendor'))
     return 'agency'
   return 'platform'
@@ -109,18 +108,13 @@ function autoDetectColumns(headers: string[]): Partial<ColumnMap> {
   }
 }
 
-function transformRow(
-  row: Record<string, string>,
-  colMap: Partial<ColumnMap>,
-  userId: string,
-  jobId: string | null,
-): any {
+function transformRow(row: Record<string, string>, colMap: Partial<ColumnMap>, userId: string, jobId: string | null): any {
   const get = (key: keyof ColumnMap) => colMap[key] ? (row[colMap[key]!] ?? '') : ''
 
   const sourceName = get('college') || get('source_name') || get('source') || 'Unknown'
-  const sourceRaw  = get('source')
-  const resumeRaw  = get('resume')
-  const resumeUrl  = extractUrl(resumeRaw)
+  const sourceRaw = get('source')
+  const resumeRaw = get('resume')
+  const resumeUrl = extractUrl(resumeRaw)
 
   return {
     full_name:             get('full_name').trim(),
@@ -150,35 +144,27 @@ export function CsvUploader() {
   const { user } = useAuthStore()
   const qc = useQueryClient()
 
-  const [step, setStep]                   = useState<Step>(1)
-  const [rows, setRows]                   = useState<Record<string, string>[]>([])
-  const [headers, setHeaders]             = useState<string[]>([])
-  const [colMap, setColMap]               = useState<Partial<ColumnMap>>({})
+  const [step, setStep]           = useState<Step>(1)
+  const [rows, setRows]           = useState<Record<string, string>[]>([])
+  const [headers, setHeaders]     = useState<string[]>([])
+  const [colMap, setColMap]       = useState<Partial<ColumnMap>>({})
   const [selectedJobId, setSelectedJobId] = useState<string>('')
-  const [isAirtable, setIsAirtable]       = useState(false)
-  const [transformed, setTransformed]     = useState<any[]>([])
-  const [dupMap, setDupMap]               = useState<Record<string, string>>({})
-  const [fileErr, setFileErr]             = useState<string>('')   // ← was missing
+  const [fileErr, setFileErr]     = useState('')
 
   const { data: jobs = [] } = useQuery({
     queryKey: ['jobs', 'open'],
     queryFn: async () => {
-      const { data } = await supabase
-        .from('jobs')
-        .select('id,title')
-        .eq('status', 'open')
-        .order('title')
+      const { data } = await supabase.from('jobs').select('id,title').eq('status','open').order('title')
       return data ?? []
     },
   })
+  const [isAirtable, setIsAirtable] = useState(false)
+  const [transformed, setTransformed] = useState<any[]>([])
+  const [dupMap, setDupMap] = useState<Record<string, string>>({}) // email -> existing candidate name
 
   const mutation = useMutation({
     mutationFn: (payload: any[]) => candidateService.bulkCreate(payload),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['candidates'] })
-      qc.invalidateQueries({ queryKey: ['widget'] })
-      setStep(4)
-    },
+    onSuccess: () => { qc.invalidateQueries({queryKey:['candidates']}); qc.invalidateQueries({queryKey:['widget']}); setStep(4) },
   })
 
   const onFile = useCallback((file: File) => {
@@ -188,13 +174,11 @@ export function CsvUploader() {
       const parsed = parseCSVRobust(text)
       if (!parsed.length) { setFileErr('CSV empty or invalid.'); return }
 
-      const hdrs    = Object.keys(parsed[0])
+      const hdrs = Object.keys(parsed[0])
       const detected = autoDetectColumns(hdrs)
 
       // Detect Airtable format
-      const isAt = hdrs.some(h =>
-        h.includes('Airtable') || h.includes('Why') || h.includes('CGPA') || h.includes('relocat')
-      )
+      const isAt = hdrs.some(h => h.includes('Airtable') || h.includes('Why') || h.includes('CGPA') || h.includes('relocat'))
       setIsAirtable(isAt)
       setRows(parsed)
       setHeaders(hdrs)
@@ -213,33 +197,29 @@ export function CsvUploader() {
   }, [onFile])
 
   const preview = async () => {
-    // ← selectedJobId now wired in instead of hardcoded null
-    const result = rows.map(r => transformRow(r, colMap, user!.id, selectedJobId || null))
+    const result = rows.map(r => transformRow(r, colMap, user!.id, null))
     setTransformed(result)
 
     // Check for duplicates in bulk
     const emails = result.filter(r => r.email).map(r => r.email)
-    const phones = result
-      .filter(r => r.phone)
-      .map(r => r.phone.replace(/\D/g, '').slice(-10))
-      .filter((p: string) => p.length >= 10)
+    const phones = result.filter(r => r.phone).map(r => r.phone.replace(/\D/g,'').slice(-10)).filter(p => p.length >= 10)
 
     if (emails.length > 0 || phones.length > 0) {
       const filters: string[] = []
-      if (emails.length) emails.forEach((e: string) => filters.push(`email.ilike.${e}`))
-      if (phones.length) phones.forEach((p: string) => filters.push(`phone.ilike.%${p}`))
+      if (emails.length) emails.forEach(e => filters.push(`email.ilike.${e}`))
+      if (phones.length) phones.forEach(p => filters.push(`phone.ilike.%${p}`))
 
       const { data } = await supabase
         .from('candidates')
         .select('id, full_name, email, phone')
-        .or(filters.slice(0, 20).join(','))
+        .or(filters.slice(0, 20).join(',')) // Supabase limit
         .limit(50)
 
       const map: Record<string, string> = {}
       data?.forEach(existing => {
         if (existing.email) map[existing.email.toLowerCase()] = existing.full_name
         if (existing.phone) {
-          const p = existing.phone.replace(/\D/g, '').slice(-10)
+          const p = existing.phone.replace(/\D/g,'').slice(-10)
           if (p.length >= 10) map[`phone:${p}`] = existing.full_name
         }
       })
@@ -252,36 +232,22 @@ export function CsvUploader() {
   const valid   = transformed.filter(r => r.full_name && r.email)
   const invalid = transformed.filter(r => !r.full_name || !r.email)
 
-  // ─── Step 1: Upload ───────────────────────────────────────
+  // ─── Step 1 ───────────────────────────────────────────────
   if (step === 1) return (
     <div>
-      <div
-        onDrop={onDrop}
-        onDragOver={e => e.preventDefault()}
-        onClick={() => document.getElementById('csv-inp')?.click()}
-        className="border-2 border-dashed border-gray-200 rounded-xl p-12 text-center hover:border-blue-400 transition-colors cursor-pointer bg-gray-50/50 hover:bg-blue-50/20"
-      >
-        <Upload className="w-8 h-8 text-gray-400 mx-auto mb-3" />
+      <div onDrop={onDrop} onDragOver={e=>e.preventDefault()}
+        onClick={()=>document.getElementById('csv-inp')?.click()}
+        className="border-2 border-dashed border-gray-200 rounded-xl p-12 text-center hover:border-blue-400 transition-colors cursor-pointer bg-gray-50/50 hover:bg-blue-50/20">
+        <Upload className="w-8 h-8 text-gray-400 mx-auto mb-3"/>
         <p className="text-sm font-semibold text-gray-700 mb-1">Drop your CSV here or click to browse</p>
         <p className="text-xs text-gray-400">Supports Airtable exports, LinkedIn exports, and custom CSV files</p>
-        <input
-          type="file" accept=".csv" id="csv-inp" className="hidden"
-          onChange={e => { const f = e.target.files?.[0]; if (f) onFile(f) }}
-        />
+        <input type="file" accept=".csv" id="csv-inp" className="hidden" onChange={e=>{const f=e.target.files?.[0];if(f)onFile(f)}}/>
       </div>
 
-      {fileErr && (
-        <p className="mt-3 text-sm text-red-600 flex items-center gap-1">
-          <AlertTriangle className="w-4 h-4" />{fileErr}
-        </p>
-      )}
+      {fileErr && <p className="mt-3 text-sm text-red-600 flex items-center gap-1"><AlertTriangle className="w-4 h-4"/>{fileErr}</p>}
 
       <div className="mt-4 grid grid-cols-3 gap-3 text-center">
-        {([
-          ['✅', 'Airtable exports', 'Auto-detected'],
-          ['✅', 'LinkedIn CSV',     'Auto-detected'],
-          ['✅', 'Custom CSV',       'Column mapper'],
-        ] as [string, string, string][]).map(([icon, title, sub]) => (
+        {[['✅','Airtable exports','Auto-detected'],['✅','LinkedIn CSV','Auto-detected'],['✅','Custom CSV','Column mapper']].map(([icon,title,sub])=>(
           <div key={title} className="bg-gray-50 rounded-lg p-3">
             <p className="text-lg mb-1">{icon}</p>
             <p className="text-xs font-semibold text-gray-700">{title}</p>
@@ -292,34 +258,19 @@ export function CsvUploader() {
     </div>
   )
 
-  // ─── Step 2: Map columns ──────────────────────────────────
+  // ─── Step 2: Map ──────────────────────────────────────────
   if (step === 2) return (
     <div>
-      <Breadcrumb step={2} total={rows.length} onBack={() => setStep(1)} />
+      <Breadcrumb step={2} total={rows.length} onBack={()=>setStep(1)}/>
 
       {isAirtable && (
         <div className="flex items-center gap-2 bg-blue-50 border border-blue-200 rounded-xl px-4 py-3 mb-4">
-          <Sparkles className="w-4 h-4 text-blue-500 flex-shrink-0" />
+          <Sparkles className="w-4 h-4 text-blue-500 flex-shrink-0"/>
           <p className="text-sm text-blue-700">
             <strong>Airtable format detected!</strong> Columns auto-mapped. Verify below and click Preview.
           </p>
         </div>
       )}
-
-      {/* Optional: link to a job */}
-      <div className="mb-4">
-        <label className="block text-xs text-gray-500 mb-1">Link to job (optional)</label>
-        <select
-          value={selectedJobId}
-          onChange={e => setSelectedJobId(e.target.value)}
-          className="w-full px-3 py-2 border border-gray-200 rounded-lg text-xs bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-        >
-          <option value="">— No job —</option>
-          {jobs.map((j: { id: string; title: string }) => (
-            <option key={j.id} value={j.id}>{j.title}</option>
-          ))}
-        </select>
-      </div>
 
       <div className="space-y-2 text-sm">
         {([
@@ -334,15 +285,13 @@ export function CsvUploader() {
         ] as [keyof ColumnMap, string][]).map(([key, label]) => (
           <div key={key} className="flex items-center gap-3">
             <span className="text-gray-600 w-36 flex-shrink-0 text-xs">{label}</span>
-            <select
-              value={colMap[key] ?? ''}
-              onChange={e => setColMap(p => ({ ...p, [key]: e.target.value }))}
+            <select value={colMap[key]??''}
+              onChange={e=>setColMap(p=>({...p,[key]:e.target.value}))}
               className={`flex-1 px-3 py-2 border rounded-lg text-xs bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 ${
                 colMap[key] ? 'border-green-300 bg-green-50/50' : 'border-gray-200'
-              }`}
-            >
+              }`}>
               <option value="">— skip —</option>
-              {headers.map(h => <option key={h} value={h}>{h}</option>)}
+              {headers.map(h=><option key={h} value={h}>{h}</option>)}
             </select>
             {colMap[key] && <span className="text-green-500 text-xs flex-shrink-0">✓</span>}
           </div>
@@ -350,9 +299,7 @@ export function CsvUploader() {
       </div>
 
       <div className="flex justify-end mt-5">
-        <Button onClick={preview} icon={<ChevronRight className="w-4 h-4" />}>
-          Preview {rows.length} rows
-        </Button>
+        <Button onClick={preview} icon={<ChevronRight className="w-4 h-4"/>}>Preview {rows.length} rows</Button>
       </div>
     </div>
   )
@@ -360,20 +307,16 @@ export function CsvUploader() {
   // ─── Step 3: Preview ──────────────────────────────────────
   if (step === 3) return (
     <div>
-      <Breadcrumb step={3} total={rows.length} onBack={() => setStep(2)} />
+      <Breadcrumb step={3} total={rows.length} onBack={()=>setStep(2)}/>
 
       <div className="grid grid-cols-3 gap-3 my-4">
         <div className="bg-green-50 rounded-xl p-3 text-center">
           <p className="text-2xl font-bold text-green-700">{valid.length}</p>
           <p className="text-xs text-green-600">Ready to upload</p>
         </div>
-        <div className={`${invalid.length > 0 ? 'bg-red-50' : 'bg-gray-50'} rounded-xl p-3 text-center`}>
-          <p className={`text-2xl font-bold ${invalid.length > 0 ? 'text-red-600' : 'text-gray-400'}`}>
-            {invalid.length}
-          </p>
-          <p className={`text-xs ${invalid.length > 0 ? 'text-red-500' : 'text-gray-400'}`}>
-            Skipped (no name/email)
-          </p>
+        <div className={`${invalid.length>0?'bg-red-50':'bg-gray-50'} rounded-xl p-3 text-center`}>
+          <p className={`text-2xl font-bold ${invalid.length>0?'text-red-600':'text-gray-400'}`}>{invalid.length}</p>
+          <p className={`text-xs ${invalid.length>0?'text-red-500':'text-gray-400'}`}>Skipped (no name/email)</p>
         </div>
         <div className="bg-blue-50 rounded-xl p-3 text-center">
           <p className="text-2xl font-bold text-blue-700">{rows.length}</p>
@@ -409,65 +352,29 @@ export function CsvUploader() {
             </tr>
           </thead>
           <tbody>
-            {transformed.slice(0, 20).map((r, i) => {
+            {transformed.slice(0,20).map((r,i)=>{
               const emailDup = r.email && dupMap[r.email.toLowerCase()]
-              const phoneDup = r.phone && dupMap[`phone:${r.phone.replace(/\D/g, '').slice(-10)}`]
-              const isDup    = !!(emailDup || phoneDup)
-              const dupName  = emailDup || phoneDup
+              const phoneDup = r.phone && dupMap[`phone:${r.phone.replace(/\D/g,'').slice(-10)}`]
+              const isDup = !!(emailDup || phoneDup)
+              const dupName = emailDup || phoneDup
               return (
-                <tr
-                  key={i}
-                  className={`border-b border-gray-50 ${
-                    !r.full_name || !r.email ? 'bg-red-50 opacity-60' : isDup ? 'bg-amber-50' : ''
-                  }`}
-                >
-                  {/* Status */}
-                  <td className="px-3 py-2">
-                    {!r.full_name || !r.email
-                      ? <span className="text-red-500">✗ skip</span>
-                      : isDup
-                      ? <span className="text-amber-600" title={`Matches: ${dupName}`}>⚠️ dup</span>
-                      : <span className="text-green-500">✓</span>
-                    }
-                  </td>
-                  {/* Name — was showing source_name by mistake */}
-                  <td className="px-3 py-2 font-medium text-gray-800 max-w-[120px] truncate">
-                    {r.full_name || '—'}
-                  </td>
-                  {/* Email */}
-                  <td className="px-3 py-2 text-gray-600 max-w-[160px] truncate">
-                    {r.email || '—'}
-                  </td>
-                  {/* Phone */}
-                  <td className="px-3 py-2 text-gray-500">
-                    {r.phone ?? '—'}
-                  </td>
-                  {/* Source category */}
-                  <td className="px-3 py-2 text-gray-500 capitalize">
-                    {r.source_category}
-                  </td>
-                  {/* Source name */}
-                  <td className="px-3 py-2 text-gray-500 max-w-[100px] truncate">
-                    {r.source_name}
-                  </td>
-                  {/* LinkedIn */}
-                  <td className="px-3 py-2">
-                    {r.linkedin_url ? <span className="text-blue-500">✓</span> : '—'}
-                  </td>
-                  {/* Resume */}
-                  <td className="px-3 py-2">
-                    {r.resume_url ? <span className="text-green-500">✓</span> : '—'}
-                  </td>
-                </tr>
-              )
-            })}
+              <tr key={i} className={`border-b border-gray-50 ${!r.full_name||!r.email?'bg-red-50 opacity-60':isDup?'bg-amber-50':''}`}>
+                <td className="px-3 py-2">
+                  {!r.full_name||!r.email
+                    ? <span className="text-red-500 text-xs">✗ skip</span>
+                    : isDup
+                    ? <span className="text-amber-600 text-xs" title={`Matches: ${dupName}`}>⚠️ dup</span>
+                    : <span className="text-green-500 text-xs">✓</span>
+                  }
+                </td>
+                <td className="px-3 py-2 text-gray-600 max-w-[120px] truncate">{r.source_name}</td>
+                <td className="px-3 py-2">{r.linkedin_url?<span className="text-blue-500">✓</span>:'—'}</td>
+                <td className="px-3 py-2">{r.resume_url?<span className="text-green-500">✓</span>:'—'}</td>
+              </tr>
+            )})}
           </tbody>
         </table>
-        {transformed.length > 20 && (
-          <p className="text-xs text-center text-gray-400 py-2">
-            +{transformed.length - 20} more rows
-          </p>
-        )}
+        {transformed.length>20&&<p className="text-xs text-center text-gray-400 py-2">+{transformed.length-20} more rows</p>}
       </div>
 
       {mutation.error && (
@@ -477,18 +384,12 @@ export function CsvUploader() {
       )}
 
       <div className="flex justify-between mt-5 items-center">
-        <Button variant="secondary" onClick={() => setStep(2)}>← Back</Button>
+        <Button variant="secondary" onClick={()=>setStep(2)}>← Back</Button>
         <div className="text-right">
           {Object.keys(dupMap).length > 0 && (
-            <p className="text-xs text-amber-600 mb-1">
-              ⚠️ {Object.keys(dupMap).length} possible duplicates — will still upload
-            </p>
+            <p className="text-xs text-amber-600 mb-1">⚠️ {Object.keys(dupMap).length} possible duplicates — will still upload</p>
           )}
-          <Button
-            onClick={() => mutation.mutate(valid)}
-            loading={mutation.isPending}
-            disabled={valid.length === 0}
-          >
+          <Button onClick={()=>mutation.mutate(valid)} loading={mutation.isPending} disabled={valid.length===0}>
             Upload {valid.length} candidates
           </Button>
         </div>
@@ -499,27 +400,22 @@ export function CsvUploader() {
   // ─── Step 4: Done ─────────────────────────────────────────
   return (
     <div className="flex flex-col items-center justify-center py-12 gap-3">
-      <CheckCircle className="w-12 h-12 text-green-500" />
+      <CheckCircle className="w-12 h-12 text-green-500"/>
       <p className="text-lg font-semibold text-gray-900">Upload complete!</p>
       <p className="text-sm text-gray-500">{valid.length} candidates added to your ATS.</p>
-      <Button
-        variant="secondary"
-        onClick={() => { setStep(1); setRows([]); setTransformed([]) }}
-      >
-        Upload another file
-      </Button>
+      <Button variant="secondary" onClick={()=>{setStep(1);setRows([]);setTransformed([])}}>Upload another file</Button>
     </div>
   )
 }
 
-function Breadcrumb({ step, total, onBack }: { step: number; total: number; onBack: () => void }) {
-  const steps = ['Upload file', 'Map columns', 'Preview', 'Done']
+function Breadcrumb({step,total,onBack}:{step:number;total:number;onBack:()=>void}) {
+  const steps = ['Upload file','Map columns','Preview','Done']
   return (
     <div className="mb-4">
       <div className="flex items-center gap-1 text-xs text-gray-400 mb-1">
-        {steps.map((s, i) => (
-          <span key={i} className={`flex items-center gap-1 ${i + 1 === step ? 'text-blue-600 font-semibold' : ''}`}>
-            {i > 0 && <ChevronRight className="w-3 h-3" />}{s}
+        {steps.map((s,i)=>(
+          <span key={i} className={`flex items-center gap-1 ${i+1===step?'text-blue-600 font-semibold':''}`}>
+            {i>0&&<ChevronRight className="w-3 h-3"/>}{s}
           </span>
         ))}
       </div>
