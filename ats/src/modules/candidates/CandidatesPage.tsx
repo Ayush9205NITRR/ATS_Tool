@@ -614,11 +614,17 @@ export function CandidatesPage() {
                           options={SOURCES.map(s => ({ label: s.charAt(0).toUpperCase() + s.slice(1), value: s }))}/>
                       </td>}
                       {show('subsource') && <td className="px-3 py-2.5 text-xs text-gray-600">{c.source_name}</td>}
-                      {show('hr_owner') && <td className="px-3 py-2.5 min-w-[120px]">
-                        <SelectCell cid={c.id} field="hr_owner"
-                          display={getName(hrUsers as any[], c.hr_owner)}
-                          canEdit={canAssign} onUpdate={onUpdate}
-                          options={(hrUsers as any[]).map(u => ({ label: u.full_name, value: u.id }))}/>
+                      {show('hr_owner') && <td className="px-3 py-2.5 min-w-[140px]">
+  <MultiSelectCell 
+    cid={c.id} 
+    field="hr_owner"
+    selectedIds={c.hr_owner ? [c.hr_owner] : []} // Adjust based on if your DB stores string or array
+    canEdit={canAssign} 
+    onUpdate={onUpdate}
+    options={(hrUsers as any[]).map(u => ({ label: u.full_name, value: u.id }))}
+    placeholder="Assign HR..."
+  />
+
                       </td>}
                       {show('interviewer') && <td className="px-3 py-2.5 min-w-[140px]">
                         {/* ── Multi-select for interviewers ── */}
