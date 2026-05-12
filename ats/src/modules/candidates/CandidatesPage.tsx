@@ -1,6 +1,5 @@
 // ============================================================
-// CANDIDATES PAGE — Full featured table with inline editing
-// Fixes: dropdown lag, HR Team view, AND/OR filters, tooltips
+// CANDIDATES PAGE — Fixed: interviewer filter, multi-select display
 // ============================================================
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
@@ -77,7 +76,7 @@ function PopupSelect({
       {open && (
         <div
           className={`absolute top-full mt-1 bg-white border border-gray-200 rounded-xl shadow-xl z-50 py-1 min-w-[160px] max-h-64 overflow-y-auto ${align === 'right' ? 'right-0' : 'left-0'}`}
-          onClick={() => setOpen(false)}
+          onClick={e => e.stopPropagation()}
         >
           {children}
         </div>
@@ -135,6 +134,56 @@ function SelectCell({ cid, field, display, options, canEdit, onUpdate, placehold
   )
 }
 
+// ── Multi-Select Cell (for Interviewers) ──────────────────────
+function MultiSelectCell({ cid, field, selectedIds: selIds, options, canEdit, onUpdate, placeholder = '—' }: {
+  cid: string; field: string; selectedIds: string[]
+  options: { label: string; value: string }[]
+  canEdit: boolean; onUpdate: (id: string, f: string, v: any) => void
+  placeholder?: string
+}) {
+  const display = selIds.map(id => options.find(o => o.value === id)?.label).filter(Boolean).join(', ')
+
+  const toggle = (val: string) => {
+    const next = selIds.includes(val) ? selIds.filter(i => i !== val) : [...selIds, val]
+    onUpdate(cid, field, next)
+  }
+
+  const trigger = (
+    <button className="flex items-center gap-1 text-xs text-gray-700 hover:text-blue-600 transition-colors group max-w-[140px]">
+      <span className="truncate">{display || <span className="text-gray-300">{placeholder}</span>}</span>
+      {canEdit && <ChevronDown className="w-3 h-3 text-gray-300 group-hover:text-blue-400 flex-shrink-0"/>}
+    </button>
+  )
+
+  if (!canEdit) return <span className="text-xs text-gray-600">{display || '—'}</span>
+
+  return (
+    <PopupSelect trigger={trigger}>
+      <div className="px-2 pt-1.5 pb-1">
+        <p className="text-xs text-gray-400 font-medium mb-1">Select multiple</p>
+      </div>
+      {options.map(o => {
+        const selected = selIds.includes(o.value)
+        return (
+          <button key={o.value} onClick={() => toggle(o.value)}
+            className="w-full text-left px-3 py-1.5 text-xs hover:bg-gray-50 flex items-center justify-between gap-2">
+            <span className="truncate text-gray-700">{o.label}</span>
+            {selected && <Check className="w-3 h-3 text-blue-500 flex-shrink-0"/>}
+          </button>
+        )
+      })}
+      {selIds.length > 0 && (
+        <div className="border-t border-gray-100 mt-1 pt-1">
+          <button onClick={() => onUpdate(cid, field, [])}
+            className="w-full text-left px-3 py-1.5 text-xs text-red-400 hover:bg-red-50">
+            Clear all
+          </button>
+        </div>
+      )}
+    </PopupSelect>
+  )
+}
+
 // ── Date Cell ─────────────────────────────────────────────────
 function DateCell({ cid, value, canEdit, onUpdate }: { cid: string; value: string | null; canEdit: boolean; onUpdate: (id: string, f: string, v: any) => void }) {
   const [editing, setEditing] = useState(false)
@@ -155,9 +204,9 @@ function DateCell({ cid, value, canEdit, onUpdate }: { cid: string; value: strin
 // ── Tooltip Button ────────────────────────────────────────────
 function TipBtn({ onClick, colour, tip, children }: { onClick: () => void; colour: 'blue'|'amber'|'red'; tip: string; children: React.ReactNode }) {
   const colours = {
-    blue:  { btn: 'hover:text-blue-600 hover:border-blue-300 hover:bg-blue-50', tip: 'bg-blue-600 after:border-t-blue-600' },
-    amber: { btn: 'hover:text-amber-600 hover:border-amber-300 hover:bg-amber-50', tip: 'bg-amber-500 after:border-t-amber-500' },
-    red:   { btn: 'hover:text-red-600 hover:border-red-300 hover:bg-red-50', tip: 'bg-red-600 after:border-t-red-600' },
+    blue:  { btn: 'hover:text-blue-600 hover:border-blue-300 hover:bg-blue-50', tip: 'bg-blue-600' },
+    amber: { btn: 'hover:text-amber-600 hover:border-amber-300 hover:bg-amber-50', tip: 'bg-amber-500' },
+    red:   { btn: 'hover:text-red-600 hover:border-red-300 hover:bg-red-50', tip: 'bg-red-600' },
   }[colour]
   return (
     <div className="relative group/tip">
@@ -165,7 +214,7 @@ function TipBtn({ onClick, colour, tip, children }: { onClick: () => void; colou
         className={`p-1.5 rounded-lg border border-gray-200 text-gray-400 transition-all ${colours.btn}`}>
         {children}
       </button>
-      <div className={`absolute bottom-full right-0 mb-2 px-2 py-1 ${colours.tip.split(' ')[0]} text-white text-xs rounded-lg whitespace-nowrap opacity-0 group-hover/tip:opacity-100 pointer-events-none z-50 transition-opacity`}>
+      <div className={`absolute bottom-full right-0 mb-2 px-2 py-1 ${colours.tip} text-white text-xs rounded-lg whitespace-nowrap opacity-0 group-hover/tip:opacity-100 pointer-events-none z-50 transition-opacity`}>
         {tip}
         <div className="absolute top-full right-2 border-l-4 border-r-4 border-t-4 border-l-transparent border-r-transparent border-t-current"/>
       </div>
@@ -181,20 +230,21 @@ export function CandidatesPage() {
   const canEdit      = hasRole(['admin', 'super_admin', 'hr_team'])
   const canAssign    = hasRole(['admin', 'super_admin'])
   const isSuperAdmin = hasRole(['super_admin'])
-  const isHRTeam     = hasRole(['hr_team'])
 
-  const [filters, setFilters]         = useState<CandidateFilters>({})
-  const [search, setSearch]           = useState('')
+  const [filters, setFilters]           = useState<CandidateFilters>({})
+  const [search, setSearch]             = useState('')
   const [showArchived, setShowArchived] = useState(false)
   const [selectedIds, setSelectedIds]   = useState<Set<string>>(new Set())
-  const [showColPicker, setShowColPicker] = useState(false)
-  const [showBulkMenu, setShowBulkMenu]   = useState(false)
-  const [showFilterBar, setShowFilterBar] = useState(false)
-  const [bulkField, setBulkField]         = useState<string | null>(null)
-  const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
-  const [activeFilters, setActiveFilters] = useState<ActiveFilter[]>([])
-  const [filterMode, setFilterMode]       = useState<'and' | 'or'>('and')
-  const [visibleCols, setVisibleCols]     = useState<Set<string>>(DEFAULT_COLS)
+  const [showColPicker, setShowColPicker]   = useState(false)
+  const [showBulkMenu, setShowBulkMenu]     = useState(false)
+  const [showFilterBar, setShowFilterBar]   = useState(false)
+  const [bulkField, setBulkField]           = useState<string | null>(null)
+  const [confirmDelete, setConfirmDelete]   = useState<string | null>(null)
+  const [activeFilters, setActiveFilters]   = useState<ActiveFilter[]>([])
+  const [filterMode, setFilterMode]         = useState<'and' | 'or'>('and')
+  const [visibleCols, setVisibleCols]       = useState<Set<string>>(DEFAULT_COLS)
+  // NEW: interviewer quick-filter
+  const [interviewerFilter, setInterviewerFilter] = useState('')
   const filterRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -232,16 +282,21 @@ export function CandidatesPage() {
 
   const { data: candidates = [], isLoading } = useCandidates({ ...filters, search: search || undefined })
 
-  // Apply client-side filters with AND/OR mode
+  // Apply client-side filters with AND/OR mode + interviewer filter
   const displayed = useMemo(() => {
     let list = candidates.filter((c: any) => showArchived ? !!c.archived_at : !c.archived_at)
+    // Interviewer quick-filter
+    if (interviewerFilter) {
+      list = list.filter((c: any) => (c.assigned_interviewers ?? []).includes(interviewerFilter))
+    }
     if (!activeFilters.length) return list
     return applyFilters(list, activeFilters, jobs as any[], filterMode)
-  }, [candidates, showArchived, activeFilters, jobs, filterMode])
+  }, [candidates, showArchived, activeFilters, jobs, filterMode, interviewerFilter])
 
   const updateField = useMutation({
     mutationFn: async ({ id, field, value }: { id: string; field: string; value: any }) => {
-      const payload = field === 'assigned_interviewers' ? { [field]: value ? [value] : [] } : { [field]: value }
+      // For array fields (assigned_interviewers), store as-is
+      const payload = { [field]: value }
       const { error } = await supabase.from('candidates').update(payload).eq('id', id)
       if (error) throw error
     },
@@ -269,8 +324,7 @@ export function CandidatesPage() {
 
   const bulkUpdate = useMutation({
     mutationFn: async ({ field, value }: { field: string; value: any }) => {
-      const payload = field === 'assigned_interviewers' ? { [field]: value ? [value] : [] } : { [field]: value }
-      const { error } = await supabase.from('candidates').update(payload).in('id', Array.from(selectedIds))
+      const { error } = await supabase.from('candidates').update({ [field]: value }).in('id', Array.from(selectedIds))
       if (error) throw error
     },
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['candidates'] }); setSelectedIds(new Set()); setBulkField(null); setShowBulkMenu(false) },
@@ -302,6 +356,7 @@ export function CandidatesPage() {
   const toggleAll = () => setSelectedIds(selectedIds.size === displayed.length ? new Set() : new Set(displayed.map((c: any) => c.id)))
   const getName = (list: any[], id: string | null) => { if (!id) return null; const i = list.find(u => u.id === id); return i?.full_name ?? i?.title ?? null }
   const show = (key: string) => visibleCols.has(key)
+  const hasAnyFilter = activeFilters.length > 0 || search || filters.job_id || (filters as any).hr_owner || interviewerFilter
 
   const colCols = [...ALL_COLUMNS, ...(customFields as any[]).map(f => ({ key: `cf_${f.field_name}`, label: f.field_label }))]
 
@@ -375,7 +430,7 @@ export function CandidatesPage() {
                             {bulkField === 'current_stage' ? 'Stage' : bulkField === 'job_id' ? 'Job' : bulkField === 'hr_owner' ? 'HR Owner' : 'Interviewer'}
                           </p>
                           <select autoFocus defaultValue=""
-                            onChange={e => { if (e.target.value) bulkUpdate.mutate({ field: bulkField, value: e.target.value }) }}
+                            onChange={e => { if (e.target.value) bulkUpdate.mutate({ field: bulkField, value: bulkField === 'assigned_interviewers' ? [e.target.value] : e.target.value }) }}
                             className="w-full px-2 py-1.5 border border-gray-300 rounded text-sm focus:outline-none">
                             <option value="" disabled>Choose…</option>
                             {bulkField === 'current_stage'
@@ -427,7 +482,7 @@ export function CandidatesPage() {
             className="w-full pl-9 pr-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"/>
         </div>
 
-        {/* Airtable filter */}
+        {/* Airtable-style filter */}
         <div ref={filterRef} className="relative">
           <Button variant={activeFilters.length > 0 ? 'primary' : 'secondary'} size="sm"
             icon={<Filter className="w-3.5 h-3.5"/>}
@@ -454,6 +509,13 @@ export function CandidatesPage() {
           {(jobs as any[]).map(j => <option key={j.id} value={j.id}>{j.title}</option>)}
         </select>
 
+        {/* ── NEW: Interviewer quick filter ── */}
+        <select value={interviewerFilter} onChange={e => setInterviewerFilter(e.target.value)}
+          className="px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+          <option value="">All interviewers</option>
+          {(interviewers as any[]).map(u => <option key={u.id} value={u.id}>{u.full_name}</option>)}
+        </select>
+
         {isSuperAdmin && (
           <select onChange={e => setFilters(p => ({ ...p, hr_owner: e.target.value || undefined } as any))}
             className="px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
@@ -462,9 +524,9 @@ export function CandidatesPage() {
           </select>
         )}
 
-        {(activeFilters.length > 0 || search || filters.job_id || (filters as any).hr_owner) && (
+        {hasAnyFilter && (
           <Button variant="ghost" size="sm" icon={<X className="w-3.5 h-3.5"/>}
-            onClick={() => { setFilters({}); setSearch(''); setActiveFilters([]) }}>
+            onClick={() => { setFilters({}); setSearch(''); setActiveFilters([]); setInterviewerFilter('') }}>
             Clear all
           </Button>
         )}
@@ -512,9 +574,7 @@ export function CandidatesPage() {
               <tbody className="divide-y divide-gray-50">
                 {displayed.map((c: any) => {
                   const isSel = selectedIds.has(c.id)
-                  const interviewerNames = (c.assigned_interviewers ?? [])
-                    .map((id: string) => getName(interviewers as any[], id))
-                    .filter(Boolean).join(', ')
+                  const assignedInterviewerIds: string[] = c.assigned_interviewers ?? []
                   return (
                     <tr key={c.id} className={`transition-colors ${isSel ? 'bg-blue-50/50' : 'hover:bg-gray-50/40'} ${c.archived_at ? 'opacity-50' : ''}`}>
                       <td className="px-3 py-2.5 w-10">
@@ -560,17 +620,17 @@ export function CandidatesPage() {
                           canEdit={canAssign} onUpdate={onUpdate}
                           options={(hrUsers as any[]).map(u => ({ label: u.full_name, value: u.id }))}/>
                       </td>}
-                      {show('interviewer') && <td className="px-3 py-2.5 min-w-[120px]">
-                        {/* HR Team + Admin can see and assign interviewers */}
-                        <SelectCell cid={c.id} field="assigned_interviewers"
-                          display={interviewerNames || null}
-                          canEdit={canEdit} onUpdate={(id, _, v) => {
-                            // Toggle in array
-                            const curr = c.assigned_interviewers ?? []
-                            const next = curr.includes(v) ? curr.filter((i: string) => i !== v) : [...curr, v]
-                            onUpdate(id, 'assigned_interviewers', next)
-                          }}
-                          options={(interviewers as any[]).map(u => ({ label: u.full_name, value: u.id }))}/>
+                      {show('interviewer') && <td className="px-3 py-2.5 min-w-[140px]">
+                        {/* ── Multi-select for interviewers ── */}
+                        <MultiSelectCell
+                          cid={c.id}
+                          field="assigned_interviewers"
+                          selectedIds={assignedInterviewerIds}
+                          canEdit={canEdit}
+                          onUpdate={onUpdate}
+                          options={(interviewers as any[]).map(u => ({ label: u.full_name, value: u.id }))}
+                          placeholder="Assign…"
+                        />
                       </td>}
                       {show('interview_date') && <td className="px-3 py-2.5 min-w-[110px]">
                         <DateCell cid={c.id} value={c.interview_date} canEdit={canEdit} onUpdate={onUpdate}/>
@@ -607,7 +667,7 @@ export function CandidatesPage() {
             </table>
           </div>
           <div className="px-4 py-2 bg-gray-50 border-t border-gray-100 flex items-center justify-between">
-            <p className="text-xs text-gray-400">Click Stage to change · Click Job / HR / Interviewer to assign · Hover for actions</p>
+            <p className="text-xs text-gray-400">Click Stage to change · Click fields to assign · Interviewers support multi-select</p>
             {selectedIds.size > 0 && (
               <button onClick={() => setSelectedIds(new Set())} className="text-xs text-gray-400 hover:text-gray-600 flex items-center gap-1">
                 <X className="w-3 h-3"/> Clear
