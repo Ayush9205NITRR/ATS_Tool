@@ -70,7 +70,10 @@ export function InterviewsPage() {
   // Submit feedback for a single candidate
   const submitOne = useMutation({
     mutationFn: async (candidateId: string) => {
-      // Delete first to avoid unique constraint issues, then insert
+      // Get stage from displayed candidates
+      const cand = data?.all.find((c: any) => c.id === candidateId)
+      const stage = cand?.current_stage ?? 'Applied'
+
       await supabase.from('interview_feedback')
         .delete()
         .eq('candidate_id', candidateId)
@@ -80,11 +83,11 @@ export function InterviewsPage() {
         candidate_id: candidateId,
         interviewer_id: user!.id,
         submitted_at: new Date().toISOString(),
+        stage,
       })
-      if (error) throw error
+      if (error) { console.error('[submitOne]', error); throw error }
     },
     onSuccess: async () => {
-      // Force immediate refetch + invalidate all related queries
       await refetch()
       qc.invalidateQueries({ queryKey: ['my-feedback'] })
       qc.invalidateQueries({ queryKey: ['my-interviews'] })
@@ -96,15 +99,21 @@ export function InterviewsPage() {
     mutationFn: async () => {
       const ids = Array.from(selectedIds)
       for (const cid of ids) {
+        const cand = data?.all.find((c: any) => c.id === cid)
+        const stage = cand?.current_stage ?? 'Applied'
+
         await supabase.from('interview_feedback')
           .delete()
           .eq('candidate_id', cid)
           .eq('interviewer_id', user!.id)
-        await supabase.from('interview_feedback').insert({
+
+        const { error } = await supabase.from('interview_feedback').insert({
           candidate_id: cid,
           interviewer_id: user!.id,
           submitted_at: new Date().toISOString(),
+          stage,
         })
+        if (error) { console.error('[submitBulk]', cid, error); throw error }
       }
     },
     onSuccess: async () => {
