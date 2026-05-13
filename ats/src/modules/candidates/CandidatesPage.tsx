@@ -331,30 +331,13 @@ export function CandidatesPage() {
     mutationFn: async ({ field, value }: { field: string; value: any }) => {
       const ids = Array.from(selectedIds)
       const isArrayField = ['assigned_interviewers', 'assigned_hr_owners'].includes(field)
-
-      if (isArrayField) {
-        // Fetch current arrays for each candidate, then APPEND (not overwrite)
-        const { data: current } = await supabase
-          .from('candidates')
-          .select(`id, ${field}`)
-          .in('id', ids)
-
-        // Update each candidate individually with merged array
-        for (const c of current ?? []) {
-          const existing: string[] = (c as any)[field] ?? []
-          const newIds: string[] = Array.isArray(value) ? value : [value]
-          const merged = Array.from(new Set([...existing, ...newIds]))
-          const { error } = await supabase
-            .from('candidates')
-            .update({ [field]: merged })
-            .eq('id', (c as unknown as { id: string }).id)
-          if (error) { console.error('[bulkUpdate array]', error); throw error }
-        }
-      } else {
-        // Simple scalar — set directly
-        const { error } = await supabase.from('candidates').update({ [field]: value }).in('id', ids)
-        if (error) throw error
-      }
+      // Array fields: overwrite with the selected value(s)
+      // Scalar fields: set directly
+      const payload = isArrayField
+        ? { [field]: Array.isArray(value) ? value : [value] }
+        : { [field]: value }
+      const { error } = await supabase.from('candidates').update(payload).in('id', ids)
+      if (error) { console.error('[bulkUpdate]', field, error); throw error }
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['candidates'] })
@@ -622,9 +605,6 @@ export function CandidatesPage() {
               <tbody className="divide-y divide-gray-50">
                 {displayed.map((c: any) => {
                   const isSel = selectedIds.has(c.id)
-                  const interviewerNames = (c.assigned_interviewers ?? [])
-                    .map((id: string) => getName(interviewers as any[], id))
-                    .filter(Boolean).join(', ')
                   return (
                     <tr key={c.id} className={`transition-colors ${isSel ? 'bg-blue-50/50' : 'hover:bg-gray-50/40'} ${c.archived_at ? 'opacity-50' : ''}`}>
                       <td className="px-3 py-2.5 w-10">
@@ -664,35 +644,27 @@ export function CandidatesPage() {
                           options={SOURCES.map(s => ({ label: s.charAt(0).toUpperCase() + s.slice(1), value: s }))}/>
                       </td>}
                       {show('subsource') && <td className="px-3 py-2.5 text-xs text-gray-600">{c.source_name}</td>}
-                      {show('hr_owner') && <td className="px-3 py-2.5 min-w-[140px]">
-                        {/* HR Team can VIEW but not change hr_owner */}
-                        <MultiSelectCell
+                      {show('hr_owner') && <td className="px-3 py-2.5 min-w-[130px]">
+                        {/* HR Owner — SINGLE select */}
+                        <SelectCell
                           cid={c.id}
-                          field="assigned_hr_owners"
-                          selectedIds={
-                            c.assigned_hr_owners?.length > 0
-                              ? c.assigned_hr_owners
-                              : (c.hr_owner ? [c.hr_owner] : [])
-                          }
+                          field="hr_owner"
+                          display={getName(hrUsers as any[], c.hr_owner)}
                           canEdit={canAssignHR}
-                          onUpdate={(id, _, arr) => {
-                            onUpdate(id, 'assigned_hr_owners', arr)
-                            onUpdate(id, 'hr_owner', arr[0] ?? null) // backward compat
-                          }}
+                          onUpdate={onUpdate}
                           options={(hrUsers as any[]).map(u => ({ label: u.full_name, value: u.id }))}
                         />
                       </td>}
-                      {show('interviewer') && <td className="px-3 py-2.5 min-w-[140px]">
-                        {/* Multi-select: shows all assigned, click to toggle */}
-                        <SelectCell cid={c.id} field="assigned_interviewers"
-                          display={interviewerNames || null}
+                      {show('interviewer') && <td className="px-3 py-2.5 min-w-[150px]">
+                        {/* Interviewers — MULTI select */}
+                        <MultiSelectCell
+                          cid={c.id}
+                          field="assigned_interviewers"
+                          selectedIds={c.assigned_interviewers ?? []}
                           canEdit={canEdit}
-                          onUpdate={(id, _, v) => {
-                            const curr: string[] = c.assigned_interviewers ?? []
-                            const next = curr.includes(v) ? curr.filter((i: string) => i !== v) : [...curr, v]
-                            onUpdate(id, 'assigned_interviewers', next)
-                          }}
-                          options={(interviewers as any[]).map(u => ({ label: u.full_name, value: u.id }))}/>
+                          onUpdate={(id, _, arr) => onUpdate(id, 'assigned_interviewers', arr)}
+                          options={(interviewers as any[]).map(u => ({ label: u.full_name, value: u.id }))}
+                        />
                       </td>}
                       {show('interview_date') && <td className="px-3 py-2.5 min-w-[110px]">
                         {/* Reads ISO timestamp, displays formatted */}
