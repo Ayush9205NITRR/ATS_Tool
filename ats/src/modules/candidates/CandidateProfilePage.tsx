@@ -72,6 +72,7 @@ export function CandidateProfilePage() {
   const [contactDraft, setContactDraft] = useState({ email: '', phone: '', linkedin_url: '' })
   const [generalNotesDraft, setGeneralNotesDraft] = useState('')
   const [interviewDateDraft, setInterviewDateDraft] = useState('')
+  const [customDataDraft, setCustomDataDraft] = useState<Record<string, string>>({})
 
   const { data: candidate, isLoading } = useCandidate(id!)
   const updateStage = useUpdateStage()
@@ -81,6 +82,20 @@ export function CandidateProfilePage() {
     queryFn: async () => {
       const { data } = await supabase.from('users').select('id,full_name,role').eq('is_active', true)
       return (data ?? []) as { id: string; full_name: string; role: string }[]
+    },
+    staleTime: 60_000,
+  })
+
+  // Custom fields — filtered by role visibility
+  const { data: customFields = [] } = useQuery({
+    queryKey: ['custom-fields'],
+    queryFn: async () => {
+      const { data } = await supabase
+        .from('custom_fields')
+        .select('*')
+        .eq('is_active', true)
+        .order('sort_order')
+      return (data ?? []) as any[]
     },
     staleTime: 60_000,
   })
@@ -115,6 +130,7 @@ export function CandidateProfilePage() {
     })
     setGeneralNotesDraft((candidate as any).notes ?? '')
     setInterviewDateDraft(toDatetimeLocal((candidate as any).interview_date))
+    setCustomDataDraft((candidate as any).custom_data ?? {})
     setEditMode(true)
   }, [candidate])
 
@@ -138,6 +154,7 @@ export function CandidateProfilePage() {
         linkedin_url: contactDraft.linkedin_url || null,
         notes: generalNotesDraft || null,
         interview_date: toISO(interviewDateDraft),
+        custom_data: customDataDraft,
       }).eq('id', id!)
       if (error) { console.error('[saveAll]', error); throw error }
     },
@@ -148,36 +165,45 @@ export function CandidateProfilePage() {
     },
   })
 
-  // Submit feedback — delete+insert to avoid constraint issues
+  // Submit feedback — upsert approach (no delete needed, avoids RLS delete issue)
   const submitFeedback = useMutation({
     mutationFn: async () => {
       setFeedbackErr(null)
-      // Get current stage of candidate for the feedback record
       const stage = (candidate as any)?.current_stage ?? 'Applied'
 
-      // Delete any existing row first
-      const { error: delErr } = await supabase.from('interview_feedback')
-        .delete()
+      // Check if record already exists
+      const { data: existing } = await supabase
+        .from('interview_feedback')
+        .select('id')
         .eq('candidate_id', id!)
         .eq('interviewer_id', user!.id)
-      if (delErr) console.warn('[feedback delete]', delErr)
+        .maybeSingle()
 
-      const { error: insErr } = await supabase.from('interview_feedback').insert({
-        candidate_id: id!,
-        interviewer_id: user!.id,
-        submitted_at: new Date().toISOString(),
-        stage,  // pass stage to satisfy NOT NULL constraint
-      })
-      if (insErr) { console.error('[feedback insert]', insErr); throw insErr }
+      let error
+      if (existing?.id) {
+        // Update existing record
+        const result = await supabase
+          .from('interview_feedback')
+          .update({ submitted_at: new Date().toISOString(), stage })
+          .eq('id', existing.id)
+        error = result.error
+      } else {
+        // Insert new record
+        const result = await supabase
+          .from('interview_feedback')
+          .insert({ candidate_id: id!, interviewer_id: user!.id, submitted_at: new Date().toISOString(), stage })
+        error = result.error
+      }
+
+      if (error) { console.error('[feedback submit]', error); throw error }
     },
     onSuccess: async () => {
-      // Hard invalidate + refetch immediately
-      await qc.invalidateQueries({ queryKey: ['my-feedback', id, user?.id] })
-      await qc.invalidateQueries({ queryKey: ['my-interviews'] })
       await refetchFeedback()
+      qc.invalidateQueries({ queryKey: ['my-feedback', id, user?.id] })
+      qc.invalidateQueries({ queryKey: ['my-interviews'] })
     },
     onError: (err: any) => {
-      setFeedbackErr(err?.message ?? 'Failed to submit feedback. Check console.')
+      setFeedbackErr(err?.message ?? 'Failed. Check browser console for details.')
     },
   })
 
@@ -484,6 +510,74 @@ export function CandidateProfilePage() {
               )
             )}
           </div>
+
+          {/* Additional Details — custom fields, hidden from interviewers if show_to_interviewer=false */}
+          {(() => {
+            const visibleFields = customFields.filter((f: any) =>
+              !isInterviewer || f.show_to_interviewer !== false
+            )
+            if (visibleFields.length === 0) return null
+            const customData = (candidate as any).custom_data ?? {}
+            return (
+              <div>
+                <p className="text-sm font-semibold text-gray-700 mb-2 px-1">Additional Details</p>
+                {editMode ? (
+                  <div className="bg-white rounded-xl border border-gray-200 px-4 py-3 space-y-3">
+                    {visibleFields.map((f: any) => (
+                      <div key={f.id}>
+                        <label className="block text-xs text-gray-400 mb-1">
+                          {f.field_label}
+                          {f.is_required && <span className="text-red-400 ml-1">*</span>}
+                          {!isInterviewer && f.show_to_interviewer === false && (
+                            <span className="ml-1.5 text-xs text-gray-300">(hidden from interviewers)</span>
+                          )}
+                        </label>
+                        {f.field_type === 'boolean' ? (
+                          <div className="flex items-center gap-2">
+                            <input type="checkbox"
+                              checked={customDataDraft[f.field_name] === 'true'}
+                              onChange={e => setCustomDataDraft(p => ({ ...p, [f.field_name]: e.target.checked ? 'true' : 'false' }))}
+                              className="rounded border-gray-300 text-blue-600"/>
+                            <span className="text-sm text-gray-600">{customDataDraft[f.field_name] === 'true' ? 'Yes' : 'No'}</span>
+                          </div>
+                        ) : (
+                          <input
+                            type={f.field_type === 'number' ? 'number' : f.field_type === 'date' ? 'date' : f.field_type === 'url' ? 'url' : 'text'}
+                            value={customDataDraft[f.field_name] ?? ''}
+                            onChange={e => setCustomDataDraft(p => ({ ...p, [f.field_name]: e.target.value }))}
+                            placeholder={f.field_label}
+                            className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-slate-400"/>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="bg-white rounded-xl border border-gray-100 px-4 py-3">
+                    <dl className="space-y-2">
+                      {visibleFields.map((f: any) => {
+                        const val = customData[f.field_name]
+                        return (
+                          <div key={f.id} className="flex gap-3 text-sm">
+                            <dt className="text-gray-400 text-xs w-28 flex-shrink-0 pt-0.5">{f.field_label}</dt>
+                            <dd className="text-gray-700 font-medium">
+                              {val === undefined || val === null || val === ''
+                                ? <span className="text-gray-300 italic text-xs">—</span>
+                                : f.field_type === 'boolean'
+                                ? (val === 'true' || val === true ? 'Yes' : 'No')
+                                : f.field_type === 'url'
+                                ? <a href={val} target="_blank" rel="noreferrer" className="text-blue-600 hover:underline text-xs">{val}</a>
+                                : String(val)
+                              }
+                            </dd>
+                          </div>
+                        )
+                      })}
+                    </dl>
+                  </div>
+                )}
+              </div>
+            )
+          })()}
 
           {/* Interview Notes — clean feed, no outer border */}
           <div>
