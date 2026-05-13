@@ -295,7 +295,7 @@ export function CandidatesPage() {
   const displayed = useMemo(() => {
     let list = candidates.filter((c: any) => showArchived ? !!c.archived_at : !c.archived_at)
     if (!activeFilters.length) return list
-    return applyFilters(list, activeFilters, jobs as any[], interviewers as any[], filterMode)
+    return applyFilters(list, activeFilters, jobs as any[], interviewers as any[], filterMode, customFields as any[])
   }, [candidates, showArchived, activeFilters, jobs, interviewers, filterMode])
 
   const updateField = useMutation({
@@ -533,8 +533,14 @@ export function CandidatesPage() {
                 onChange={setActiveFilters}
                 jobs={jobs as any[]}
                 interviewers={interviewers as any[]}
+                hrUsers={hrUsers as any[]}
                 mode={filterMode}
                 onModeChange={setFilterMode}
+                customFieldDefs={(customFields as any[]).map(f => ({
+                  field_name: f.field_name,
+                  field_label: f.field_label,
+                  field_type: f.field_type,
+                }))}
               />
             </div>
           )}
