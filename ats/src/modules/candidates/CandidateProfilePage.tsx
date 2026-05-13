@@ -2,7 +2,7 @@
 // CANDIDATE PROFILE PAGE — Clean sidebar layout, unified pills
 // ============================================================
 import { useParams, useNavigate } from 'react-router-dom'
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useCallback } from 'react'
 import {
   ArrowLeft, ExternalLink, Phone, Mail, Linkedin, FileText,
   Loader2, Send, Pencil, Check, X, ChevronDown, CheckCircle
@@ -72,7 +72,7 @@ export function CandidateProfilePage() {
   const [savingEditNote, setSavingEditNote] = useState(false)
 
   // Edit mode drafts
-  const [contactDraft, setContactDraft] = useState({ email: '', phone: '', linkedin_url: '' })
+  const [contactDraft, setContactDraft] = useState({ email: '', phone: '', linkedin_url: '', resume_url: '' })
   const [generalNotesDraft, setGeneralNotesDraft] = useState('')
   const [interviewDateDraft, setInterviewDateDraft] = useState('')
   const [customDataDraft, setCustomDataDraft] = useState<Record<string, string>>({})
@@ -124,18 +124,21 @@ export function CandidateProfilePage() {
   const interviewerUsers = allUsers.filter(u => u.role === 'interviewer')
 
   // Enter edit mode — snapshot current values
-  const enterEditMode = useCallback(() => {
+  // Enter edit mode — snapshot current values into drafts
+  // NOT wrapped in useCallback to avoid stale closure with candidate data
+  const enterEditMode = () => {
     if (!candidate) return
     setContactDraft({
       email: candidate.email,
       phone: candidate.phone ?? '',
       linkedin_url: candidate.linkedin_url ?? '',
+      resume_url: candidate.resume_url ?? '',
     })
     setGeneralNotesDraft((candidate as any).notes ?? '')
     setInterviewDateDraft(toDatetimeLocal((candidate as any).interview_date))
     setCustomDataDraft((candidate as any).custom_data ?? {})
     setEditMode(true)
-  }, [candidate])
+  }
 
   // updateField — always invalidates both lists
   const updateField = useMutation({
@@ -155,6 +158,7 @@ export function CandidateProfilePage() {
         email: contactDraft.email,
         phone: contactDraft.phone || null,
         linkedin_url: contactDraft.linkedin_url || null,
+        resume_url: contactDraft.resume_url || null,
         notes: generalNotesDraft || null,
         interview_date: toISO(interviewDateDraft),
         custom_data: customDataDraft,
@@ -352,11 +356,17 @@ export function CandidateProfilePage() {
             <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Contact</p>
             {editMode ? (
               <div className="space-y-2.5">
-                {([['email','Email','email'],['phone','Phone','tel'],['linkedin_url','LinkedIn','url']] as const).map(([k,label,type]) => (
+                {([
+                  ['email','Email','email'],
+                  ['phone','Phone','tel'],
+                  ['linkedin_url','LinkedIn','url'],
+                  ['resume_url','Resume URL','url'],
+                ] as const).map(([k,label,type]) => (
                   <div key={k}>
                     <label className="block text-xs text-gray-400 mb-0.5">{label}</label>
                     <input type={type} value={contactDraft[k]}
                       onChange={e => setContactDraft(p => ({ ...p, [k]: e.target.value }))}
+                      placeholder={k === 'resume_url' ? 'https://drive.google.com/...' : ''}
                       className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-slate-400"/>
                   </div>
                 ))}
