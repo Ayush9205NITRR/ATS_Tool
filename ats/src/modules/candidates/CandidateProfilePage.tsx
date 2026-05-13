@@ -152,6 +152,9 @@ export function CandidateProfilePage() {
   const submitFeedback = useMutation({
     mutationFn: async () => {
       setFeedbackErr(null)
+      // Get current stage of candidate for the feedback record
+      const stage = (candidate as any)?.current_stage ?? 'Applied'
+
       // Delete any existing row first
       const { error: delErr } = await supabase.from('interview_feedback')
         .delete()
@@ -163,6 +166,7 @@ export function CandidateProfilePage() {
         candidate_id: id!,
         interviewer_id: user!.id,
         submitted_at: new Date().toISOString(),
+        stage,  // pass stage to satisfy NOT NULL constraint
       })
       if (insErr) { console.error('[feedback insert]', insErr); throw insErr }
     },
@@ -365,18 +369,25 @@ export function CandidateProfilePage() {
             <div className="px-5 py-4 space-y-4">
               <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Assignment</p>
 
-              {/* HR Owner pills */}
+              {/* HR Owner — SINGLE select pill (click to assign, click again to unassign) */}
               <div>
-                <p className="text-xs text-gray-500 mb-2">HR Owner</p>
+                <p className="text-xs text-gray-500 mb-2">HR Owner <span className="text-gray-300">(single)</span></p>
                 {hrUsers.length === 0 ? (
                   <p className="text-xs text-gray-400 italic">No HR members</p>
                 ) : (
                   <div className="flex flex-wrap gap-1.5">
                     {hrUsers.map(u => {
-                      const sel = assignedHROwners.includes(u.id)
+                      const sel = (candidate as any).hr_owner === u.id
                       return (
                         <button key={u.id}
-                          onClick={() => canAssignHR && toggleHROwner(u.id)}
+                          onClick={() => {
+                            if (!canAssignHR) return
+                            // Single select: toggle off if same, else assign
+                            const next = sel ? null : u.id
+                            updateField.mutate({ field: 'hr_owner', value: next })
+                            // Also update assigned_hr_owners for consistency
+                            updateField.mutate({ field: 'assigned_hr_owners', value: next ? [next] : [] })
+                          }}
                           disabled={!canAssignHR}
                           className={`${PILL_BASE} ${!canAssignHR ? PILL_DISABLED : sel ? PILL_ON : PILL_OFF}`}>
                           {sel && <Check className="w-2.5 h-2.5 inline mr-1 opacity-80"/>}
@@ -388,9 +399,9 @@ export function CandidateProfilePage() {
                 )}
               </div>
 
-              {/* Interviewers pills — identical design */}
+              {/* Interviewers — MULTI select pills, same design as HR Owner */}
               <div>
-                <p className="text-xs text-gray-500 mb-2">Interviewers</p>
+                <p className="text-xs text-gray-500 mb-2">Interviewers <span className="text-gray-300">(multi)</span></p>
                 {interviewerUsers.length === 0 ? (
                   <p className="text-xs text-gray-400 italic">No interviewers in Settings</p>
                 ) : (
