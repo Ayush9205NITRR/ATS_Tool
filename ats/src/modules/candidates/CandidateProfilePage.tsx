@@ -67,6 +67,9 @@ export function CandidateProfilePage() {
   const [draftNotes, setDraftNotes] = useState<Record<string, string>>({})
   const [savingNote, setSavingNote] = useState<string | null>(null)
   const [feedbackErr, setFeedbackErr] = useState<string | null>(null)
+  const [feedbackForm, setFeedbackForm] = useState<{ score: number | null; recommendation: string }>({
+    score: null, recommendation: '',
+  })
 
   // Edit mode drafts
   const [contactDraft, setContactDraft] = useState({ email: '', phone: '', linkedin_url: '' })
@@ -165,11 +168,19 @@ export function CandidateProfilePage() {
     },
   })
 
-  // Submit feedback — upsert approach (no delete needed, avoids RLS delete issue)
+  // Submit feedback — check-then-update/insert (avoids RLS delete issue)
   const submitFeedback = useMutation({
     mutationFn: async () => {
       setFeedbackErr(null)
       const stage = (candidate as any)?.current_stage ?? 'Applied'
+      const payload = {
+        candidate_id: id!,
+        interviewer_id: user!.id,
+        submitted_at: new Date().toISOString(),
+        stage,
+        overall_score: feedbackForm.score,
+        recommendation: feedbackForm.recommendation || null,
+      }
 
       // Check if record already exists
       const { data: existing } = await supabase
@@ -181,17 +192,12 @@ export function CandidateProfilePage() {
 
       let error
       if (existing?.id) {
-        // Update existing record
-        const result = await supabase
-          .from('interview_feedback')
-          .update({ submitted_at: new Date().toISOString(), stage })
+        const result = await supabase.from('interview_feedback')
+          .update({ ...payload, candidate_id: undefined, interviewer_id: undefined })
           .eq('id', existing.id)
         error = result.error
       } else {
-        // Insert new record
-        const result = await supabase
-          .from('interview_feedback')
-          .insert({ candidate_id: id!, interviewer_id: user!.id, submitted_at: new Date().toISOString(), stage })
+        const result = await supabase.from('interview_feedback').insert(payload)
         error = result.error
       }
 
@@ -268,20 +274,6 @@ export function CandidateProfilePage() {
           <ArrowLeft className="w-4 h-4"/> Back
         </button>
         <div className="flex items-center gap-2">
-          {isInterviewer && (
-            feedbackSubmitted ? (
-              <div className="flex items-center gap-1.5 text-sm text-green-700 bg-green-50 border border-green-200 rounded-lg px-3 py-1.5">
-                <CheckCircle className="w-4 h-4"/>Feedback Submitted
-              </div>
-            ) : (
-              <Button size="sm" loading={submitFeedback.isPending}
-                icon={<CheckCircle className="w-3.5 h-3.5"/>}
-                onClick={() => submitFeedback.mutate()}>
-                Submit Feedback
-              </Button>
-            )
-          )}
-          {feedbackErr && <p className="text-xs text-red-600">{feedbackErr}</p>}
           {canEdit && (
             editMode ? (
               <div className="flex gap-2">
@@ -632,6 +624,97 @@ export function CandidateProfilePage() {
               })}
             </div>
           </div>
+
+          {/* ── Feedback Submission — Interviewers only, at bottom of notes ── */}
+          {isInterviewer && (
+            <div className={`rounded-xl border-2 p-5 ${feedbackSubmitted ? 'border-green-200 bg-green-50/40' : 'border-slate-200 bg-slate-50/40'}`}>
+              {feedbackSubmitted ? (
+                <div className="flex items-center gap-3">
+                  <CheckCircle className="w-5 h-5 text-green-600 flex-shrink-0"/>
+                  <div>
+                    <p className="text-sm font-semibold text-green-800">Feedback Submitted</p>
+                    <p className="text-xs text-green-600 mt-0.5">Your notes and recommendation have been recorded.</p>
+                  </div>
+                  <button
+                    onClick={() => submitFeedback.mutate()}
+                    className="ml-auto text-xs text-green-600 hover:text-green-800 underline"
+                  >
+                    Resubmit
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  <div>
+                    <p className="text-sm font-semibold text-gray-800">Submit Your Feedback</p>
+                    <p className="text-xs text-gray-500 mt-0.5">Add your notes above, then complete and submit feedback below.</p>
+                  </div>
+
+                  {/* Overall Score */}
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-2">Overall Score</label>
+                    <div className="flex gap-2">
+                      {[1, 2, 3, 4, 5].map(n => (
+                        <button key={n} onClick={() => setFeedbackForm(p => ({ ...p, score: n }))}
+                          className={`w-9 h-9 rounded-lg text-sm font-semibold border transition-all ${
+                            feedbackForm.score === n
+                              ? 'bg-slate-800 text-white border-slate-800'
+                              : 'bg-white text-gray-600 border-gray-200 hover:border-slate-400'
+                          }`}>
+                          {n}
+                        </button>
+                      ))}
+                      {feedbackForm.score && (
+                        <span className="text-xs text-gray-400 self-center ml-1">
+                          {feedbackForm.score === 1 ? 'Poor' : feedbackForm.score === 2 ? 'Below avg' : feedbackForm.score === 3 ? 'Average' : feedbackForm.score === 4 ? 'Good' : 'Excellent'}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Recommendation */}
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-2">Recommendation</label>
+                    <div className="flex flex-wrap gap-2">
+                      {[
+                        { val: 'strong_yes', label: 'Strong Yes', cls: 'bg-green-600 text-white border-green-600' },
+                        { val: 'yes',        label: 'Yes',         cls: 'bg-emerald-500 text-white border-emerald-500' },
+                        { val: 'neutral',    label: 'Neutral',     cls: 'bg-yellow-500 text-white border-yellow-500' },
+                        { val: 'no',         label: 'No',          cls: 'bg-orange-500 text-white border-orange-500' },
+                        { val: 'strong_no',  label: 'Strong No',   cls: 'bg-red-600 text-white border-red-600' },
+                      ].map(r => (
+                        <button key={r.val} onClick={() => setFeedbackForm(p => ({ ...p, recommendation: r.val }))}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${
+                            feedbackForm.recommendation === r.val
+                              ? r.cls
+                              : 'bg-white text-gray-600 border-gray-200 hover:border-gray-400'
+                          }`}>
+                          {r.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {feedbackErr && (
+                    <p className="text-xs text-red-600 bg-red-50 rounded-lg px-3 py-2">{feedbackErr}</p>
+                  )}
+
+                  <button
+                    onClick={() => submitFeedback.mutate()}
+                    disabled={submitFeedback.isPending || !feedbackForm.recommendation}
+                    className="w-full py-2.5 bg-slate-800 hover:bg-slate-700 disabled:bg-gray-300 text-white text-sm font-medium rounded-lg transition-colors flex items-center justify-center gap-2"
+                  >
+                    {submitFeedback.isPending
+                      ? <><Loader2 className="w-4 h-4 animate-spin"/>Submitting…</>
+                      : <><CheckCircle className="w-4 h-4"/>Submit Feedback</>
+                    }
+                  </button>
+                  {!feedbackForm.recommendation && (
+                    <p className="text-xs text-gray-400 text-center -mt-2">Select a recommendation to submit</p>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </div>
