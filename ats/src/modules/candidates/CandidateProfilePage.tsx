@@ -67,9 +67,9 @@ export function CandidateProfilePage() {
   const [draftNotes, setDraftNotes] = useState<Record<string, string>>({})
   const [savingNote, setSavingNote] = useState<string | null>(null)
   const [feedbackErr, setFeedbackErr] = useState<string | null>(null)
-  const [feedbackForm, setFeedbackForm] = useState<{ score: number | null; recommendation: string }>({
-    score: null, recommendation: '',
-  })
+  // Note editing: key = `${sectionKey}:${entryIndex}`, value = draft text
+  const [editingNote, setEditingNote] = useState<{ section: string; index: number; text: string } | null>(null)
+  const [savingEditNote, setSavingEditNote] = useState(false)
 
   // Edit mode drafts
   const [contactDraft, setContactDraft] = useState({ email: '', phone: '', linkedin_url: '' })
@@ -168,21 +168,12 @@ export function CandidateProfilePage() {
     },
   })
 
-  // Submit feedback — check-then-update/insert (avoids RLS delete issue)
+  // Submit feedback — simple: just marks that interviewer submitted feedback
+  // Notes are already saved via interview_notes on candidates table
   const submitFeedback = useMutation({
     mutationFn: async () => {
       setFeedbackErr(null)
-      const stage = (candidate as any)?.current_stage ?? 'Applied'
-      const payload = {
-        candidate_id: id!,
-        interviewer_id: user!.id,
-        submitted_at: new Date().toISOString(),
-        stage,
-        overall_score: feedbackForm.score,
-        recommendation: feedbackForm.recommendation || null,
-      }
 
-      // Check if record already exists
       const { data: existing } = await supabase
         .from('interview_feedback')
         .select('id')
@@ -193,11 +184,12 @@ export function CandidateProfilePage() {
       let error
       if (existing?.id) {
         const result = await supabase.from('interview_feedback')
-          .update({ ...payload, candidate_id: undefined, interviewer_id: undefined })
+          .update({ submitted_at: new Date().toISOString() })
           .eq('id', existing.id)
         error = result.error
       } else {
-        const result = await supabase.from('interview_feedback').insert(payload)
+        const result = await supabase.from('interview_feedback')
+          .insert({ candidate_id: id!, interviewer_id: user!.id })
         error = result.error
       }
 
@@ -209,7 +201,7 @@ export function CandidateProfilePage() {
       qc.invalidateQueries({ queryKey: ['my-interviews'] })
     },
     onError: (err: any) => {
-      setFeedbackErr(err?.message ?? 'Failed. Check browser console for details.')
+      setFeedbackErr(err?.message ?? 'Failed. Check browser console.')
     },
   })
 
@@ -231,6 +223,27 @@ export function CandidateProfilePage() {
       setDraftNotes(p => ({ ...p, [sectionKey]: '' }))
     }
     setSavingNote(null)
+  }
+
+  // Edit an existing note — only the original author can edit
+  const saveEditedNote = async () => {
+    if (!editingNote) return
+    const { section, index, text } = editingNote
+    const trimmed = text.trim()
+    if (!trimmed) return
+    setSavingEditNote(true)
+    const existing = (candidate as any)?.interview_notes ?? {}
+    const entries: NoteEntry[] = [...(existing[section] ?? [])]
+    entries[index] = { ...entries[index], text: trimmed, timestamp: new Date().toISOString() }
+    const { error } = await supabase.from('candidates').update({
+      interview_notes: { ...existing, [section]: entries }
+    }).eq('id', id!)
+    if (error) console.error('[saveEditedNote]', error)
+    else {
+      qc.invalidateQueries({ queryKey: ['candidate', id] })
+      setEditingNote(null)
+    }
+    setSavingEditNote(false)
   }
 
   const toggleInterviewer = useCallback((uid: string) => {
@@ -260,10 +273,15 @@ export function CandidateProfilePage() {
 
   const feedbackSubmitted = !!myFeedback?.submitted_at
 
+  // Google Drive preview: convert share URL to embedded preview
+  // Share URL: https://drive.google.com/file/d/FILE_ID/view?usp=sharing
+  // Preview URL: https://drive.google.com/file/d/FILE_ID/preview
   const drivePreviewUrl = candidate.resume_url
     ? candidate.resume_url.includes('drive.google.com')
-      ? candidate.resume_url.replace('/view','').replace('?usp=sharing','') + '?embedded=true'
-      : candidate.resume_url
+      ? candidate.resume_url
+          .replace(/\/view.*$/, '/preview')      // replace /view?... with /preview
+          .replace(/\/edit.*$/, '/preview')       // replace /edit?... with /preview
+      : null  // non-Drive URLs: open in new tab only, don't iframe
     : null
 
   return (
@@ -590,14 +608,55 @@ export function CandidateProfilePage() {
                     {/* Existing entries */}
                     {entries.length > 0 && (
                       <div className="space-y-2 mb-2 pl-3.5">
-                        {entries.map((e, i) => (
-                          <div key={i} className="bg-gray-50 rounded-lg px-3 py-2.5">
-                            <p className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">{e.text}</p>
-                            <p className="text-xs text-gray-400 mt-1.5">
-                              <span className="font-medium text-gray-500">{e.author}</span> · {formatRelative(e.timestamp)}
-                            </p>
-                          </div>
-                        ))}
+                        {entries.map((e, i) => {
+                          const isMyNote = e.authorId === user?.id
+                          const isEditing = editingNote?.section === key && editingNote?.index === i
+                          return (
+                            <div key={i} className="bg-gray-50 rounded-lg px-3 py-2.5 group/note">
+                              {isEditing ? (
+                                /* Inline edit textarea */
+                                <div className="space-y-2">
+                                  <textarea
+                                    autoFocus
+                                    rows={3}
+                                    value={editingNote.text}
+                                    onChange={ev => setEditingNote(p => p ? { ...p, text: ev.target.value } : null)}
+                                    className="w-full px-2.5 py-2 border border-slate-400 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-slate-400 resize-none"
+                                  />
+                                  <div className="flex items-center gap-2">
+                                    <button onClick={saveEditedNote} disabled={savingEditNote || !editingNote.text.trim()}
+                                      className="px-3 py-1 bg-slate-800 hover:bg-slate-700 disabled:bg-gray-300 text-white text-xs rounded-lg flex items-center gap-1 transition-colors">
+                                      {savingEditNote ? <Loader2 className="w-3 h-3 animate-spin"/> : <Check className="w-3 h-3"/>}
+                                      Save
+                                    </button>
+                                    <button onClick={() => setEditingNote(null)}
+                                      className="px-3 py-1 border border-gray-200 text-gray-500 text-xs rounded-lg hover:bg-gray-100 transition-colors">
+                                      Cancel
+                                    </button>
+                                  </div>
+                                </div>
+                              ) : (
+                                <>
+                                  <p className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">{e.text}</p>
+                                  <div className="flex items-center justify-between mt-1.5">
+                                    <p className="text-xs text-gray-400">
+                                      <span className="font-medium text-gray-500">{e.author}</span> · {formatRelative(e.timestamp)}
+                                    </p>
+                                    {/* Only author can edit their own note */}
+                                    {isMyNote && (
+                                      <button
+                                        onClick={() => setEditingNote({ section: key, index: i, text: e.text })}
+                                        className="opacity-0 group-hover/note:opacity-100 transition-opacity text-xs text-gray-400 hover:text-slate-600 flex items-center gap-0.5"
+                                      >
+                                        <Pencil className="w-3 h-3"/> Edit
+                                      </button>
+                                    )}
+                                  </div>
+                                </>
+                              )}
+                            </div>
+                          )
+                        })}
                       </div>
                     )}
 
@@ -625,93 +684,38 @@ export function CandidateProfilePage() {
             </div>
           </div>
 
-          {/* ── Feedback Submission — Interviewers only, at bottom of notes ── */}
+          {/* ── Submit Feedback — Interviewers only, simple button at bottom ── */}
           {isInterviewer && (
-            <div className={`rounded-xl border-2 p-5 ${feedbackSubmitted ? 'border-green-200 bg-green-50/40' : 'border-slate-200 bg-slate-50/40'}`}>
+            <div className={`rounded-xl border-2 px-5 py-4 flex items-center justify-between gap-4 ${feedbackSubmitted ? 'border-green-200 bg-green-50/40' : 'border-slate-200 bg-slate-50/40'}`}>
               {feedbackSubmitted ? (
-                <div className="flex items-center gap-3">
-                  <CheckCircle className="w-5 h-5 text-green-600 flex-shrink-0"/>
-                  <div>
-                    <p className="text-sm font-semibold text-green-800">Feedback Submitted</p>
-                    <p className="text-xs text-green-600 mt-0.5">Your notes and recommendation have been recorded.</p>
+                <>
+                  <div className="flex items-center gap-2.5">
+                    <CheckCircle className="w-5 h-5 text-green-600 flex-shrink-0"/>
+                    <div>
+                      <p className="text-sm font-semibold text-green-800">Feedback Submitted</p>
+                      <p className="text-xs text-green-600 mt-0.5">Your notes have been recorded.</p>
+                    </div>
                   </div>
-                  <button
-                    onClick={() => submitFeedback.mutate()}
-                    className="ml-auto text-xs text-green-600 hover:text-green-800 underline"
-                  >
+                  <button onClick={() => submitFeedback.mutate()}
+                    className="text-xs text-green-600 hover:text-green-800 underline flex-shrink-0">
                     Resubmit
                   </button>
-                </div>
+                </>
               ) : (
-                <div className="space-y-4">
+                <>
                   <div>
-                    <p className="text-sm font-semibold text-gray-800">Submit Your Feedback</p>
-                    <p className="text-xs text-gray-500 mt-0.5">Add your notes above, then complete and submit feedback below.</p>
+                    <p className="text-sm font-semibold text-gray-800">Ready to submit?</p>
+                    <p className="text-xs text-gray-500 mt-0.5">Add your interview notes above, then submit feedback.</p>
                   </div>
-
-                  {/* Overall Score */}
-                  <div>
-                    <label className="block text-xs font-medium text-gray-600 mb-2">Overall Score</label>
-                    <div className="flex gap-2">
-                      {[1, 2, 3, 4, 5].map(n => (
-                        <button key={n} onClick={() => setFeedbackForm(p => ({ ...p, score: n }))}
-                          className={`w-9 h-9 rounded-lg text-sm font-semibold border transition-all ${
-                            feedbackForm.score === n
-                              ? 'bg-slate-800 text-white border-slate-800'
-                              : 'bg-white text-gray-600 border-gray-200 hover:border-slate-400'
-                          }`}>
-                          {n}
-                        </button>
-                      ))}
-                      {feedbackForm.score && (
-                        <span className="text-xs text-gray-400 self-center ml-1">
-                          {feedbackForm.score === 1 ? 'Poor' : feedbackForm.score === 2 ? 'Below avg' : feedbackForm.score === 3 ? 'Average' : feedbackForm.score === 4 ? 'Good' : 'Excellent'}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Recommendation */}
-                  <div>
-                    <label className="block text-xs font-medium text-gray-600 mb-2">Recommendation</label>
-                    <div className="flex flex-wrap gap-2">
-                      {[
-                        { val: 'strong_yes', label: 'Strong Yes', cls: 'bg-green-600 text-white border-green-600' },
-                        { val: 'yes',        label: 'Yes',         cls: 'bg-emerald-500 text-white border-emerald-500' },
-                        { val: 'neutral',    label: 'Neutral',     cls: 'bg-yellow-500 text-white border-yellow-500' },
-                        { val: 'no',         label: 'No',          cls: 'bg-orange-500 text-white border-orange-500' },
-                        { val: 'strong_no',  label: 'Strong No',   cls: 'bg-red-600 text-white border-red-600' },
-                      ].map(r => (
-                        <button key={r.val} onClick={() => setFeedbackForm(p => ({ ...p, recommendation: r.val }))}
-                          className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${
-                            feedbackForm.recommendation === r.val
-                              ? r.cls
-                              : 'bg-white text-gray-600 border-gray-200 hover:border-gray-400'
-                          }`}>
-                          {r.label}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  {feedbackErr && (
-                    <p className="text-xs text-red-600 bg-red-50 rounded-lg px-3 py-2">{feedbackErr}</p>
-                  )}
-
-                  <button
-                    onClick={() => submitFeedback.mutate()}
-                    disabled={submitFeedback.isPending || !feedbackForm.recommendation}
-                    className="w-full py-2.5 bg-slate-800 hover:bg-slate-700 disabled:bg-gray-300 text-white text-sm font-medium rounded-lg transition-colors flex items-center justify-center gap-2"
-                  >
+                  {feedbackErr && <p className="text-xs text-red-600">{feedbackErr}</p>}
+                  <button onClick={() => submitFeedback.mutate()} disabled={submitFeedback.isPending}
+                    className="flex-shrink-0 px-4 py-2 bg-slate-800 hover:bg-slate-700 disabled:bg-gray-300 text-white text-sm font-medium rounded-lg transition-colors flex items-center gap-2">
                     {submitFeedback.isPending
                       ? <><Loader2 className="w-4 h-4 animate-spin"/>Submitting…</>
                       : <><CheckCircle className="w-4 h-4"/>Submit Feedback</>
                     }
                   </button>
-                  {!feedbackForm.recommendation && (
-                    <p className="text-xs text-gray-400 text-center -mt-2">Select a recommendation to submit</p>
-                  )}
-                </div>
+                </>
               )}
             </div>
           )}
