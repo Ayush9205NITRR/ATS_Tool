@@ -111,7 +111,12 @@ export function SettingsPage() {
   })
 
   const toggleField = useMutation({
-    mutationFn: async ({ id, is_active }: { id: string; is_active: boolean }) => { const { error } = await supabase.from('custom_fields').update({ is_active }).eq('id', id); if (error) throw error },
+    mutationFn: async ({ id, is_active, show_to_interviewer }: { id: string; is_active: boolean; show_to_interviewer?: boolean }) => {
+      const update: any = { is_active }
+      if (show_to_interviewer !== undefined) update.show_to_interviewer = show_to_interviewer
+      const { error } = await supabase.from('custom_fields').update(update).eq('id', id)
+      if (error) throw error
+    },
     onSuccess: () => qc.invalidateQueries({ queryKey: ['custom-fields'] }),
   })
 
@@ -222,20 +227,21 @@ export function SettingsPage() {
             <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
               <div className="grid grid-cols-12 px-5 py-2.5 bg-gray-50 border-b border-gray-100 text-xs font-semibold text-gray-400 uppercase tracking-wide">
                 <div className="col-span-1"/>
-                <div className="col-span-4">Field Name</div>
-                <div className="col-span-3">Type <span className="normal-case font-normal text-gray-400">(click to change)</span></div>
+                <div className="col-span-3">Field Name</div>
+                <div className="col-span-2">Type</div>
                 <div className="col-span-2">Required</div>
+                <div className="col-span-2">Interviewer sees</div>
                 <div className="col-span-1">Status</div>
                 <div className="col-span-1"/>
               </div>
               {(fields as any[]).map((field, i) => (
                 <div key={field.id} className={`grid grid-cols-12 items-center px-5 py-3.5 ${i > 0 ? 'border-t border-gray-100' : ''} hover:bg-gray-50/40 transition-colors`}>
                   <div className="col-span-1 text-gray-300"><GripVertical className="w-4 h-4"/></div>
-                  <div className="col-span-4">
+                  <div className="col-span-3">
                     <p className="text-sm font-medium text-gray-900">{field.field_label}</p>
                     <p className="text-xs text-gray-400 font-mono mt-0.5">{field.field_name}</p>
                   </div>
-                  <div className="col-span-3">
+                  <div className="col-span-2">
                     {editingField?.id === field.id ? (
                       <div className="flex items-center gap-1.5">
                         <select value={editingFieldType} onChange={e => setEditingFieldType(e.target.value)}
@@ -265,10 +271,22 @@ export function SettingsPage() {
                       {field.is_required ? 'Required' : 'Optional'}
                     </span>
                   </div>
+                  {/* show_to_interviewer toggle */}
+                  <div className="col-span-2">
+                    <button
+                      onClick={() => toggleField.mutate({ id: field.id, is_active: field.is_active, show_to_interviewer: !field.show_to_interviewer })}
+                      className={`text-xs px-2 py-0.5 rounded-full transition-colors ${
+                        field.show_to_interviewer !== false
+                          ? 'bg-blue-50 text-blue-600 hover:bg-blue-100'
+                          : 'bg-gray-100 text-gray-400 hover:bg-gray-200'
+                      }`}>
+                      {field.show_to_interviewer !== false ? 'Visible' : 'Hidden'}
+                    </button>
+                  </div>
                   <div className="col-span-1">
                     <button onClick={() => toggleField.mutate({ id: field.id, is_active: !field.is_active })}
                       className={`text-xs px-2 py-0.5 rounded-full transition-colors ${field.is_active ? 'bg-green-50 text-green-600 hover:bg-green-100' : 'bg-gray-100 text-gray-400 hover:bg-gray-200'}`}>
-                      {field.is_active ? 'Active' : 'Hidden'}
+                      {field.is_active ? 'Active' : 'Off'}
                     </button>
                   </div>
                   <div className="col-span-1 flex justify-end">
