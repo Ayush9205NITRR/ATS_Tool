@@ -473,6 +473,72 @@ export function CandidateProfilePage() {
               </div>
             </div>
           )}
+
+          {/* Additional Details — custom fields in left sidebar */}
+          {(() => {
+            const visibleFields = (customFields as any[]).filter((f: any) =>
+              !isInterviewer || f.show_to_interviewer !== false
+            )
+            if (visibleFields.length === 0) return null
+            const customData = (candidate as any).custom_data ?? {}
+            return (
+              <div className="px-5 py-4 space-y-3">
+                <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Additional Details</p>
+                {editMode ? (
+                  <div className="space-y-3">
+                    {visibleFields.map((f: any) => (
+                      <div key={f.id}>
+                        <label className="block text-xs text-gray-400 mb-0.5">
+                          {f.field_label}
+                          {f.is_required && <span className="text-red-400 ml-1">*</span>}
+                          {!isInterviewer && f.show_to_interviewer === false && (
+                            <span className="ml-1 text-xs text-gray-300">(hidden from interviewers)</span>
+                          )}
+                        </label>
+                        {f.field_type === 'boolean' ? (
+                          <div className="flex items-center gap-2">
+                            <input type="checkbox"
+                              checked={customDataDraft[f.field_name] === 'true'}
+                              onChange={e => setCustomDataDraft(p => ({ ...p, [f.field_name]: e.target.checked ? 'true' : 'false' }))}
+                              className="rounded border-gray-300 text-blue-600"/>
+                            <span className="text-sm text-gray-600">{customDataDraft[f.field_name] === 'true' ? 'Yes' : 'No'}</span>
+                          </div>
+                        ) : (
+                          <input
+                            type={f.field_type === 'number' ? 'number' : f.field_type === 'date' ? 'date' : f.field_type === 'url' ? 'url' : 'text'}
+                            value={customDataDraft[f.field_name] ?? ''}
+                            onChange={e => setCustomDataDraft(p => ({ ...p, [f.field_name]: e.target.value }))}
+                            placeholder={f.field_label}
+                            className="w-full px-2.5 py-1.5 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-slate-400"/>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <dl className="space-y-2">
+                    {visibleFields.map((f: any) => {
+                      const val = customData[f.field_name]
+                      return (
+                        <div key={f.id} className="flex gap-2">
+                          <dt className="text-gray-400 text-xs w-28 flex-shrink-0 pt-0.5">{f.field_label}</dt>
+                          <dd className="text-sm text-gray-700 font-medium">
+                            {val === undefined || val === null || val === ''
+                              ? <span className="text-gray-300 italic text-xs">—</span>
+                              : f.field_type === 'boolean'
+                              ? (val === 'true' || val === true ? 'Yes' : 'No')
+                              : f.field_type === 'url'
+                              ? <a href={val} target="_blank" rel="noreferrer" className="text-blue-600 hover:underline text-xs break-all">{val}</a>
+                              : String(val)
+                            }
+                          </dd>
+                        </div>
+                      )
+                    })}
+                  </dl>
+                )}
+              </div>
+            )
+          })()}
         </aside>
 
         {/* ── Right column ── */}
@@ -520,74 +586,6 @@ export function CandidateProfilePage() {
               )
             )}
           </div>
-
-          {/* Additional Details — custom fields, hidden from interviewers if show_to_interviewer=false */}
-          {(() => {
-            const visibleFields = customFields.filter((f: any) =>
-              !isInterviewer || f.show_to_interviewer !== false
-            )
-            if (visibleFields.length === 0) return null
-            const customData = (candidate as any).custom_data ?? {}
-            return (
-              <div>
-                <p className="text-sm font-semibold text-gray-700 mb-2 px-1">Additional Details</p>
-                {editMode ? (
-                  <div className="bg-white rounded-xl border border-gray-200 px-4 py-3 space-y-3">
-                    {visibleFields.map((f: any) => (
-                      <div key={f.id}>
-                        <label className="block text-xs text-gray-400 mb-1">
-                          {f.field_label}
-                          {f.is_required && <span className="text-red-400 ml-1">*</span>}
-                          {!isInterviewer && f.show_to_interviewer === false && (
-                            <span className="ml-1.5 text-xs text-gray-300">(hidden from interviewers)</span>
-                          )}
-                        </label>
-                        {f.field_type === 'boolean' ? (
-                          <div className="flex items-center gap-2">
-                            <input type="checkbox"
-                              checked={customDataDraft[f.field_name] === 'true'}
-                              onChange={e => setCustomDataDraft(p => ({ ...p, [f.field_name]: e.target.checked ? 'true' : 'false' }))}
-                              className="rounded border-gray-300 text-blue-600"/>
-                            <span className="text-sm text-gray-600">{customDataDraft[f.field_name] === 'true' ? 'Yes' : 'No'}</span>
-                          </div>
-                        ) : (
-                          <input
-                            type={f.field_type === 'number' ? 'number' : f.field_type === 'date' ? 'date' : f.field_type === 'url' ? 'url' : 'text'}
-                            value={customDataDraft[f.field_name] ?? ''}
-                            onChange={e => setCustomDataDraft(p => ({ ...p, [f.field_name]: e.target.value }))}
-                            placeholder={f.field_label}
-                            className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-slate-400"/>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="bg-white rounded-xl border border-gray-100 px-4 py-3">
-                    <dl className="space-y-2">
-                      {visibleFields.map((f: any) => {
-                        const val = customData[f.field_name]
-                        return (
-                          <div key={f.id} className="flex gap-3 text-sm">
-                            <dt className="text-gray-400 text-xs w-28 flex-shrink-0 pt-0.5">{f.field_label}</dt>
-                            <dd className="text-gray-700 font-medium">
-                              {val === undefined || val === null || val === ''
-                                ? <span className="text-gray-300 italic text-xs">—</span>
-                                : f.field_type === 'boolean'
-                                ? (val === 'true' || val === true ? 'Yes' : 'No')
-                                : f.field_type === 'url'
-                                ? <a href={val} target="_blank" rel="noreferrer" className="text-blue-600 hover:underline text-xs">{val}</a>
-                                : String(val)
-                              }
-                            </dd>
-                          </div>
-                        )
-                      })}
-                    </dl>
-                  </div>
-                )}
-              </div>
-            )
-          })()}
 
           {/* Interview Notes — clean feed, no outer border */}
           <div>
