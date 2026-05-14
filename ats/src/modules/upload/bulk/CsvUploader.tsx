@@ -233,7 +233,14 @@ export function CsvUploader() {
     return info
   }
 
-  const valid = transformed.filter((r, i) => r.full_name && r.email && !skippedDups.has(i))
+  // Duplicates are ALWAYS blocked — not skippable by user
+  const dupIndexes = new Set(
+    transformed.map((r, i) => {
+      const dup = getDup(r)
+      return (dup.email || dup.phone) ? i : -1
+    }).filter(i => i >= 0)
+  )
+  const valid   = transformed.filter((r, i) => r.full_name && r.email && !dupIndexes.has(i))
   const invalid = transformed.filter(r => !r.full_name || !r.email)
   const dupRows = transformed.map((r, i) => ({ r, i, dup: getDup(r) })).filter(x => (x.dup.email || x.dup.phone) && x.r.full_name && x.r.email)
 
@@ -351,68 +358,52 @@ export function CsvUploader() {
         <Breadcrumb step={3} total={rows.length} onBack={()=>setStep(2)}/>
 
         {/* Summary stats */}
-        <div className="grid grid-cols-4 gap-3 my-4">
+        <div className="grid grid-cols-3 gap-3 my-4">
           <div className="bg-green-50 rounded-xl p-3 text-center">
             <p className="text-2xl font-bold text-green-700">{valid.length}</p>
-            <p className="text-xs text-green-600">Ready to upload</p>
+            <p className="text-xs text-green-600">Will be uploaded</p>
           </div>
-          <div className={`${invalid.length>0?'bg-red-50':'bg-gray-50'} rounded-xl p-3 text-center`}>
-            <p className={`text-2xl font-bold ${invalid.length>0?'text-red-600':'text-gray-400'}`}>{invalid.length}</p>
-            <p className={`text-xs ${invalid.length>0?'text-red-500':'text-gray-400'}`}>Missing name/email</p>
+          <div className={`${invalid.length > 0 ? 'bg-red-50' : 'bg-gray-50'} rounded-xl p-3 text-center`}>
+            <p className={`text-2xl font-bold ${invalid.length > 0 ? 'text-red-600' : 'text-gray-400'}`}>{invalid.length}</p>
+            <p className={`text-xs ${invalid.length > 0 ? 'text-red-500' : 'text-gray-400'}`}>Missing name/email</p>
           </div>
-          <div className={`${dupRows.length>0?'bg-amber-50':'bg-gray-50'} rounded-xl p-3 text-center`}>
-            <p className={`text-2xl font-bold ${dupRows.length>0?'text-amber-600':'text-gray-400'}`}>{dupRows.length}</p>
-            <p className={`text-xs ${dupRows.length>0?'text-amber-600':'text-gray-400'}`}>Duplicates flagged</p>
-          </div>
-          <div className={`${skippedDups.size>0?'bg-gray-100':'bg-gray-50'} rounded-xl p-3 text-center`}>
-            <p className={`text-2xl font-bold text-gray-500`}>{skippedDups.size}</p>
-            <p className="text-xs text-gray-400">Skipped by you</p>
+          <div className={`${dupRows.length > 0 ? 'bg-red-50' : 'bg-gray-50'} rounded-xl p-3 text-center`}>
+            <p className={`text-2xl font-bold ${dupRows.length > 0 ? 'text-red-600' : 'text-gray-400'}`}>{dupRows.length}</p>
+            <p className={`text-xs ${dupRows.length > 0 ? 'text-red-500' : 'text-gray-400'}`}>Blocked (duplicates)</p>
           </div>
         </div>
 
-        {/* Duplicate detail section */}
+        {/* Blocked duplicates */}
         {dupRows.length > 0 && (
-          <div className="mb-4 bg-amber-50 border border-amber-200 rounded-xl overflow-hidden">
-            <div className="px-4 py-2.5 border-b border-amber-200 flex items-center gap-2">
-              <AlertTriangle className="w-4 h-4 text-amber-600"/>
-              <p className="text-sm font-semibold text-amber-800">
-                {dupRows.length} Possible Duplicate{dupRows.length>1?'s':''} — review before uploading
+          <div className="mb-4 bg-red-50 border border-red-200 rounded-xl overflow-hidden">
+            <div className="px-4 py-2.5 border-b border-red-200 flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 text-red-600"/>
+              <p className="text-sm font-semibold text-red-800">
+                {dupRows.length} row{dupRows.length > 1 ? 's' : ''} blocked — already exist in database
               </p>
             </div>
-            <div className="divide-y divide-amber-100">
-              {dupRows.map(({ r, i, dup }) => {
-                const skipped = skippedDups.has(i)
-                return (
-                  <div key={i} className={`px-4 py-3 flex items-start gap-3 ${skipped ? 'opacity-40' : ''}`}>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium text-gray-900">{r.full_name}</p>
-                      {dup.email && (
-                        <p className="text-xs text-amber-700 mt-0.5">
-                          📧 <strong>Email already exists</strong> — matches candidate: <em>{dup.email}</em>
-                        </p>
-                      )}
-                      {dup.phone && (
-                        <p className="text-xs text-amber-700 mt-0.5">
-                          📱 <strong>Phone already exists</strong> — matches candidate: <em>{dup.phone}</em>
-                        </p>
-                      )}
-                    </div>
-                    <button
-                      onClick={() => setSkippedDups(p => {
-                        const n = new Set(p)
-                        n.has(i) ? n.delete(i) : n.add(i)
-                        return n
-                      })}
-                      className={`flex-shrink-0 text-xs px-2.5 py-1 rounded-lg border transition-colors ${
-                        skipped
-                          ? 'border-green-300 bg-green-50 text-green-700'
-                          : 'border-amber-300 bg-white text-amber-700 hover:bg-amber-100'
-                      }`}>
-                      {skipped ? '↩ Include' : '✕ Skip'}
-                    </button>
+            <div className="divide-y divide-red-100">
+              {dupRows.map(({ r, i, dup }) => (
+                <div key={i} className="px-4 py-3 flex items-start gap-3">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-gray-900">{r.full_name}</p>
+                    {dup.email && (
+                      <p className="text-xs text-red-700 mt-0.5">
+                        📧 Email <strong>{r.email}</strong> already exists — candidate: <em>{dup.email}</em>
+                      </p>
+                    )}
+                    {dup.phone && (
+                      <p className="text-xs text-red-700 mt-0.5">
+                        📱 Phone <strong>{r.phone}</strong> already exists — candidate: <em>{dup.phone}</em>
+                      </p>
+                    )}
                   </div>
-                )
-              })}
+                  <span className="flex-shrink-0 text-xs px-2 py-0.5 bg-red-100 text-red-700 rounded-full font-medium">Blocked</span>
+                </div>
+              ))}
+            </div>
+            <div className="px-4 py-2.5 bg-red-50/80 border-t border-red-100">
+              <p className="text-xs text-red-600">These rows will NOT be imported. Update the CSV to fix duplicates and re-upload.</p>
             </div>
           </div>
         )}
@@ -437,14 +428,15 @@ export function CsvUploader() {
                 const inv = !r.full_name || !r.email
                 const dup = getDup(r)
                 const isDup = !!(dup.email || dup.phone)
-                const skipped = skippedDups.has(i)
                 return (
-                  <tr key={i} className={`border-b border-gray-50 ${inv?'bg-red-50 opacity-60':skipped?'opacity-30':isDup?'bg-amber-50':''}`}>
+                  <tr key={i} className={`border-b border-gray-50 ${inv ? 'bg-red-50 opacity-50' : isDup ? 'bg-red-50 opacity-60' : ''}`}>
                     <td className="px-3 py-2 whitespace-nowrap">
-                      {inv ? <span className="text-red-500">✗ skip</span>
-                        : skipped ? <span className="text-gray-400">skipped</span>
-                        : isDup ? <span className="text-amber-600">⚠️ dup</span>
-                        : <span className="text-green-500">✓</span>}
+                      {inv
+                        ? <span className="text-red-500 text-xs">✗ missing</span>
+                        : isDup
+                        ? <span className="text-red-600 text-xs font-medium">🚫 blocked</span>
+                        : <span className="text-green-500 text-xs">✓ ok</span>
+                      }
                     </td>
                     <td className="px-3 py-2 text-gray-700 max-w-[120px] truncate">{r.full_name||'—'}</td>
                     <td className="px-3 py-2 text-gray-600 max-w-[160px] truncate">{r.email||'—'}</td>
@@ -470,8 +462,8 @@ export function CsvUploader() {
         <div className="flex justify-between mt-5 items-center">
           <Button variant="secondary" onClick={()=>setStep(2)}>← Back</Button>
           <div className="text-right">
-            {skippedDups.size > 0 && (
-              <p className="text-xs text-gray-400 mb-1">{skippedDups.size} rows skipped · {valid.length} will be uploaded</p>
+            {dupRows.length > 0 && (
+              <p className="text-xs text-red-500 mb-1">{dupRows.length} duplicate{dupRows.length>1?'s':''} blocked · {valid.length} new will be uploaded</p>
             )}
             <Button onClick={()=>mutation.mutate(valid)} loading={mutation.isPending} disabled={valid.length===0}>
               Upload {valid.length} candidate{valid.length!==1?'s':''}
