@@ -124,7 +124,10 @@ export function SingleEntryForm({ onSuccess }: Props) {
   }
 
   return (
-    <form onSubmit={handleSubmit(d => mutation.mutate(d))} className="space-y-4">
+    <form onSubmit={handleSubmit(d => {
+      if (duplicates.length > 0) return // Hard block
+      mutation.mutate(d)
+    })} className="space-y-4">
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <Field label="Full Name *" error={errors.full_name?.message}>
           <input {...register('full_name')} placeholder="Rahul Sharma" className={inputCls}/>
@@ -191,7 +194,7 @@ export function SingleEntryForm({ onSuccess }: Props) {
         )}
       </div>
 
-      {/* Duplicate warning — shown inline after email/phone fields */}
+      {/* Duplicate warning — blocks submission */}
       {(duplicates.length > 0 || checking) && (
         <DuplicateWarning
           duplicates={duplicates}
@@ -207,9 +210,17 @@ export function SingleEntryForm({ onSuccess }: Props) {
       )}
 
       <div className="flex justify-end pt-2">
-        <Button type="submit" loading={mutation.isPending}>
-          {duplicates.length > 0 ? 'Add Anyway' : 'Add Candidate'}
-        </Button>
+        {duplicates.length > 0 ? (
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+              🚫 Duplicate found — fix email/phone before adding
+            </span>
+          </div>
+        ) : (
+          <Button type="submit" loading={mutation.isPending} disabled={checking}>
+            {checking ? 'Checking…' : 'Add Candidate'}
+          </Button>
+        )}
       </div>
     </form>
   )
