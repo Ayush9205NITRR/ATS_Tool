@@ -685,21 +685,15 @@ export function CandidateProfilePage() {
 
           {/* ── Submit Feedback — Interviewers only, simple button at bottom ── */}
           {isInterviewer && (
-            <div className={`rounded-xl border-2 px-5 py-4 flex items-center justify-between gap-4 ${feedbackSubmitted ? 'border-green-200 bg-green-50/40' : 'border-slate-200 bg-slate-50/40'}`}>
+            <div className={`rounded-xl border-2 px-5 py-4 flex items-center gap-4 ${feedbackSubmitted ? 'border-green-200 bg-green-50/40' : 'border-slate-200 bg-slate-50/40'}`}>
               {feedbackSubmitted ? (
-                <>
-                  <div className="flex items-center gap-2.5">
-                    <CheckCircle className="w-5 h-5 text-green-600 flex-shrink-0"/>
-                    <div>
-                      <p className="text-sm font-semibold text-green-800">Feedback Submitted</p>
-                      <p className="text-xs text-green-600 mt-0.5">Your notes have been recorded.</p>
-                    </div>
+                <div className="flex items-center gap-2.5">
+                  <CheckCircle className="w-5 h-5 text-green-600 flex-shrink-0"/>
+                  <div>
+                    <p className="text-sm font-semibold text-green-800">Feedback Submitted</p>
+                    <p className="text-xs text-green-600 mt-0.5">Your notes have been recorded.</p>
                   </div>
-                  <button onClick={() => submitFeedback.mutate()}
-                    className="text-xs text-green-600 hover:text-green-800 underline flex-shrink-0">
-                    Resubmit
-                  </button>
-                </>
+                </div>
               ) : (
                 <>
                   <div>
