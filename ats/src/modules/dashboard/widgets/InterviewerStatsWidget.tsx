@@ -22,24 +22,20 @@ export function InterviewerStatsWidget() {
           .contains('assigned_interviewers', [user!.id])
           .eq('status','active'),
         supabase.from('interview_feedback')
-          .select('overall_score, candidate_id, submitted_at')
+          .select('candidate_id, submitted_at')
           .eq('interviewer_id', user!.id),
       ])
 
       const feedbackCandidateIds = new Set(feedback?.map(f => f.candidate_id))
       const pending = assigned?.filter(c => !feedbackCandidateIds.has(c.id)) ?? []
       const completed = assigned?.filter(c => feedbackCandidateIds.has(c.id)) ?? []
-      const avgScore = feedback && feedback.length > 0
-        ? (feedback.reduce((a,f) => a + f.overall_score, 0) / feedback.length).toFixed(1)
-        : null
 
-      // Upcoming interviews (have interview_date set)
       const upcoming = pending
         .filter(c => c.interview_date)
         .sort((a,b) => new Date(a.interview_date!).getTime() - new Date(b.interview_date!).getTime())
         .slice(0, 3)
 
-      return { total: assigned?.length ?? 0, pending: pending.length, completed: completed.length, avgScore, upcoming, pendingList: pending.slice(0,5) }
+      return { total: assigned?.length ?? 0, pending: pending.length, completed: completed.length, upcoming, pendingList: pending.slice(0,5) }
     },
     enabled: !!user,
   })
@@ -47,7 +43,7 @@ export function InterviewerStatsWidget() {
   return (
     <WidgetBase title="My Interview Panel" loading={isLoading} error={error?.message}>
       {/* Stats */}
-      <div className="grid grid-cols-4 gap-2 mb-4">
+      <div className="grid grid-cols-3 gap-2 mb-4">
         <div className="bg-blue-50 rounded-xl p-3 text-center">
           <Users className="w-4 h-4 text-blue-500 mx-auto mb-1"/>
           <p className="text-xl font-bold text-blue-700">{data?.total ?? 0}</p>
@@ -62,11 +58,6 @@ export function InterviewerStatsWidget() {
           <CheckCircle className="w-4 h-4 text-green-500 mx-auto mb-1"/>
           <p className="text-xl font-bold text-green-700">{data?.completed ?? 0}</p>
           <p className="text-xs text-green-500">Done</p>
-        </div>
-        <div className="bg-purple-50 rounded-xl p-3 text-center">
-          <Star className="w-4 h-4 text-purple-500 mx-auto mb-1"/>
-          <p className="text-xl font-bold text-purple-700">{data?.avgScore ?? '—'}</p>
-          <p className="text-xs text-purple-500">Avg Score</p>
         </div>
       </div>
 
