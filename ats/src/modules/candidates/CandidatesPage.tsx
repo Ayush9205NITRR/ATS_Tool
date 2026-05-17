@@ -401,20 +401,31 @@ export function CandidatesPage() {
                   <div className="absolute right-0 top-full mt-1.5 bg-white border border-gray-100 rounded-xl shadow-lg z-50 p-4 w-56">
                     <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2.5">Show & pin columns</p>
                     {colPickerCols.map(col=>(
-                      <div key={col.key} className="flex items-center gap-2 py-1">
+                      <div key={col.key} className="flex items-center gap-2 py-1 group">
                         {/* Visible toggle */}
                         <button onClick={()=>setVisibleCols(p=>{const n=new Set(p);n.has(col.key)?n.delete(col.key):n.add(col.key);return n})}
                           className={`w-4 h-4 rounded border flex items-center justify-center transition-all flex-shrink-0 ${visibleCols.has(col.key)?'bg-blue-500 border-blue-500':'border-gray-300 hover:border-gray-400'}`}>
                           {visibleCols.has(col.key)&&<Check className="w-2.5 h-2.5 text-white"/>}
                         </button>
                         <span className="text-sm text-gray-700 flex-1">{col.label}</span>
-                        {/* Pin toggle — only when visible */}
+                        {/* Pin toggle — only when visible, clear state */}
                         {visibleCols.has(col.key) && (
                           <button
-                            onClick={() => setPinnedCols(p=>{const n=new Set(p);n.has(col.key)?n.delete(col.key):n.add(col.key);return n})}
-                            title={pinnedCols.has(col.key)?'Unpin':'Pin to front'}
-                            className={`p-0.5 rounded transition-colors ${pinnedCols.has(col.key)?'text-blue-500':'text-gray-200 hover:text-gray-400'}`}>
-                            📌
+                            onClick={e => {
+                              e.stopPropagation()
+                              setPinnedCols(p => {
+                                const n = new Set(p)
+                                n.has(col.key) ? n.delete(col.key) : n.add(col.key)
+                                return n
+                              })
+                            }}
+                            title={pinnedCols.has(col.key) ? 'Click to unpin' : 'Click to pin left'}
+                            className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-xs transition-all ${
+                              pinnedCols.has(col.key)
+                                ? 'bg-blue-100 text-blue-700 font-medium'
+                                : 'text-gray-300 hover:text-gray-500 hover:bg-gray-100 opacity-0 group-hover:opacity-100'
+                            }`}>
+                            {pinnedCols.has(col.key) ? '📌 Pinned' : '📌 Pin'}
                           </button>
                         )}
                       </div>
@@ -569,11 +580,11 @@ export function CandidatesPage() {
                 <thead>
                   <tr className="border-b border-gray-100">
                     {/* Checkbox + Name — always frozen left */}
-                    <th className="px-4 py-3 w-10 bg-white sticky left-0 z-20 border-r border-gray-50">
+                    <th className="px-4 py-3 w-10 bg-white sticky left-0 z-20 after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-gray-100">
                       <input type="checkbox" checked={selectedIds.size===displayed.length&&displayed.length>0}
                         onChange={toggleAll} className="rounded border-gray-300 text-blue-600 cursor-pointer w-4 h-4"/>
                     </th>
-                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wide sticky left-10 z-20 bg-white border-r border-gray-50 min-w-[180px]">
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wide bg-white sticky left-10 z-20 min-w-[180px] after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-gray-100">
                       Name
                     </th>
                     <SortableContext items={orderedVisible} strategy={horizontalListSortingStrategy}>
@@ -597,12 +608,12 @@ export function CandidatesPage() {
                           <tr key={c.id}
                             className={`group/row border-b border-gray-50 last:border-0 transition-colors ${isSel?'bg-blue-50/40':'hover:bg-gray-50/60'} ${c.archived_at?'opacity-40':''}`}>
                             {/* Checkbox — sticky */}
-                            <td className="px-4 py-2.5 sticky left-0 z-10 bg-inherit border-r border-gray-50">
+                            <td className={`px-4 py-2.5 sticky left-0 z-10 ${isSel?'bg-blue-50':'bg-white group-hover/row:bg-gray-50/60'} after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-gray-100`}>
                               <input type="checkbox" checked={isSel} onChange={()=>toggleSel(c.id)}
                                 className="rounded border-gray-300 text-blue-600 cursor-pointer w-4 h-4"/>
                             </td>
                             {/* Name — sticky */}
-                            <td className="px-4 py-2.5 sticky left-10 z-10 bg-inherit border-r border-gray-50 min-w-[180px]">
+                            <td className={`px-4 py-2.5 sticky left-10 z-10 min-w-[180px] ${isSel?'bg-blue-50':'bg-white group-hover/row:bg-gray-50/60'} after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-gray-100`}>
                               <button onClick={()=>navigate(`/candidates/${c.id}`)}
                                 className="font-medium text-gray-900 hover:text-blue-600 transition-colors text-left text-sm">{c.full_name}</button>
                             </td>
