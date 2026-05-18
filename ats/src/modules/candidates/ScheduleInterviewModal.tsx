@@ -175,9 +175,18 @@ export function ScheduleInterviewModal({ candidateId, candidateName, candidateEm
       assigned_interviewers: [interviewerId],
     }).eq('id', candidateId)
 
-    // 3. Open mailto
+    // 3. Build email recipients: HR + Interviewer + Candidate all get the invite
+    const toAll = [
+      { email: candidateEmail, name: candidateName },
+      { email: interviewer.email, name: interviewer.full_name },
+      ...(orgEmail && orgEmail !== interviewer.email ? [{ email: orgEmail, name: user?.full_name ?? 'HR' }] : []),
+    ]
+
+    // 4. Open mailto — .ics already downloaded, attach manually or send from mail client
     const subject = `Interview Invitation — ${candidateName} | ${jobTitle}`
-    window.open(`mailto:${toField}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(bodyText)}`, '_blank')
+    const plainBody = editorRef.current?.innerText ?? ''
+    const toStr = toAll.map(a => a.email).join(', ')
+    window.open(`mailto:${toStr}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(plainBody + '\n\n[Attach the downloaded .ics file to block calendars]')}`, '_blank')
 
     qc.invalidateQueries({ queryKey: ['candidates'] })
     setSaving(false)
@@ -212,7 +221,10 @@ export function ScheduleInterviewModal({ candidateId, candidateName, candidateEm
               <CheckCircle className="w-6 h-6 text-green-600"/>
             </div>
             <p className="font-semibold text-gray-900">Interview scheduled!</p>
-            <p className="text-xs text-gray-500 max-w-xs">Calendar invite (.ics) downloaded. Open it to add to Google/Outlook Calendar. Email draft opened.</p>
+            <p className="text-xs text-gray-500 max-w-xs leading-relaxed">
+              <strong>Step 1:</strong> .ics file downloaded — open it to add to your calendar and send the invite to all attendees.<br/>
+              <strong>Step 2:</strong> Email draft opened — attach the .ics file and send to block everyone's calendar.
+            </p>
             <button onClick={onClose} className="mt-2 px-5 py-2 bg-gray-900 text-white text-sm rounded-xl hover:bg-gray-800 transition-colors">Done</button>
           </div>
         ) : (
