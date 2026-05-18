@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Plus, Loader2, Users, Columns, Trash2, GripVertical, Pencil, Check, X } from 'lucide-react'
+import { Plus, Loader2, Users, Columns, Trash2, GripVertical, Pencil, Check, X, Mail } from 'lucide-react'
 import { useState } from 'react'
 import { supabase } from '../../lib/supabaseClient'
 import { PageHeader } from '../../shared/components/PageHeader'
@@ -40,7 +40,10 @@ const FIELD_TYPE_LABELS: Record<string, string> = {
   text: 'Text', number: 'Number', date: 'Date', url: 'URL / Link', boolean: 'Yes / No',
 }
 
-type Tab = 'users' | 'fields'
+import { EmailTemplatesTab } from './EmailTemplatesTab'
+import { OrgSettingsTab } from './OrgSettingsTab'
+
+type Tab = 'users' | 'fields' | 'emails' | 'org'
 
 export function SettingsPage() {
   const qc = useQueryClient()
@@ -141,7 +144,7 @@ export function SettingsPage() {
 
       {/* Tabs */}
       <div className="flex gap-1 mb-6 bg-gray-100 p-1 rounded-lg w-fit">
-        {([['users', <Users className="w-4 h-4"/>, 'Team Members'], ['fields', <Columns className="w-4 h-4"/>, 'Custom Fields']] as const).map(([t, icon, label]) => (
+        {([['users', <Users className="w-4 h-4"/>, 'Team Members'], ['fields', <Columns className="w-4 h-4"/>, 'Custom Fields'], ['emails', <Mail className="w-4 h-4"/>, 'Email Templates'], ['org', <Mail className="w-4 h-4"/>, 'Org Settings']] as const).map(([t, icon, label]) => (
           <button key={t} onClick={() => setTab(t as Tab)}
             className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors ${tab === t ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
             {icon}{label}
@@ -329,6 +332,10 @@ export function SettingsPage() {
           </Modal>
         </>
       )}
+
+      {/* ── EMAIL TEMPLATES ── */}
+      {tab === 'emails' && <EmailTemplatesTab />}
+      {tab === 'org'    && <OrgSettingsTab />}
     </div>
   )
 }
