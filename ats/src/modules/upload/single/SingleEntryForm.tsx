@@ -15,8 +15,16 @@ import { useNavigate } from 'react-router-dom'
 
 const schema = z.object({
   full_name:       z.string().min(2, 'Required'),
-  email:           z.string().email('Valid email required'),
-  phone:           z.string().optional(),
+  email:           z.string().email('Valid email required')
+    .transform(v => v.trim().toLowerCase()),
+  phone:           z.string()
+    .refine(v => {
+      if (!v || !v.trim()) return true // optional
+      const digits = v.replace(/\D/g, '')
+      return digits.length === 10
+    }, 'Phone must be exactly 10 digits')
+    .transform(v => v ? v.replace(/\D/g, '').slice(0, 10) || undefined : undefined)
+    .optional(),
   job_id:          z.string().optional(),
   source_category: z.enum(['platform','agency','college'], { required_error: 'Select a source type' }),
   source_name:     z.string().min(1, 'Source name required'),
@@ -140,7 +148,15 @@ export function SingleEntryForm({ onSuccess }: Props) {
 
         {/* Phone — with duplicate check */}
         <Field label="Phone">
-          <input {...register('phone')} placeholder="+91 98765 43210" className={inputCls}/>
+          <input {...register('phone')}
+            placeholder="10-digit mobile number"
+            maxLength={10}
+            inputMode="numeric"
+            onInput={e => {
+              const t = e.target as HTMLInputElement
+              t.value = t.value.replace(/\D/g, '').slice(0, 10)
+            }}
+            className={inputCls}/>
         </Field>
 
         <Field label="Job Opening">
