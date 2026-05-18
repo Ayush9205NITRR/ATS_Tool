@@ -253,6 +253,7 @@ export function CandidatesPage() {
   const [pinnedCols, setPinnedCols]   = useState<Set<string>>(new Set<string>())
   const [scheduleCandidate, setScheduleCandidate] = useState<any | null>(null)
   const [sendEmailCandidates, setSendEmailCandidates] = useState<any[]>([])
+  const [bulkSelectValue, setBulkSelectValue] = useState('')
   const filterRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -346,6 +347,7 @@ export function CandidatesPage() {
       qc.invalidateQueries({ queryKey: ['candidates'] })
       setSelectedIds(new Set())
       setBulkField(null)
+      setBulkSelectValue('')
       setShowBulkMenu(false)
     },
   })
@@ -481,7 +483,7 @@ export function CandidatesPage() {
                         ...(canAssignHR?[['hr_owner','Assign HR Owner']]:[] as any),
                         ['assigned_interviewers','Assign Interviewer']
                       ].map(([f,lbl])=>(
-                        <button key={f} onClick={()=>setBulkField(f)}
+                        <button key={f} onClick={()=>{setBulkField(f);setBulkSelectValue('')}}
                           className={`w-full text-left text-sm px-3 py-2 rounded-lg transition-colors ${bulkField===f?'bg-blue-50 text-blue-700':'text-gray-700 hover:bg-gray-50'}`}>
                           {lbl}
                         </button>
@@ -501,8 +503,8 @@ export function CandidatesPage() {
                       {bulkField&&bulkField!=='__delete__'&&(
                         <div className="border-t border-gray-100 mt-1 pt-2 px-1 space-y-2" onClick={e=>e.stopPropagation()}>
                           <select
-                            id="bulk-select-val"
-                            defaultValue=""
+                            value={bulkSelectValue}
+                            onChange={e => setBulkSelectValue(e.target.value)}
                             className="w-full px-2.5 py-1.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white">
                             <option value="" disabled>Choose…</option>
                             {bulkField==='current_stage'?INTERVIEW_STAGES.map(s=><option key={s} value={s}>{s}</option>)
@@ -513,14 +515,16 @@ export function CandidatesPage() {
                             }
                           </select>
                           <button
-                            disabled={bulkUpdate.isPending}
+                            disabled={bulkUpdate.isPending || !bulkSelectValue}
                             onClick={e => {
                               e.stopPropagation()
-                              const sel = document.getElementById('bulk-select-val') as HTMLSelectElement
-                              if (sel?.value) bulkUpdate.mutate({ field: bulkField!, value: sel.value })
+                              if (bulkSelectValue) bulkUpdate.mutate({ field: bulkField!, value: bulkSelectValue })
                             }}
-                            className="w-full py-1.5 bg-gray-900 text-white rounded-lg text-xs font-medium hover:bg-gray-800 disabled:opacity-50 transition-colors flex items-center justify-center gap-1.5">
-                            {bulkUpdate.isPending ? <><Loader2 className="w-3 h-3 animate-spin"/>Updating…</> : `Apply to ${selectedIds.size} candidates`}
+                            className="w-full py-1.5 bg-gray-900 text-white rounded-lg text-xs font-medium hover:bg-gray-800 disabled:opacity-40 transition-colors flex items-center justify-center gap-1.5">
+                            {bulkUpdate.isPending
+                              ? <><Loader2 className="w-3 h-3 animate-spin"/>Updating…</>
+                              : `Apply to ${selectedIds.size} candidate${selectedIds.size!==1?'s':''}`
+                            }
                           </button>
                         </div>
                       )}
