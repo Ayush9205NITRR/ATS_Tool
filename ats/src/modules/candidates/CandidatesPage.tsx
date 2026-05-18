@@ -29,6 +29,7 @@ import type { CandidateFilters } from './candidateService'
 import { INTERVIEW_STAGES } from '../../types/database.types'
 import { formatDate, formatDateTime } from '../../shared/utils/helpers'
 import { ScheduleInterviewModal } from './ScheduleInterviewModal'
+import { SendEmailModal } from './SendEmailModal'
 
 // ── Stage colours ─────────────────────────────────────────────
 const STAGE_PILL: Record<string,string> = {
@@ -251,6 +252,7 @@ export function CandidatesPage() {
   const [visibleCols, setVisibleCols] = useState<Set<string>>(DEFAULT_VISIBLE)
   const [pinnedCols, setPinnedCols]   = useState<Set<string>>(new Set<string>())
   const [scheduleCandidate, setScheduleCandidate] = useState<any | null>(null)
+  const [sendEmailCandidates, setSendEmailCandidates] = useState<any[]>([])
   const filterRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -325,12 +327,27 @@ export function CandidatesPage() {
 
   const bulkUpdate = useMutation({
     mutationFn: async({field,value}:{field:string;value:any})=>{
-      const isArr=['assigned_interviewers','assigned_hr_owners'].includes(field)
-      const payload=isArr?{[field]:Array.isArray(value)?value:[value]}:{[field]:value}
-      const{error}=await supabase.from('candidates').update(payload).in('id',Array.from(selectedIds))
-      if(error)throw error
+      const ids = Array.from(selectedIds)
+      let payload: Record<string, any>
+
+      if (field === 'hr_owner') {
+        // Single UUID field — direct update
+        payload = { hr_owner: value || null }
+      } else if (field === 'assigned_interviewers') {
+        payload = { assigned_interviewers: Array.isArray(value) ? value : [value] }
+      } else {
+        payload = { [field]: value }
+      }
+
+      const { error } = await supabase.from('candidates').update(payload).in('id', ids)
+      if (error) { console.error('[bulkUpdate]', error); throw error }
     },
-    onSuccess:()=>{qc.invalidateQueries({queryKey:['candidates']});setSelectedIds(new Set());setBulkField(null);setShowBulkMenu(false)},
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['candidates'] })
+      setSelectedIds(new Set())
+      setBulkField(null)
+      setShowBulkMenu(false)
+    },
   })
 
   const bulkArchive = useMutation({
@@ -461,7 +478,7 @@ export function CandidatesPage() {
                     <div className="fixed inset-0 z-40" onClick={()=>{setShowBulkMenu(false);setBulkField(null)}}/>
                     <div className="absolute right-0 top-full mt-1.5 bg-white border border-gray-100 rounded-xl shadow-lg z-50 p-2 w-52">
                       {[['current_stage','Change Stage'],['job_id','Assign Job'],
-                        ...(canAssignHR?[['assigned_hr_owners','Assign HR Owner']]:[] as any),
+                        ...(canAssignHR?[['hr_owner','Assign HR Owner']]:[] as any),
                         ['assigned_interviewers','Assign Interviewer']
                       ].map(([f,lbl])=>(
                         <button key={f} onClick={()=>setBulkField(f)}
@@ -482,17 +499,29 @@ export function CandidatesPage() {
                         )}
                       </div>
                       {bulkField&&bulkField!=='__delete__'&&(
-                        <div className="border-t border-gray-100 mt-1 pt-2 px-1">
-                          <select autoFocus defaultValue=""
-                            onChange={e=>{if(e.target.value)bulkUpdate.mutate({field:bulkField,value:e.target.value})}}
+                        <div className="border-t border-gray-100 mt-1 pt-2 px-1 space-y-2" onClick={e=>e.stopPropagation()}>
+                          <select
+                            id="bulk-select-val"
+                            defaultValue=""
                             className="w-full px-2.5 py-1.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white">
                             <option value="" disabled>Choose…</option>
                             {bulkField==='current_stage'?INTERVIEW_STAGES.map(s=><option key={s} value={s}>{s}</option>)
                               :bulkField==='job_id'?(jobs as any[]).map(j=><option key={j.id} value={j.id}>{j.title}</option>)
                               :bulkField==='assigned_interviewers'?(interviewers as any[]).map(u=><option key={u.id} value={u.id}>{u.full_name}</option>)
-                              :(hrUsers as any[]).map(u=><option key={u.id} value={u.id}>{u.full_name}</option>)
+                              :bulkField==='hr_owner'?(hrUsers as any[]).map(u=><option key={u.id} value={u.id}>{u.full_name}</option>)
+                              :null
                             }
                           </select>
+                          <button
+                            disabled={bulkUpdate.isPending}
+                            onClick={e => {
+                              e.stopPropagation()
+                              const sel = document.getElementById('bulk-select-val') as HTMLSelectElement
+                              if (sel?.value) bulkUpdate.mutate({ field: bulkField!, value: sel.value })
+                            }}
+                            className="w-full py-1.5 bg-gray-900 text-white rounded-lg text-xs font-medium hover:bg-gray-800 disabled:opacity-50 transition-colors flex items-center justify-center gap-1.5">
+                            {bulkUpdate.isPending ? <><Loader2 className="w-3 h-3 animate-spin"/>Updating…</> : `Apply to ${selectedIds.size} candidates`}
+                          </button>
                         </div>
                       )}
                       {bulkField==='__delete__'&&(
