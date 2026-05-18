@@ -7,8 +7,10 @@ export type FilterOp =
   | 'contains' | 'not_contains' | 'is' | 'is_not'
   | 'is_any_of' | 'is_none_of'
   | 'is_empty' | 'is_not_empty'
-  | 'gt' | 'lt' | 'gte' | 'lte'            // numeric
-  | 'date_is' | 'date_before' | 'date_after' // datetime
+  | 'gt' | 'lt' | 'gte' | 'lte'
+  | 'date_is' | 'date_before' | 'date_after'
+  | 'date_within_week' | 'date_within_month'
+  | 'is_checked' | 'is_unchecked'
 
 export type FilterMode = 'and' | 'or'
 
@@ -35,18 +37,19 @@ interface FieldDef {
   custom?: boolean
 }
 
-// Static system fields
 const SYSTEM_FIELDS: FieldDef[] = [
-  { key: 'full_name',        label: 'Name',           type: 'text'     },
-  { key: 'email',            label: 'Email',          type: 'text'     },
-  { key: 'phone',            label: 'Phone',          type: 'text'     },
-  { key: 'current_stage',    label: 'Stage',          type: 'multi'    },
-  { key: 'source_category',  label: 'Source',         type: 'single'   },
-  { key: 'source_name',      label: 'Sub-Source',     type: 'text'     },
-  { key: 'job_id',           label: 'Job',            type: 'multi'    },
-  { key: 'interviewer_id',   label: 'Interviewer',    type: 'multi'    },
-  { key: 'hr_owner',         label: 'HR Owner',       type: 'single'   },
-  { key: 'interview_date',   label: 'Interview Date', type: 'datetime' },
+  { key: 'full_name',       label: 'Name',           type: 'text'     },
+  { key: 'email',           label: 'Email',          type: 'text'     },
+  { key: 'phone',           label: 'Phone',          type: 'text'     },
+  { key: 'current_stage',   label: 'Stage',          type: 'multi'    },
+  { key: 'source_category', label: 'Source',         type: 'single'   },
+  { key: 'source_name',     label: 'Sub-Source',     type: 'text'     },
+  { key: 'job_id',          label: 'Job',            type: 'multi'    },
+  { key: 'interviewer_id',  label: 'Interviewer',    type: 'multi'    },
+  { key: 'hr_owner',        label: 'HR Owner',       type: 'single'   },
+  { key: 'interview_date',  label: 'Interview Date', type: 'datetime' },
+  { key: 'updated_at',      label: 'Last Updated',   type: 'datetime' },
+  { key: 'created_at',      label: 'Date Added',     type: 'datetime' },
 ]
 
 // Ops per field type
@@ -77,14 +80,17 @@ const OPS_FOR: Record<FieldType, { op: FilterOp; label: string }[]> = {
     { op: 'is_not_empty', label: 'is not empty' },
   ],
   datetime: [
-    { op: 'date_is',     label: 'is on' },
-    { op: 'date_before', label: 'is before' },
-    { op: 'date_after',  label: 'is after' },
-    { op: 'is_empty',    label: 'is not set' },
-    { op: 'is_not_empty',label: 'is set' },
+    { op: 'date_is',           label: 'is on date' },
+    { op: 'date_before',       label: 'is before' },
+    { op: 'date_after',        label: 'is after' },
+    { op: 'date_within_week',  label: 'within past week' },
+    { op: 'date_within_month', label: 'within past month' },
+    { op: 'is_empty',          label: 'is not set' },
+    { op: 'is_not_empty',      label: 'is set' },
   ],
   boolean: [
-    { op: 'is', label: 'is' },
+    { op: 'is_checked',   label: 'is checked (Yes)' },
+    { op: 'is_unchecked', label: 'is unchecked (No)' },
   ],
 }
 
@@ -110,12 +116,23 @@ export function applyFilters(
       return true
     }
 
-    // ── Interview date ──
-    if (f.field === 'interview_date') {
-      const d = c.interview_date ? new Date(c.interview_date) : null
+    // ── Datetime fields (interview_date, updated_at, created_at) ──
+    if (['interview_date', 'updated_at', 'created_at'].includes(f.field)) {
+      const raw = c[f.field]
+      const d = raw ? new Date(raw) : null
       if (f.op === 'is_empty')     return !d
       if (f.op === 'is_not_empty') return !!d
-      if (!d || !f.value) return true
+      if (!d) return false
+
+      if (f.op === 'date_within_week') {
+        const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)
+        return d >= weekAgo
+      }
+      if (f.op === 'date_within_month') {
+        const monthAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)
+        return d >= monthAgo
+      }
+      if (!f.value) return true
       const ref = new Date(f.value)
       if (f.op === 'date_is')     return d.toDateString() === ref.toDateString()
       if (f.op === 'date_before') return d < ref
@@ -149,6 +166,12 @@ export function applyFilters(
         return true
       }
       // text/url/boolean
+      if (cfDef.field_type === 'boolean') {
+        const isTrue = raw === 'true' || raw === '1' || raw === 'yes'
+        if (f.op === 'is_checked')   return isTrue
+        if (f.op === 'is_unchecked') return !isTrue
+        return true
+      }
       const lower = raw.toLowerCase()
       const val = f.value.toLowerCase()
       if (f.op === 'contains')     return lower.includes(val)
@@ -256,7 +279,9 @@ export function FilterBar({ filters, onChange, jobs, interviewers, hrUsers, mode
         {filters.map((f, idx) => {
           const fieldDef = allFields.find(ff => ff.key === f.field) ?? { type: 'text' as FieldType, key: f.field, label: f.field }
           const ops = OPS_FOR[fieldDef.type] ?? OPS_FOR.text
-          const showVal = !['is_empty','is_not_empty'].includes(f.op)
+          // No value input needed for these ops
+          const noValueOps = ['is_empty','is_not_empty','date_within_week','date_within_month','is_checked','is_unchecked']
+          const showVal = !noValueOps.includes(f.op)
           const isPills = ['is_any_of','is_none_of'].includes(f.op)
           const opts = getOpts(f.field)
 
