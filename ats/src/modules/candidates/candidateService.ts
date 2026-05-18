@@ -1,6 +1,8 @@
 // ============================================================
-// CANDIDATE SERVICE — all Supabase queries for candidates
-// Components never call supabase directly.
+// CANDIDATE SERVICE
+// - Email + Phone normalized before every DB write
+// - Phone: exactly 10 digits, reject anything else
+// - Dedup: email (primary) + phone (secondary) — both checked
 // ============================================================
 import { supabase } from '../../lib/supabaseClient'
 import type { Candidate, CandidateStatus, SourceCategory } from '../../types/database.types'
@@ -14,6 +16,69 @@ export interface CandidateFilters {
   hr_owner?: string
 }
 
+// ── Normalize ─────────────────────────────────────────────────
+export function normalizeEmail(email: string | null | undefined): string | null {
+  if (!email) return null
+  return email.trim().toLowerCase()
+}
+
+// Phone: strip everything, keep exactly 10 digits (last 10 if longer)
+export function normalizePhone(phone: string | null | undefined): string | null {
+  if (!phone) return null
+  const digits = phone.replace(/\D/g, '')
+  // Strip country code 91 or leading 0
+  const clean = digits.length === 12 && digits.startsWith('91') ? digits.slice(2)
+    : digits.length === 11 && digits.startsWith('0') ? digits.slice(1)
+    : digits
+  // Must be exactly 10 digits
+  return clean.length === 10 ? clean : null
+}
+
+export function validatePhone(phone: string): { valid: boolean; message?: string } {
+  if (!phone.trim()) return { valid: true } // optional field
+  const digits = phone.replace(/\D/g, '')
+  const clean = digits.length === 12 && digits.startsWith('91') ? digits.slice(2)
+    : digits.length === 11 && digits.startsWith('0') ? digits.slice(1)
+    : digits
+  if (clean.length !== 10) return { valid: false, message: 'Phone must be exactly 10 digits' }
+  return { valid: true }
+}
+
+function normalizePayload<T extends Record<string, any>>(payload: T): T {
+  return {
+    ...payload,
+    email: normalizeEmail(payload.email) ?? payload.email,
+    phone: normalizePhone(payload.phone),
+  }
+}
+
+// ── Server-side dedup — email AND phone ──────────────────────
+export async function findDuplicates(
+  candidates: { email?: string; phone?: string | null }[],
+  excludeId?: string
+): Promise<{ emailDups: Set<string>; phoneDups: Set<string> }> {
+  const emails = candidates.map(c => normalizeEmail(c.email)).filter(Boolean) as string[]
+  const phones = candidates.map(c => normalizePhone(c.phone)).filter(Boolean) as string[]
+
+  const orFilters: string[] = []
+  if (emails.length) emails.forEach(e => orFilters.push(`email.ilike.${e}`))
+  if (phones.length) phones.forEach(p => orFilters.push(`phone.eq.${p}`))
+  if (!orFilters.length) return { emailDups: new Set(), phoneDups: new Set() }
+
+  let q = supabase.from('candidates').select('email,phone').eq('status','active')
+    .or(orFilters.slice(0, 30).join(','))  // Supabase limit
+  if (excludeId) q = q.neq('id', excludeId)
+  const { data } = await q
+
+  const emailDups = new Set<string>()
+  const phoneDups = new Set<string>()
+  ;(data ?? []).forEach((r: any) => {
+    if (r.email) emailDups.add(r.email.toLowerCase().trim())
+    if (r.phone) phoneDups.add(r.phone.replace(/\D/g,'').slice(-10))
+  })
+  return { emailDups, phoneDups }
+}
+
 export const candidateService = {
   list: async (filters: CandidateFilters = {}) => {
     let query = supabase
@@ -25,7 +90,7 @@ export const candidateService = {
     if (filters.status)          query = query.eq('status', filters.status)
     if (filters.source_category) query = query.eq('source_category', filters.source_category)
     if (filters.job_id)          query = query.eq('job_id', filters.job_id)
-    if (filters.hr_owner)          query = query.eq('hr_owner', filters.hr_owner)
+    if (filters.hr_owner)        query = query.eq('hr_owner', filters.hr_owner)
     if (filters.search) {
       query = query.or(`full_name.ilike.%${filters.search}%,email.ilike.%${filters.search}%`)
     }
@@ -46,22 +111,27 @@ export const candidateService = {
   },
 
   create: async (payload: Omit<Candidate, 'id' | 'created_at' | 'updated_at'>) => {
+    const normalized = normalizePayload(payload)
+    // Server-side dedup before insert
+    const { emailDups, phoneDups } = await findDuplicates([normalized])
+    if (normalized.email && emailDups.has(normalized.email)) {
+      throw new Error(`A candidate with email ${normalized.email} already exists.`)
+    }
+    if (normalized.phone && phoneDups.has(normalized.phone)) {
+      throw new Error(`A candidate with phone ${normalized.phone} already exists.`)
+    }
     const { data, error } = await supabase
-      .from('candidates')
-      .insert(payload)
-      .select()
-      .single()
+      .from('candidates').insert(normalized).select().single()
     if (error) throw error
     return data
   },
 
   update: async (id: string, payload: Partial<Candidate>) => {
+    const normalized = normalizePayload(payload as any)
     const { data, error } = await supabase
       .from('candidates')
-      .update({ ...payload, updated_at: new Date().toISOString() })
-      .eq('id', id)
-      .select()
-      .single()
+      .update({ ...normalized, updated_at: new Date().toISOString() })
+      .eq('id', id).select().single()
     if (error) throw error
     return data
   },
@@ -70,11 +140,38 @@ export const candidateService = {
     return candidateService.update(id, { current_stage: stage })
   },
 
+  // Bulk create — normalize all + server-side email+phone dedup
   bulkCreate: async (candidates: Omit<Candidate, 'id' | 'created_at' | 'updated_at'>[]) => {
+    const normalized = candidates.map(normalizePayload)
+
+    // Server-side dedup — catches anything frontend missed
+    const { emailDups, phoneDups } = await findDuplicates(normalized)
+
+    const clean: typeof normalized = []
+    const blocked: { name: string; reason: string }[] = []
+
+    normalized.forEach(c => {
+      const emailDup = c.email && emailDups.has(c.email.toLowerCase().trim())
+      const phoneDup = c.phone && phoneDups.has(c.phone.replace(/\D/g,'').slice(-10))
+      if (emailDup || phoneDup) {
+        console.warn('[bulkCreate] blocked duplicate:', c.email, c.phone)
+        blocked.push({
+          name: c.full_name,
+          reason: emailDup ? `Email ${c.email} exists` : `Phone ${c.phone} exists`,
+        })
+        return
+      }
+      // Also enforce 10-digit phone
+      if (c.phone && c.phone.replace(/\D/g,'').length !== 10) {
+        c.phone = null // silently drop invalid phone
+      }
+      clean.push(c)
+    })
+
+    if (!clean.length) return []
+
     const { data, error } = await supabase
-      .from('candidates')
-      .insert(candidates)
-      .select()
+      .from('candidates').insert(clean).select()
     if (error) throw error
     return data ?? []
   },
@@ -84,5 +181,3 @@ export const candidateService = {
     if (error) throw error
   },
 }
-
-// Extended filter — hr_owner
