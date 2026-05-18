@@ -65,7 +65,11 @@ function normalizeSource(raw: string): SourceCategory {
 function normalizePhone(raw: string): string | null {
   if (!raw) return null
   const d = raw.replace(/\D/g, '')
-  return d.length >= 10 ? '+' + d : (raw || null)
+  if (d.length === 10) return d
+  if (d.length === 12 && d.startsWith('91')) return d.slice(2)
+  if (d.length === 11 && d.startsWith('0')) return d.slice(1)
+  if (d.length > 10) return d.slice(-10)
+  return null // discard invalid phones
 }
 
 interface ColumnMap {
@@ -109,7 +113,7 @@ function transformRow(
 
   return {
     full_name:             get('full_name').trim(),
-    email:                 get('email').trim().toLowerCase(),
+    email:                 get('email').trim().toLowerCase(),  // normalize
     phone:                 normalizePhone(get('phone')),
     linkedin_url:          extractUrl(get('linkedin')) || (get('linkedin').startsWith('http') ? get('linkedin') : null),
     resume_url:            resumeUrl,
@@ -194,31 +198,40 @@ export function CsvUploader() {
   const preview = async () => {
     const result = rows.map(r => transformRow(r, colMap, customFieldMap, user!.id, selectedJobId || null))
     setTransformed(result)
-    setSkippedDups(new Set())
 
-    // ── Duplicate check ──
-    const emails = result.filter(r => r.email).map(r => r.email as string)
-    const phones = result.filter(r => r.phone).map(r => (r.phone as string).replace(/\D/g,'').slice(-10)).filter(p => p.length >= 10)
-
-    if (!emails.length && !phones.length) { setDupMap({}); setStep(3); return }
-
-    const filters: string[] = []
-    emails.slice(0,15).forEach(e => filters.push(`email.ilike.${e}`))
-    phones.slice(0,15).forEach(p => filters.push(`phone.ilike.%${p}`))
-
-    const { data } = await supabase
-      .from('candidates').select('id,full_name,email,phone')
-      .or(filters.join(','))
-      .limit(100)
+    // ── Dedup check — ALL rows, batched to avoid Supabase URL limit ──
+    const emails = [...new Set(result.filter(r => r.email).map(r => (r.email as string).trim().toLowerCase()))]
+    const phones = [...new Set(result.filter(r => r.phone).map(r => (r.phone as string).replace(/\D/g,'').slice(-10)).filter(p => p.length === 10))]
 
     const map: Record<string, string> = {}
-    data?.forEach((ex: any) => {
-      if (ex.email) map[`email:${ex.email.toLowerCase()}`] = ex.full_name
-      if (ex.phone) {
-        const p = ex.phone.replace(/\D/g,'').slice(-10)
-        if (p.length >= 10) map[`phone:${p}`] = ex.full_name
+
+    if (emails.length || phones.length) {
+      // Batch in groups of 20 to stay under URL limits
+      const BATCH = 20
+      for (let i = 0; i < Math.max(emails.length, phones.length); i += BATCH) {
+        const batchEmails = emails.slice(i, i + BATCH)
+        const batchPhones = phones.slice(i, i + BATCH)
+        const filters: string[] = []
+        batchEmails.forEach(e => filters.push(`email.ilike.${e}`))
+        batchPhones.forEach(p => filters.push(`phone.eq.${p}`))
+        if (!filters.length) continue
+
+        const { data } = await supabase
+          .from('candidates').select('full_name,email,phone')
+          .eq('status', 'active')
+          .or(filters.join(','))
+          .limit(200)
+
+        data?.forEach((ex: any) => {
+          if (ex.email) map[`email:${ex.email.toLowerCase().trim()}`] = ex.full_name
+          if (ex.phone) {
+            const p = ex.phone.replace(/\D/g,'').slice(-10)
+            if (p.length === 10) map[`phone:${p}`] = ex.full_name
+          }
+        })
       }
-    })
+    }
+
     setDupMap(map)
     setStep(3)
   }
