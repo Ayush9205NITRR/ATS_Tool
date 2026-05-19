@@ -5,7 +5,7 @@ import { useAuthStore } from '../../modules/auth/authStore'
 import { initialsOf } from '../utils/helpers'
 
 const NAV = [
-  { to: '/dashboard',  label: 'Dashboard',      icon: LayoutDashboard, roles: ['super_admin','admin','hr_team','interviewer'] },
+  { to: '/dashboard',  label: 'Dashboard',      icon: LayoutDashboard, roles: ['super_admin','admin','hr_team','interviewer','agency'] },
   { to: '/candidates', label: 'Candidates',      icon: Users,           roles: ['super_admin','admin','hr_team'] },
   { to: '/candidates', label: 'My Submissions',  icon: Users,           roles: ['agency'] },
   { to: '/interviews', label: 'My Interviews',   icon: ClipboardList,   roles: ['interviewer'] },
