@@ -53,6 +53,16 @@ const STATUS_COLOUR: Record<string,string> = {
 function JobForm({ job, onClose }: { job?: any; onClose: () => void }) {
   const { user } = useAuthStore()
   const qc = useQueryClient()
+  const [agencyIds, setAgencyIds] = useState<string[]>(job?.allowed_agency_ids ?? [])
+  const [showToAllAgencies, setShowToAllAgencies] = useState<boolean>(job?.show_to_agency ?? false)
+
+  const { data: agencyUsers = [] } = useQuery({
+    queryKey: ['agency-users'],
+    queryFn: async () => {
+      const { data } = await supabase.from('users').select('id,full_name,email').eq('role','agency').eq('is_active',true).order('full_name')
+      return data ?? []
+    },
+  })
 
   const {register,handleSubmit,formState:{errors}} = useForm<FormData>({
     resolver: zodResolver(schema),
@@ -75,6 +85,8 @@ function JobForm({ job, onClose }: { job?: any; onClose: () => void }) {
         target_date: d.target_date||null, required_skills: skills,
         requisition_id: d.requisition_id||null,
         jd_link: (d as any).jd_link||null,
+        show_to_agency: showToAllAgencies || agencyIds.length > 0,
+        allowed_agency_ids: showToAllAgencies ? [] : agencyIds,
       }
       if (job) return jobService.update(job.id, payload as any)
       return jobService.create({
@@ -158,6 +170,51 @@ function JobForm({ job, onClose }: { job?: any; onClose: () => void }) {
         <textarea {...register('description')} rows={4} placeholder="Job summary, key responsibilities, what you're looking for…" className={inputCls}/>
       </div>
 
+      {/* Agency Visibility — required field, not optional */}
+      <div className="border border-purple-200 rounded-xl p-4 bg-purple-50/30">
+        <div className="flex items-center justify-between mb-3">
+          <div>
+            <p className="text-sm font-medium text-gray-700">Agency Visibility <span className="text-red-500">*</span></p>
+            <p className="text-xs text-gray-400 mt-0.5">Which agencies can see and submit candidates for this job</p>
+          </div>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <span className="text-xs text-gray-500">All agencies</span>
+            <div onClick={() => { setShowToAllAgencies(o => !o); if (!showToAllAgencies) setAgencyIds([]) }}
+              className={`w-10 h-5 rounded-full transition-colors relative cursor-pointer ${showToAllAgencies ? 'bg-purple-500' : 'bg-gray-200'}`}>
+              <span className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${showToAllAgencies ? 'translate-x-5' : 'translate-x-0.5'}`}/>
+            </div>
+          </label>
+        </div>
+        {!showToAllAgencies && (
+          <div>
+            <p className="text-xs text-gray-500 mb-2">Select specific agencies:</p>
+            <div className="space-y-1.5 max-h-40 overflow-y-auto">
+              {(agencyUsers as any[]).length === 0 ? (
+                <p className="text-xs text-amber-600">No agency users found. Add users with role "Agency" in Settings → Team Members.</p>
+              ) : (
+                (agencyUsers as any[]).map((u: any) => {
+                  const sel = agencyIds.includes(u.id)
+                  return (
+                    <label key={u.id} className={`flex items-center gap-2.5 px-3 py-2 rounded-lg cursor-pointer transition-colors ${sel ? 'bg-purple-100' : 'hover:bg-gray-100'}`}>
+                      <div className={`w-4 h-4 rounded border flex items-center justify-center transition-all ${sel ? 'bg-purple-500 border-purple-500' : 'border-gray-300'}`}>
+                        {sel && <svg className="w-2.5 h-2.5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7"/></svg>}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <span className="text-sm text-gray-800 font-medium">{u.full_name}</span>
+                        <span className="text-xs text-gray-400 ml-2">{u.email}</span>
+                      </div>
+                    </label>
+                  )
+                })
+              )}
+            </div>
+            {agencyIds.length > 0 && (
+              <p className="mt-2 text-xs text-purple-700 font-medium">{agencyIds.length} agenc{agencyIds.length > 1 ? 'ies' : 'y'} selected</p>
+            )}
+          </div>
+        )}
+      </div>
+
       {save.error && <p className="text-sm text-red-600">{(save.error as Error).message}</p>}
       <div className="flex justify-end gap-2 pt-1">
         <Button variant="secondary" type="button" onClick={onClose}>Cancel</Button>
@@ -168,16 +225,29 @@ function JobForm({ job, onClose }: { job?: any; onClose: () => void }) {
 }
 
 export function JobsPage() {
-  const { hasRole } = useAuthStore()
+  const { hasRole, user: authUser } = useAuthStore()
   const qc = useQueryClient()
   const canEdit = hasRole(['admin','super_admin'])
+  const isAgency = hasRole(['agency'])
 
   const [showCreate, setShowCreate] = useState(false)
   const [editJob, setEditJob]       = useState<any|null>(null)
   const [detailJob, setDetailJob]   = useState<any|null>(null)
   const [expanded, setExpanded]     = useState<string|null>(null)
 
-  const { data: jobs=[], isLoading } = useQuery({ queryKey:['jobs'], queryFn: jobService.list })
+  const { data: jobs=[], isLoading } = useQuery({
+    queryKey: ['jobs', isAgency ? `agency-${authUser?.id}` : 'all'],
+    queryFn: async () => {
+      if (isAgency && authUser?.id) {
+        const { data } = await supabase.from('jobs').select('*').eq('status','open').order('created_at',{ascending:false})
+        return (data ?? []).filter((j:any) =>
+          j.show_to_agency &&
+          (!j.allowed_agency_ids || j.allowed_agency_ids.length === 0 || j.allowed_agency_ids.includes(authUser.id))
+        )
+      }
+      return jobService.list()
+    }
+  })
 
   const { data: candidateCounts={} } = useQuery({
     queryKey:['jobs','candidate-counts'],
