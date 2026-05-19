@@ -83,7 +83,7 @@ export const candidateService = {
   list: async (filters: CandidateFilters = {}) => {
     let query = supabase
       .from('candidates')
-      .select('*, job:jobs(id, title, pipeline_stages, jd_link)')
+      .select('*, job:jobs(id, title, pipeline_stages, jd_link), agency:agencies(id, name)')
       .order('created_at', { ascending: false })
 
     if (filters.stage)           query = query.eq('current_stage', filters.stage)
@@ -103,7 +103,7 @@ export const candidateService = {
   getById: async (id: string) => {
     const { data, error } = await supabase
       .from('candidates')
-      .select('*, job:jobs(id, title, pipeline_stages, jd_link)')
+      .select('*, job:jobs(id, title, pipeline_stages, jd_link), agency:agencies(id, name)')
       .eq('id', id)
       .single()
     if (error) throw error
@@ -113,10 +113,21 @@ export const candidateService = {
   create: async (payload: Omit<Candidate, 'id' | 'created_at' | 'updated_at'>, callerRole?: string, callerId?: string) => {
     const normalized = normalizePayload(payload)
 
-    // Agency: hardcode source_category, attach agency_id
+    // Agency: hardcode source_category, fetch true agency_id from users table
     if (callerRole === 'agency' && callerId) {
       normalized.source_category = 'agency' as any
-      ;(normalized as any).agency_id = callerId
+      // Get the actual agency_id (from agencies table) linked to this user
+      const { data: userRow } = await supabase
+        .from('users').select('agency_id,full_name').eq('id', callerId).maybeSingle()
+      if (userRow?.agency_id) {
+        ;(normalized as any).agency_id = userRow.agency_id
+        // Auto-fill source_name with agency name if not set
+        if (!normalized.source_name) {
+          const { data: agencyRow } = await supabase
+            .from('agencies').select('name').eq('id', userRow.agency_id).maybeSingle()
+          if (agencyRow?.name) normalized.source_name = agencyRow.name
+        }
+      }
     }
 
     // Server-side dedup before insert
@@ -155,12 +166,22 @@ export const candidateService = {
   bulkCreate: async (candidates: Omit<Candidate, 'id' | 'created_at' | 'updated_at'>[], callerRole?: string, callerId?: string) => {
     let normalized = candidates.map(normalizePayload)
 
-    // Agency: hardcode source + attach agency_id to every row
+    // Agency: hardcode source + fetch true agency_id
     if (callerRole === 'agency' && callerId) {
+      const { data: userRow } = await supabase
+        .from('users').select('agency_id,full_name').eq('id', callerId).maybeSingle()
+      let agencyId = userRow?.agency_id ?? null
+      let agencyName = ''
+      if (agencyId) {
+        const { data: agencyRow } = await supabase
+          .from('agencies').select('name').eq('id', agencyId).maybeSingle()
+        agencyName = agencyRow?.name ?? userRow?.full_name ?? ''
+      }
       normalized = normalized.map(c => ({
         ...c,
         source_category: 'agency' as any,
-        agency_id: callerId,
+        agency_id: agencyId,
+        source_name: c.source_name || agencyName,
       }))
     }
 
