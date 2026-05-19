@@ -31,7 +31,6 @@ import { formatDate, formatDateTime } from '../../shared/utils/helpers'
 import { ScheduleInterviewModal } from './ScheduleInterviewModal'
 import { SendEmailModal } from './SendEmailModal'
 import { useStages } from '../../shared/hooks/useStages'
-
 // ── Stage colours ─────────────────────────────────────────────
 const STAGE_PILL: Record<string,string> = {
   Applied:'bg-gray-100 text-gray-600', Screening:'bg-blue-50 text-blue-700',
@@ -92,23 +91,29 @@ function Popup({ trigger, children }: { trigger:React.ReactNode; children:React.
 }
 
 // ── Stage cell ────────────────────────────────────────────────
-const StageCell = memo(({ cid, value, canEdit, onUpdate, stages }: {
-  cid:string; value:string; canEdit:boolean; onUpdate:(id:string,f:string,v:any)=>void; stages:string[]
+const StageCell = memo(({ cid, value, canEdit, onUpdate, stages, stageConfigs }: {
+  cid:string; value:string; canEdit:boolean; onUpdate:(id:string,f:string,v:any)=>void
+  stages:string[]; stageConfigs:{name:string;color:string;textColor:string}[]
 }) => {
-  const pill = <span className={`inline-flex items-center gap-0.5 text-xs px-2.5 py-1 rounded-md font-medium ${canEdit?'cursor-pointer hover:opacity-80':''} ${STAGE_PILL[value]??'bg-gray-100 text-gray-600'}`}>
+  const cfg = stageConfigs.find(s=>s.name===value)
+  const pillCls = cfg ? `${cfg.color} ${cfg.textColor}` : 'bg-gray-100 text-gray-600'
+  const pill = <span className={`inline-flex items-center gap-0.5 text-xs px-2.5 py-1 rounded-md font-medium ${canEdit?'cursor-pointer hover:opacity-80':''} ${pillCls}`}>
     {value}{canEdit&&<ChevronDown className="w-3 h-3 opacity-40 ml-0.5"/>}
   </span>
   if (!canEdit) return pill
   return (
     <Popup trigger={pill}>
-      {stages.map(s=>(
-        <button key={s} onClick={()=>onUpdate(cid,'current_stage',s)}
-          className="w-full text-left px-3 py-1.5 text-xs hover:bg-gray-50 flex items-center gap-2.5">
-          <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${STAGE_BAR[s]??'bg-gray-300'}`}/>
-          <span className={`flex-1 ${s===value?'font-semibold text-gray-900':'text-gray-600'}`}>{s}</span>
-          {s===value&&<Check className="w-3 h-3 text-blue-500"/>}
-        </button>
-      ))}
+      {stages.map(s=>{
+        const c = stageConfigs.find(x=>x.name===s)
+        return (
+          <button key={s} onClick={()=>onUpdate(cid,'current_stage',s)}
+            className="w-full text-left px-3 py-1.5 text-xs hover:bg-gray-50 flex items-center gap-2.5">
+            <span className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${c?.color??'bg-gray-200'}`}/>
+            <span className={`flex-1 ${s===value?'font-semibold text-gray-900':'text-gray-600'}`}>{s}</span>
+            {s===value&&<Check className="w-3 h-3 text-blue-500"/>}
+          </button>
+        )
+      })}
     </Popup>
   )
 })
@@ -237,7 +242,8 @@ export function CandidatesPage() {
   const canAssignHR = hasRole(['admin','super_admin'])
   const isSuperAdmin = hasRole(['super_admin'])
 
-  const { stages: STAGES } = useStages()
+  const { stageConfigs } = useStages()
+  const STAGES = stageConfigs.map(s => s.name)
 
   const [serverFilters, setServerFilters] = useState<CandidateFilters>({})
   const [search, setSearch]         = useState('')
@@ -689,7 +695,7 @@ export function CandidatesPage() {
                             </td>
                             {/* Dynamic columns */}
                             {orderedVisible.map(key=>{
-                              if (key==='stage') return <td key="stage" className="px-3 py-2.5"><StageCell cid={c.id} value={c.current_stage} canEdit={canEdit} onUpdate={onUpdate} stages={STAGES}/></td>
+                              if (key==='stage') return <td key="stage" className="px-3 py-2.5"><StageCell cid={c.id} value={c.current_stage} canEdit={canEdit} onUpdate={onUpdate} stages={STAGES} stageConfigs={stageConfigs}/></td>
                               if (key==='job') return <td key="job" className="px-3 py-2.5"><SelectCell cid={c.id} field="job_id" display={c.job?.title ?? getName(jobs as any[],c.job_id)} canEdit={canAssign} onUpdate={onUpdate} options={(jobs as any[]).map(j=>({label:j.title,value:j.id}))}/></td>
                               if (key==='source') return <td key="source" className="px-3 py-2.5 text-xs text-gray-500 capitalize">{c.source_category??'—'}</td>
                               if (key==='subsource') return <td key="subsource" className="px-3 py-2.5 text-xs text-gray-500">{c.source_name??'—'}</td>
