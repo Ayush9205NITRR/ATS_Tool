@@ -44,8 +44,9 @@ const FIELD_TYPE_LABELS: Record<string, string> = {
 
 import { EmailTemplatesTab } from './EmailTemplatesTab'
 import { OrgSettingsTab } from './OrgSettingsTab'
+import { AgenciesTab } from './AgenciesTab'
 
-type Tab = 'users' | 'fields' | 'emails' | 'org'
+type Tab = 'users' | 'fields' | 'emails' | 'org' | 'agencies'
 
 export function SettingsPage() {
   const qc = useQueryClient()
@@ -169,7 +170,7 @@ export function SettingsPage() {
 
       {/* Tabs */}
       <div className="flex gap-1 mb-6 bg-gray-100 p-1 rounded-lg w-fit">
-        {([['users', <Users className="w-4 h-4"/>, 'Team Members'], ['fields', <Columns className="w-4 h-4"/>, 'Custom Fields'], ['emails', <Mail className="w-4 h-4"/>, 'Email Templates'], ['org', <Mail className="w-4 h-4"/>, 'Org Settings']] as const).map(([t, icon, label]) => (
+        {([['users', <Users className="w-4 h-4"/>, 'Team Members'], ['agencies', <Users className="w-4 h-4"/>, 'Agencies'], ['fields', <Columns className="w-4 h-4"/>, 'Custom Fields'], ['emails', <Mail className="w-4 h-4"/>, 'Email Templates'], ['org', <Mail className="w-4 h-4"/>, 'Org Settings']] as const).map(([t, icon, label]) => (
           <button key={t} onClick={() => setTab(t as Tab)}
             className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors ${tab === t ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
             {icon}{label}
@@ -373,8 +374,9 @@ export function SettingsPage() {
       )}
 
       {/* ── EMAIL TEMPLATES ── */}
-      {tab === 'emails' && <EmailTemplatesTab />}
-      {tab === 'org'    && <OrgSettingsTab />}
+      {tab === 'emails'   && <EmailTemplatesTab />}
+      {tab === 'org'      && <OrgSettingsTab />}
+      {tab === 'agencies' && <AgenciesTab />}
     </div>
   )
 }
