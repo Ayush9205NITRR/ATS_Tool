@@ -15,6 +15,7 @@ import { formatDateTime, formatDate, formatRelative, labelOf } from '../../share
 import { supabase } from '../../lib/supabaseClient'
 import { INTERVIEW_STAGES } from '../../types/database.types'
 import { useAgencies } from '../../shared/hooks/useAgencies'
+import { SubSourceField } from '../../shared/components/SubSourceField'
 
 // Unified pill design
 const PILL_BASE     = 'px-2.5 py-1 rounded-full text-xs font-medium border transition-all cursor-pointer select-none'
@@ -75,8 +76,7 @@ export function CandidateProfilePage() {
     staleTime: 60_000,
   })
 
-  // Agencies list for sub-source dropdown
-  const { data: agenciesList = [] } = useAgencies()
+  // Agencies list — used by SubSourceField internally via useAgencies hook
 
   // Stage config from DB — must be before early returns (Rules of Hooks)
   const { data: stageConfigsRaw = [] } = useQuery({    queryKey: ['app-settings', 'pipeline_stages'],
@@ -442,24 +442,14 @@ export function CandidateProfilePage() {
                     <option value="college">College</option>
                   </select>
                 </div>
-                {/* Sub-source — dynamic: agency dropdown when source=agency, else free text */}
+                {/* Sub-source — dynamic dropdown */}
                 <div>
                   <label className="block text-xs text-gray-400 mb-0.5">Sub-Source</label>
-                  {contactDraft.source_category === 'agency' ? (
-                    <select value={contactDraft.source_name}
-                      onChange={e => setContactDraft(p => ({ ...p, source_name: e.target.value }))}
-                      className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-slate-400">
-                      <option value="">Select agency…</option>
-                      {agenciesList.map((a: any) => (
-                        <option key={a.id} value={a.name}>{a.name}</option>
-                      ))}
-                    </select>
-                  ) : (
-                    <input value={contactDraft.source_name}
-                      onChange={e => setContactDraft(p => ({ ...p, source_name: e.target.value }))}
-                      placeholder={contactDraft.source_category === 'college' ? 'e.g. IIT Delhi' : 'e.g. LinkedIn, Naukri…'}
-                      className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-slate-400"/>
-                  )}
+                  <SubSourceField
+                    sourceCategory={contactDraft.source_category}
+                    value={contactDraft.source_name}
+                    onChange={v => setContactDraft(p => ({ ...p, source_name: v }))}
+                  />
                 </div>
               </div>
             ) : (
