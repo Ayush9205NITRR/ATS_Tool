@@ -73,6 +73,17 @@ export function CandidateProfilePage() {
     staleTime: 60_000,
   })
 
+  // Stage config from DB — must be before early returns (Rules of Hooks)
+  const { data: stageConfigsRaw = [] } = useQuery({
+    queryKey: ['app-settings', 'pipeline_stages'],
+    queryFn: async () => {
+      const { data } = await supabase.from('app_settings').select('value').eq('key','pipeline_stages').maybeSingle()
+      if (!data?.value) return []
+      try { const p = JSON.parse(data.value); return Array.isArray(p) ? p : [] } catch { return [] }
+    },
+    staleTime: 30_000,
+  })
+
   // Custom fields — filtered by role visibility
   const { data: customFields = [] } = useQuery({
     queryKey: ['custom-fields'],
@@ -255,17 +266,6 @@ export function CandidateProfilePage() {
 
   if (isLoading) return <div className="flex justify-center py-24"><Loader2 className="w-6 h-6 animate-spin text-blue-500"/></div>
   if (!candidate) return <p className="text-gray-500 py-8 text-center">Candidate not found.</p>
-
-  // Fetch stages config from DB (optional enhancement)
-  const { data: stageConfigsRaw = [] } = useQuery({
-    queryKey: ['app-settings', 'pipeline_stages'],
-    queryFn: async () => {
-      const { data } = await supabase.from('app_settings').select('value').eq('key','pipeline_stages').maybeSingle()
-      if (!data?.value) return []
-      try { const p = JSON.parse(data.value); return Array.isArray(p) ? p : [] } catch { return [] }
-    },
-    staleTime: 30_000,
-  })
 
   // Stage names — job pipeline → DB config → hardcoded default
   const stages: string[] = (() => {
