@@ -97,6 +97,8 @@ const OPS_FOR: Record<FieldType, { op: FilterOp; label: string }[]> = {
 const SOURCES = ['platform', 'agency', 'college']
 
 // ── Apply filters ──────────────────────────────────────────────
+
+// ── Apply filters ──────────────────────────────────────────────
 export function applyFilters(
   candidates: any[],
   filters: ActiveFilter[],
@@ -212,9 +214,10 @@ interface Props {
   mode: FilterMode
   onModeChange: (m: FilterMode) => void
   customFieldDefs?: CustomFieldDef[]
+  stages?: string[]
 }
 
-export function FilterBar({ filters, onChange, jobs, interviewers, hrUsers, mode, onModeChange, customFieldDefs = [] }: Props) {
+export function FilterBar({ filters, onChange, jobs, interviewers, hrUsers, mode, onModeChange, customFieldDefs = [], stages }: Props) {
   // Build dynamic field list including custom fields
   const allFields: FieldDef[] = [
     ...SYSTEM_FIELDS,
@@ -246,7 +249,7 @@ export function FilterBar({ filters, onChange, jobs, interviewers, hrUsers, mode
   }
 
   const getOpts = (field: string) => {
-    if (field === 'current_stage')   return INTERVIEW_STAGES.map(s => ({ label: s, value: s }))
+    if (field === 'current_stage')   return (stages ?? INTERVIEW_STAGES as unknown as string[]).map(s => ({ label: s, value: s }))
     if (field === 'source_category') return SOURCES.map(s => ({ label: s.charAt(0).toUpperCase()+s.slice(1), value: s }))
     if (field === 'job_id')          return jobs.map(j => ({ label: j.title, value: j.id }))
     if (field === 'interviewer_id')  return interviewers.map(u => ({ label: u.full_name, value: u.id }))
