@@ -10,22 +10,20 @@ import { useAuthStore } from '../../auth/authStore'
 import { useDuplicateCheck } from '../../../shared/hooks/useDuplicateCheck'
 import { DuplicateWarning } from '../../../shared/components/DuplicateWarning'
 import { Button } from '../../../shared/components/Button'
+import { SubSourceField } from '../../../shared/components/SubSourceField'
 import { supabase } from '../../../lib/supabaseClient'
-import { useAgencies } from '../../../shared/hooks/useAgencies'
 
-// Schema — source fields optional for agency (auto-filled)
 const schema = z.object({
   full_name:       z.string().min(1, 'Name required'),
   email:           z.string().email('Valid email required').transform(v => v.trim().toLowerCase()),
   phone:           z.string()
     .refine(v => !v?.trim() || v.replace(/\D/g,'').length === 10, '10 digits required')
-    .transform(v => v ? v.replace(/\D/g,'').slice(0,10) || undefined : undefined)
     .optional(),
   job_id:          z.string().optional(),
-  source_category: z.enum(['platform','agency','college']).optional(),
+  source_category: z.enum(['platform','agency','college']).default('platform'),
   source_name:     z.string().optional(),
-  resume_url:      z.string().url('Enter valid URL').optional().or(z.literal('')),
-  linkedin_url:    z.string().url('Enter valid URL').optional().or(z.literal('')),
+  resume_url:      z.string().url('Valid URL').optional().or(z.literal('')),
+  linkedin_url:    z.string().url('Valid URL').optional().or(z.literal('')),
   notes:           z.string().optional(),
 })
 type FormData = z.infer<typeof schema>
@@ -45,16 +43,15 @@ export function SingleEntryForm({ onSuccess }: { onSuccess?: () => void }) {
   const qc = useQueryClient()
   const navigate = useNavigate()
   const [done, setDone] = useState(false)
+  const [subSource, setSubSource] = useState('')
   const [customValues, setCustomValues] = useState<Record<string,any>>({})
   const { duplicates, checking, check, reset: resetDup } = useDuplicateCheck()
-  const { data: agencies = [] } = useAgencies()
 
-  // Jobs — agency sees only show_to_agency=true jobs
   const { data: jobs = [] } = useQuery({
     queryKey: ['jobs', 'open', isAgency ? 'agency' : 'all'],
     queryFn: async () => {
       let q = supabase.from('jobs').select('id,title').eq('status','open').order('title')
-      if (isAgency) q = q.eq('show_to_agency', true)
+      if (isAgency) q = (q as any).eq('show_to_agency', true)
       const { data } = await q
       return data ?? []
     },
@@ -68,7 +65,7 @@ export function SingleEntryForm({ onSuccess }: { onSuccess?: () => void }) {
     },
   })
 
-  const { register, handleSubmit, reset: resetForm, watch, formState: { errors } } = useForm<FormData>({
+  const { register, handleSubmit, reset: resetForm, watch, setValue, formState: { errors } } = useForm<FormData>({
     resolver: zodResolver(schema),
     defaultValues: { source_category: isAgency ? 'agency' : 'platform' },
   })
@@ -76,34 +73,46 @@ export function SingleEntryForm({ onSuccess }: { onSuccess?: () => void }) {
   const watchEmail  = watch('email')
   const watchPhone  = watch('phone')
   const watchSource = watch('source_category')
-  const isSourceAgency = watchSource === 'agency'
+
+  // Reset sub-source when source type changes
+  useEffect(() => { setSubSource('') }, [watchSource])
   useEffect(() => { check(watchEmail ?? '', watchPhone ?? '') }, [watchEmail, watchPhone])
 
+  // Agency: auto-set source_name to their own name
+  useEffect(() => {
+    if (isAgency && user?.full_name) setSubSource(user.full_name)
+  }, [isAgency, user?.full_name])
+
   const mutation = useMutation({
-    mutationFn: (data: FormData) => candidateService.create({
-      full_name:            data.full_name,
-      email:                data.email,
-      phone:                data.phone || null,
-      job_id:               data.job_id || null,
-      source_category:      isAgency ? 'agency' : (data.source_category ?? 'platform'),
-      source_name:          isAgency ? (user?.full_name ?? 'Agency') : (data.source_name ?? ''),
-      resume_url:           data.resume_url || null,
-      linkedin_url:         data.linkedin_url || null,
-      notes:                data.notes || null,
-      current_stage:        'Applied',
-      status:               'active',
-      tags:                 [],
-      assigned_interviewers:[],
-      hr_owner:             null,
-      screening_notes:      null,
-      interview_notes:      {},
-      custom_data:          customValues,
-      uploaded_by:          user!.id,
-    } as any, user?.role, user?.id),
+    mutationFn: async (data: FormData) => {
+      const payload: any = {
+        full_name:            data.full_name,
+        email:                data.email,
+        phone:                data.phone?.replace(/\D/g,'').slice(0,10) || null,
+        job_id:               data.job_id || null,
+        source_category:      isAgency ? 'agency' : data.source_category,
+        source_name:          subSource || (isAgency ? user?.full_name ?? '' : ''),
+        resume_url:           data.resume_url || null,
+        linkedin_url:         data.linkedin_url || null,
+        notes:                data.notes || null,
+        current_stage:        'Applied',
+        status:               'active',
+        tags:                 [],
+        assigned_interviewers:[],
+        hr_owner:             null,
+        screening_notes:      null,
+        interview_notes:      {},
+        custom_data:          customValues,
+        uploaded_by:          user!.id,
+        // Agency: set agency_id to their own user id
+        ...(isAgency ? { agency_id: user!.id } : {}),
+      }
+      return candidateService.create(payload, user?.role, user?.id)
+    },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['candidates'] })
       qc.invalidateQueries({ queryKey: ['widget'] })
-      setDone(true); resetDup(); resetForm(); setCustomValues({})
+      setDone(true); resetDup(); resetForm(); setSubSource(isAgency ? user?.full_name ?? '' : ''); setCustomValues({})
       setTimeout(() => { setDone(false); onSuccess?.() }, 2000)
     },
   })
@@ -112,8 +121,13 @@ export function SingleEntryForm({ onSuccess }: { onSuccess?: () => void }) {
     <div className="flex flex-col items-center gap-3 py-12">
       <CheckCircle className="w-10 h-10 text-green-500"/>
       <p className="text-lg font-semibold text-gray-900">Candidate added!</p>
-      <Button variant="secondary" onClick={() => navigate('/candidates')}>View candidates</Button>
+      <Button variant="secondary" onClick={() => navigate('/candidates')}>View submissions</Button>
     </div>
+  )
+
+  // Visible custom fields for this role
+  const visibleCustomFields = (customFields as any[]).filter(f =>
+    isAgency ? f.show_to_agency !== false : true
   )
 
   return (
@@ -134,59 +148,43 @@ export function SingleEntryForm({ onSuccess }: { onSuccess?: () => void }) {
             onInput={e => { (e.target as HTMLInputElement).value = (e.target as HTMLInputElement).value.replace(/\D/g,'').slice(0,10) }}
             className={inputCls}/>
         </Field>
-        <Field label="Job Opening" error={errors.job_id?.message}>
+        <Field label="Job Opening">
           <select {...register('job_id')} className={inputCls}>
             <option value="">Select job (optional)</option>
             {(jobs as any[]).map(j => <option key={j.id} value={j.id}>{j.title}</option>)}
           </select>
           {isAgency && (jobs as any[]).length === 0 && (
-            <p className="mt-1 text-xs text-amber-600">No job openings available at this time.</p>
+            <p className="mt-1 text-xs text-amber-600">No active job openings available.</p>
           )}
         </Field>
 
-        {/* Source — hidden for agency (auto-set) */}
+        {/* Source — hidden for agency (auto = Agency) */}
         {!isAgency && (
           <Field label="Source Type *" error={errors.source_category?.message}>
             <select {...register('source_category')} className={inputCls}>
-              <option value="platform">Platform (LinkedIn, Naukri…)</option>
+              <option value="platform">Platform</option>
               <option value="agency">Agency</option>
               <option value="college">College</option>
             </select>
           </Field>
         )}
 
-        {/* Sub-Source — dynamic based on source type */}
-        {!isAgency && (
-          <Field label="Sub-Source *" error={errors.source_name?.message}>
-            {isSourceAgency ? (
-              /* When Source = Agency → dropdown from agencies table */
-              <select {...register('source_name')} className={inputCls}>
-                <option value="">Select agency…</option>
-                {agencies.map(a => (
-                  <option key={a.id} value={a.name}>{a.name}</option>
-                ))}
-                {agencies.length === 0 && (
-                  <option disabled value="">No agencies found — add in Settings → Agencies</option>
-                )}
-              </select>
-            ) : (
-              /* Platform or College → free text */
-              <input {...register('source_name')}
-                placeholder={watchSource === 'college' ? 'e.g. IIT Delhi, IIM Bangalore' : 'e.g. LinkedIn, Naukri, Referral'}
-                className={inputCls}/>
-            )}
-          </Field>
-        )}
-
-        {/* Agency role — sub-source is where they found candidate */}
-        {isAgency && (
-          <Field label="Sub-Source" error={errors.source_name?.message} className="sm:col-span-2">
-            <input {...register('source_name')}
-              placeholder="e.g. Naukri, LinkedIn, Internal database…"
-              className={inputCls}/>
-            <p className="mt-1 text-xs text-gray-400">Where did you find this candidate?</p>
-          </Field>
-        )}
+        {/* Sub-Source — always a dropdown (type-aware) */}
+        <Field
+          label={isAgency ? 'Agency Name' : 'Sub-Source *'}
+          error={errors.source_name?.message}
+          className={isAgency ? 'sm:col-span-1' : ''}
+        >
+          {isAgency ? (
+            // Agency: show their own name, read-only
+            <input value={user?.full_name ?? ''} disabled className={`${inputCls} bg-purple-50 text-purple-700 font-medium`}/>
+          ) : (
+            <SubSourceField
+              sourceCategory={watchSource}
+              value={subSource}
+              onChange={setSubSource}/>
+          )}
+        </Field>
 
         <Field label="Resume URL" error={errors.resume_url?.message} className="sm:col-span-2">
           <input {...register('resume_url')} placeholder="https://drive.google.com/file/d/…" className={inputCls}/>
@@ -199,13 +197,12 @@ export function SingleEntryForm({ onSuccess }: { onSuccess?: () => void }) {
         </Field>
       </div>
 
-      {/* Custom fields — hidden from agency unless show_to_interviewer is true (re-use that flag) */}
-      {(customFields as any[]).filter((f:any) => !isAgency || f.show_to_interviewer !== false).length > 0 && (
+      {/* Custom fields */}
+      {visibleCustomFields.length > 0 && (
         <div className="border-t border-gray-100 pt-4 space-y-3">
           <p className="text-sm font-medium text-gray-700">Additional Details</p>
-          {(customFields as any[])
-            .filter((f:any) => !isAgency || f.show_to_interviewer !== false)
-            .map((f:any) => (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {visibleCustomFields.map((f:any) => (
               <Field key={f.id} label={f.is_required ? `${f.field_label} *` : f.field_label}>
                 {f.field_type === 'boolean' ? (
                   <div className="flex items-center gap-2">
@@ -214,17 +211,18 @@ export function SingleEntryForm({ onSuccess }: { onSuccess?: () => void }) {
                     <span className="text-sm text-gray-600">{f.field_label}</span>
                   </div>
                 ) : (
-                  <input type={f.field_type === 'number'?'number':f.field_type==='date'?'date':f.field_type==='url'?'url':'text'}
+                  <input
+                    type={f.field_type==='number'?'number':f.field_type==='date'?'date':f.field_type==='url'?'url':'text'}
                     placeholder={f.field_label}
                     onChange={e => setCustomValues(p=>({...p,[f.field_name]:e.target.value}))}
                     className={inputCls}/>
                 )}
               </Field>
             ))}
+          </div>
         </div>
       )}
 
-      {/* Duplicate warning */}
       {(duplicates.length > 0 || checking) && (
         <DuplicateWarning duplicates={duplicates} checking={checking}
           onViewProfile={id => window.open(`/candidates/${id}`, '_blank')}/>
