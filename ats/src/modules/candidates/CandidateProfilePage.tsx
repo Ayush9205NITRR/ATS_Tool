@@ -39,6 +39,7 @@ export function CandidateProfilePage() {
   const qc = useQueryClient()
 
   const isInterviewer = hasRole(['interviewer'])
+  const isAgency      = hasRole(['agency'])
   const canEdit       = hasRole(['admin', 'super_admin', 'hr_team'])
   const canAssignHR   = hasRole(['admin', 'super_admin'])
   const canAddNotes   = hasRole(['admin', 'super_admin', 'hr_team', 'interviewer'])
@@ -357,7 +358,7 @@ export function CandidateProfilePage() {
           <p className="text-sm text-gray-400 mt-0.5">{candidate.source_name} · {labelOf(candidate.source_category)}</p>
         </div>
         <div className="relative">
-          {canEdit ? (
+          {canEdit && !isAgency ? (
             <>
               <button onClick={() => setStageOpen(o => !o)}
                 className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium border ${stageColor(candidate.current_stage)} border-transparent`}>
@@ -379,8 +380,10 @@ export function CandidateProfilePage() {
               )}
             </>
           ) : (
+            /* Agency or non-editor — read-only stage pill */
             <span className={`px-3 py-1.5 rounded-lg text-sm font-medium ${stageColor(candidate.current_stage)}`}>
               {candidate.current_stage}
+              {isAgency && <span className="ml-1.5 text-xs opacity-60">(view only)</span>}
             </span>
           )}
         </div>
@@ -479,8 +482,8 @@ export function CandidateProfilePage() {
             </div>
           </div>
 
-          {/* Assignment — hidden from interviewer */}
-          {!isInterviewer && (
+          {/* Assignment — hidden from interviewer AND agency */}
+          {!isInterviewer && !isAgency && (
             <div className="px-5 py-4 space-y-4">
               <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Assignment</p>
 
@@ -752,6 +755,31 @@ export function CandidateProfilePage() {
             </div>
           </div>
 
+          {/* ── Agency Feedback — read-only section for agencies ── */}
+          {isAgency && (
+            <div className="bg-blue-50/40 rounded-xl border border-blue-100 px-5 py-4">
+              <p className="text-sm font-semibold text-gray-700 mb-2">HR Feedback / Remarks</p>
+              {(candidate as any).agency_feedback ? (
+                <p className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">
+                  {(candidate as any).agency_feedback}
+                </p>
+              ) : (
+                <p className="text-xs text-gray-400 italic">
+                  No feedback shared yet. The HR team will update this section with remarks on your candidate.
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* Agency feedback editor — HR/Admin only */}
+          {!isAgency && !isInterviewer && (candidate as any).agency_id && (
+            <AgencyFeedbackEditor
+              candidateId={candidate.id}
+              currentFeedback={(candidate as any).agency_feedback ?? ''}
+              canEdit={canEdit}
+            />
+          )}
+
           {/* ── Submit Feedback — Interviewers only, simple button at bottom ── */}
           {isInterviewer && (
             <div className={`rounded-xl border-2 px-5 py-4 flex items-center gap-4 ${feedbackSubmitted ? 'border-green-200 bg-green-50/40' : 'border-slate-200 bg-slate-50/40'}`}>
@@ -792,6 +820,45 @@ function Row({ label, value }: { label: string; value: string }) {
     <div className="flex items-start gap-2">
       <span className="text-gray-400 w-16 flex-shrink-0 text-xs">{label}</span>
       <span className="text-gray-700 font-medium text-sm">{value}</span>
+    </div>
+  )
+}
+
+// ── Agency Feedback Editor (HR/Admin fills, Agency reads) ─────
+function AgencyFeedbackEditor({ candidateId, currentFeedback, canEdit }: {
+  candidateId: string; currentFeedback: string; canEdit: boolean
+}) {
+  const [text, setText] = useState(currentFeedback)
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved]   = useState(false)
+  const qc = useQueryClient()
+
+  const save = async () => {
+    setSaving(true)
+    await supabase.from('candidates').update({ agency_feedback: text }).eq('id', candidateId)
+    qc.invalidateQueries({ queryKey: ['candidate', candidateId] })
+    setSaving(false); setSaved(true); setTimeout(() => setSaved(false), 2000)
+  }
+
+  return (
+    <div className="bg-amber-50/40 rounded-xl border border-amber-100 px-5 py-4 space-y-2">
+      <p className="text-sm font-semibold text-gray-700">Agency Feedback
+        <span className="ml-1.5 text-xs font-normal text-gray-400">— visible to the agency</span>
+      </p>
+      {canEdit ? (
+        <>
+          <textarea rows={3} value={text} onChange={e=>setText(e.target.value)}
+            placeholder="Add remarks for the agency about this candidate…"
+            className="w-full px-3 py-2 border border-amber-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-amber-300 resize-y"/>
+          <button onClick={save} disabled={saving || text === currentFeedback}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-600 text-white text-xs rounded-lg hover:bg-amber-700 disabled:opacity-40 transition-colors">
+            {saving ? <Loader2 className="w-3 h-3 animate-spin"/> : saved ? <Check className="w-3 h-3"/> : null}
+            {saved ? 'Saved!' : 'Save feedback'}
+          </button>
+        </>
+      ) : (
+        <p className="text-sm text-gray-700 whitespace-pre-wrap">{text || <span className="text-gray-400 italic text-xs">No feedback added yet.</span>}</p>
+      )}
     </div>
   )
 }
