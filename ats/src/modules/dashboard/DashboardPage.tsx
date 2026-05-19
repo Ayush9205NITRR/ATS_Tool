@@ -14,6 +14,7 @@ const ROLE_DEFAULTS: Record<string, string[]> = {
   admin:       ['total-candidates','open-jobs','analytics','hr-dashboard','source-funnel','recent-activity','job-breakdown'],
   hr_team:     ['total-candidates','open-jobs','hr-dashboard','source-funnel','recent-activity'],
   interviewer: ['interviewer-stats','recent-activity'],
+  agency:      ['total-candidates','recent-activity'],
 }
 
 function load(role: string): string[] {
