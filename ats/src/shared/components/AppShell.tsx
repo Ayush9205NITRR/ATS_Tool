@@ -7,15 +7,16 @@ import { initialsOf } from '../utils/helpers'
 const NAV = [
   { to: '/dashboard',  label: 'Dashboard',      icon: LayoutDashboard, roles: ['super_admin','admin','hr_team','interviewer'] },
   { to: '/candidates', label: 'Candidates',      icon: Users,           roles: ['super_admin','admin','hr_team'] },
+  { to: '/candidates', label: 'My Submissions',  icon: Users,           roles: ['agency'] },
   { to: '/interviews', label: 'My Interviews',   icon: ClipboardList,   roles: ['interviewer'] },
   { to: '/jobs',       label: 'Jobs',            icon: Briefcase,       roles: ['super_admin','admin','hr_team'] },
-  { to: '/upload',     label: 'Upload',          icon: Upload,          roles: ['super_admin','admin','hr_team'] },
+  { to: '/upload',     label: 'Upload',          icon: Upload,          roles: ['super_admin','admin','hr_team','agency'] },
   { to: '/settings',   label: 'Settings',        icon: Settings,        roles: ['super_admin'] },
 ]
 
 const ROLE_LABELS: Record<string, string> = {
   super_admin: 'Super Admin', admin: 'Admin',
-  hr_team: 'HR Team', interviewer: 'Interviewer',
+  hr_team: 'HR Team', interviewer: 'Interviewer', agency: 'Agency',
 }
 
 export function AppShell() {
