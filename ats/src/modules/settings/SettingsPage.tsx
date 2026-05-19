@@ -30,11 +30,12 @@ const fieldSchema = z.object({
 })
 type FieldFormData = z.infer<typeof fieldSchema>
 
-const ROLE_COLOUR: Record<Role, string> = {
+const ROLE_COLOUR: Record<string, string> = {
   super_admin: 'bg-purple-100 text-purple-700',
   admin:       'bg-blue-100 text-blue-700',
   hr_team:     'bg-green-100 text-green-700',
-  interviewer: 'bg-gray-100 text-gray-600',
+  interviewer: 'bg-amber-100 text-amber-700',
+  agency:      'bg-orange-100 text-orange-700',
 }
 
 const FIELD_TYPE_LABELS: Record<string, string> = {
@@ -152,7 +153,7 @@ export function SettingsPage() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['custom-fields'] }),
   })
 
-  const ROLES: Role[] = ['super_admin', 'admin', 'hr_team', 'interviewer']
+  const ROLES: Role[] = ['super_admin', 'admin', 'hr_team', 'interviewer', 'agency']
 
   return (
     <div>
@@ -222,6 +223,7 @@ export function SettingsPage() {
                 <label className="block text-sm font-medium text-gray-700 mb-1">Role</label>
                 <select {...ru('role')} className={inputCls}>
                   <option value="interviewer">Interviewer</option>
+                  <option value="agency">Agency</option>
                   <option value="hr_team">HR Team</option>
                   <option value="admin">Admin</option>
                   <option value="super_admin">Super Admin</option>
