@@ -14,6 +14,7 @@ import { useAuthStore } from '../auth/authStore'
 import { formatDateTime, formatDate, formatRelative, labelOf } from '../../shared/utils/helpers'
 import { supabase } from '../../lib/supabaseClient'
 import { INTERVIEW_STAGES } from '../../types/database.types'
+import { useAgencies } from '../../shared/hooks/useAgencies'
 
 // Unified pill design
 const PILL_BASE     = 'px-2.5 py-1 rounded-full text-xs font-medium border transition-all cursor-pointer select-none'
@@ -74,9 +75,11 @@ export function CandidateProfilePage() {
     staleTime: 60_000,
   })
 
+  // Agencies list for sub-source dropdown
+  const { data: agenciesList = [] } = useAgencies()
+
   // Stage config from DB — must be before early returns (Rules of Hooks)
-  const { data: stageConfigsRaw = [] } = useQuery({
-    queryKey: ['app-settings', 'pipeline_stages'],
+  const { data: stageConfigsRaw = [] } = useQuery({    queryKey: ['app-settings', 'pipeline_stages'],
     queryFn: async () => {
       const { data } = await supabase.from('app_settings').select('value').eq('key','pipeline_stages').maybeSingle()
       if (!data?.value) return []
@@ -431,7 +434,7 @@ export function CandidateProfilePage() {
                 <div>
                   <label className="block text-xs text-gray-400 mb-0.5">Source</label>
                   <select value={contactDraft.source_category}
-                    onChange={e => setContactDraft(p => ({ ...p, source_category: e.target.value }))}
+                    onChange={e => setContactDraft(p => ({ ...p, source_category: e.target.value, source_name: '' }))}
                     className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-slate-400">
                     <option value="">—</option>
                     <option value="platform">Platform</option>
@@ -439,13 +442,24 @@ export function CandidateProfilePage() {
                     <option value="college">College</option>
                   </select>
                 </div>
-                {/* Sub-source */}
+                {/* Sub-source — dynamic: agency dropdown when source=agency, else free text */}
                 <div>
                   <label className="block text-xs text-gray-400 mb-0.5">Sub-Source</label>
-                  <input value={contactDraft.source_name}
-                    onChange={e => setContactDraft(p => ({ ...p, source_name: e.target.value }))}
-                    placeholder="e.g. LinkedIn, IIT Delhi, Naukri…"
-                    className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-slate-400"/>
+                  {contactDraft.source_category === 'agency' ? (
+                    <select value={contactDraft.source_name}
+                      onChange={e => setContactDraft(p => ({ ...p, source_name: e.target.value }))}
+                      className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-slate-400">
+                      <option value="">Select agency…</option>
+                      {agenciesList.map((a: any) => (
+                        <option key={a.id} value={a.name}>{a.name}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input value={contactDraft.source_name}
+                      onChange={e => setContactDraft(p => ({ ...p, source_name: e.target.value }))}
+                      placeholder={contactDraft.source_category === 'college' ? 'e.g. IIT Delhi' : 'e.g. LinkedIn, Naukri…'}
+                      className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-slate-400"/>
+                  )}
                 </div>
               </div>
             ) : (
@@ -760,29 +774,41 @@ export function CandidateProfilePage() {
             </div>
           </div>
 
-          {/* ── Agency Feedback — read-only section for agencies ── */}
-          {isAgency && (
-            <div className="bg-blue-50/40 rounded-xl border border-blue-100 px-5 py-4">
-              <p className="text-sm font-semibold text-gray-700 mb-2">HR Feedback / Remarks</p>
-              {(candidate as any).agency_notes ? (
-                <p className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">
-                  {(candidate as any).agency_notes}
-                </p>
-              ) : (
-                <p className="text-xs text-gray-400 italic">
-                  No feedback shared yet. The HR team will update this section with remarks on your candidate.
-                </p>
+          {/* ══ AGENCY NOTES — Privacy Matrix ══════════════════════════
+              ✅ HR / Super Admin / Admin : Read + Write
+              ✅ Agency users             : Read only (their own candidates)
+              ❌ Interviewers             : Never shown (not in DOM)
+              ══════════════════════════════════════════════════════════ */}
+          {!isInterviewer && (
+            <>
+              {/* Agency reads — clean read-only box */}
+              {isAgency && (
+                <div className="bg-blue-50/60 rounded-xl border border-blue-100 px-5 py-4">
+                  <p className="text-sm font-semibold text-gray-700 mb-2 flex items-center gap-2">
+                    <span className="w-2 h-2 rounded-full bg-blue-400 flex-shrink-0"/>
+                    HR Feedback
+                  </p>
+                  {(candidate as any).agency_notes ? (
+                    <p className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">
+                      {(candidate as any).agency_notes}
+                    </p>
+                  ) : (
+                    <p className="text-xs text-gray-400 italic">
+                      No feedback shared yet. HR will post remarks here once they've reviewed the candidate.
+                    </p>
+                  )}
+                </div>
               )}
-            </div>
-          )}
 
-          {/* Agency feedback editor — HR/Admin only */}
-          {!isAgency && !isInterviewer && (candidate as any).agency_id && (
-            <AgencyFeedbackEditor
-              candidateId={candidate.id}
-              currentFeedback={(candidate as any).agency_notes ?? ''}
-              canEdit={canEdit}
-            />
+              {/* HR/Admin write — shown whenever candidate came from agency */}
+              {!isAgency && (candidate as any).agency_id && (
+                <AgencyFeedbackEditor
+                  candidateId={candidate.id}
+                  currentFeedback={(candidate as any).agency_notes ?? ''}
+                  canEdit={canEdit}
+                />
+              )}
+            </>
           )}
 
           {/* ── Submit Feedback — Interviewers only, simple button at bottom ── */}
