@@ -140,9 +140,10 @@ export function SettingsPage() {
   })
 
   const toggleField = useMutation({
-    mutationFn: async ({ id, is_active, show_to_interviewer }: { id: string; is_active: boolean; show_to_interviewer?: boolean }) => {
+    mutationFn: async ({ id, is_active, show_to_interviewer, show_to_agency }: { id: string; is_active: boolean; show_to_interviewer?: boolean; show_to_agency?: boolean }) => {
       const update: any = { is_active }
       if (show_to_interviewer !== undefined) update.show_to_interviewer = show_to_interviewer
+      if (show_to_agency !== undefined) update.show_to_agency = show_to_agency
       const { error } = await supabase.from('custom_fields').update(update).eq('id', id)
       if (error) throw error
     },
@@ -274,12 +275,11 @@ export function SettingsPage() {
                 <div className="col-span-2">Type</div>
                 <div className="col-span-2">Required</div>
                 <div className="col-span-2">Interviewer sees</div>
+                <div className="col-span-1">Agency sees</div>
                 <div className="col-span-1">Status</div>
-                <div className="col-span-1"/>
               </div>
               {(fields as any[]).map((field, i) => (
-                <div key={field.id} className={`grid grid-cols-12 items-center px-5 py-3.5 ${i > 0 ? 'border-t border-gray-100' : ''} hover:bg-gray-50/40 transition-colors`}>
-                  <div className="col-span-1 text-gray-300"><GripVertical className="w-4 h-4"/></div>
+                <div key={field.id} className={`grid grid-cols-12 items-center px-5 py-3.5 ${i > 0 ? 'border-t border-gray-100' : ''} hover:bg-gray-50/40 transition-colors`}>                  <div className="col-span-1 text-gray-300"><GripVertical className="w-4 h-4"/></div>
                   <div className="col-span-3">
                     <p className="text-sm font-medium text-gray-900">{field.field_label}</p>
                     <p className="text-xs text-gray-400 font-mono mt-0.5">{field.field_name}</p>
@@ -324,6 +324,18 @@ export function SettingsPage() {
                           : 'bg-gray-100 text-gray-400 hover:bg-gray-200'
                       }`}>
                       {field.show_to_interviewer !== false ? 'Visible' : 'Hidden'}
+                    </button>
+                  </div>
+                  {/* show_to_agency toggle */}
+                  <div className="col-span-1">
+                    <button
+                      onClick={() => toggleField.mutate({ id: field.id, is_active: field.is_active, show_to_agency: field.show_to_agency === false ? true : false })}
+                      className={`text-xs px-2 py-0.5 rounded-full transition-colors ${
+                        field.show_to_agency !== false
+                          ? 'bg-purple-50 text-purple-600 hover:bg-purple-100'
+                          : 'bg-gray-100 text-gray-400 hover:bg-gray-200'
+                      }`}>
+                      {field.show_to_agency !== false ? '✓' : '✗'}
                     </button>
                   </div>
                   <div className="col-span-1">
