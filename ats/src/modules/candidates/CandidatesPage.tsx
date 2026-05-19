@@ -30,6 +30,7 @@ import { INTERVIEW_STAGES } from '../../types/database.types'
 import { formatDate, formatDateTime } from '../../shared/utils/helpers'
 import { ScheduleInterviewModal } from './ScheduleInterviewModal'
 import { SendEmailModal } from './SendEmailModal'
+import { useStages } from '../../shared/hooks/useStages'
 
 // ── Stage colours ─────────────────────────────────────────────
 const STAGE_PILL: Record<string,string> = {
@@ -91,8 +92,8 @@ function Popup({ trigger, children }: { trigger:React.ReactNode; children:React.
 }
 
 // ── Stage cell ────────────────────────────────────────────────
-const StageCell = memo(({ cid, value, canEdit, onUpdate }: {
-  cid:string; value:string; canEdit:boolean; onUpdate:(id:string,f:string,v:any)=>void
+const StageCell = memo(({ cid, value, canEdit, onUpdate, stages }: {
+  cid:string; value:string; canEdit:boolean; onUpdate:(id:string,f:string,v:any)=>void; stages:string[]
 }) => {
   const pill = <span className={`inline-flex items-center gap-0.5 text-xs px-2.5 py-1 rounded-md font-medium ${canEdit?'cursor-pointer hover:opacity-80':''} ${STAGE_PILL[value]??'bg-gray-100 text-gray-600'}`}>
     {value}{canEdit&&<ChevronDown className="w-3 h-3 opacity-40 ml-0.5"/>}
@@ -100,7 +101,7 @@ const StageCell = memo(({ cid, value, canEdit, onUpdate }: {
   if (!canEdit) return pill
   return (
     <Popup trigger={pill}>
-      {INTERVIEW_STAGES.map(s=>(
+      {stages.map(s=>(
         <button key={s} onClick={()=>onUpdate(cid,'current_stage',s)}
           className="w-full text-left px-3 py-1.5 text-xs hover:bg-gray-50 flex items-center gap-2.5">
           <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${STAGE_BAR[s]??'bg-gray-300'}`}/>
@@ -235,6 +236,8 @@ export function CandidatesPage() {
   const canAssign   = hasRole(['admin','super_admin'])
   const canAssignHR = hasRole(['admin','super_admin'])
   const isSuperAdmin = hasRole(['super_admin'])
+
+  const { stages: STAGES } = useStages()
 
   const [serverFilters, setServerFilters] = useState<CandidateFilters>({})
   const [search, setSearch]         = useState('')
@@ -529,7 +532,7 @@ export function CandidatesPage() {
                               className="w-full px-2.5 py-1.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white">
                               <option value="" disabled>Choose…</option>
                               {bulkField === 'current_stage'
-                                ? INTERVIEW_STAGES.map(s => <option key={s} value={s}>{s}</option>)
+                                ? STAGES.map(s => <option key={s} value={s}>{s}</option>)
                                 : bulkField === 'job_id'
                                 ? (jobs as any[]).map(j => <option key={j.id} value={j.id}>{j.title}</option>)
                                 : bulkField === 'source_category'
@@ -613,6 +616,7 @@ export function CandidatesPage() {
               <FilterBar filters={activeFilters} onChange={setActiveFilters}
                 jobs={jobs as any[]} interviewers={interviewers as any[]}
                 hrUsers={hrUsers as any[]} mode={filterMode} onModeChange={setFilterMode}
+                stages={STAGES}
                 customFieldDefs={(customFields as any[]).map(f=>({field_name:f.field_name,field_label:f.field_label,field_type:f.field_type}))}/>
             </div>
           )}
@@ -686,7 +690,7 @@ export function CandidatesPage() {
                             </td>
                             {/* Dynamic columns */}
                             {orderedVisible.map(key=>{
-                              if (key==='stage') return <td key="stage" className="px-3 py-2.5"><StageCell cid={c.id} value={c.current_stage} canEdit={canEdit} onUpdate={onUpdate}/></td>
+                              if (key==='stage') return <td key="stage" className="px-3 py-2.5"><StageCell cid={c.id} value={c.current_stage} canEdit={canEdit} onUpdate={onUpdate} stages={STAGES}/></td>
                               if (key==='job') return <td key="job" className="px-3 py-2.5"><SelectCell cid={c.id} field="job_id" display={c.job?.title ?? getName(jobs as any[],c.job_id)} canEdit={canAssign} onUpdate={onUpdate} options={(jobs as any[]).map(j=>({label:j.title,value:j.id}))}/></td>
                               if (key==='source') return <td key="source" className="px-3 py-2.5 text-xs text-gray-500 capitalize">{c.source_category??'—'}</td>
                               if (key==='subsource') return <td key="subsource" className="px-3 py-2.5 text-xs text-gray-500">{c.source_name??'—'}</td>
