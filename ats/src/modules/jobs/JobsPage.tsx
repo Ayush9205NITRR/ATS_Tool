@@ -336,18 +336,11 @@ export function JobsPage() {
 
                   {/* Actions */}
                   <div className="flex items-center gap-2 flex-shrink-0">
-                    {/* Agency visibility toggle — super admin only */}
-                    {hasRole(['super_admin']) && (
-                      <button
-                        onClick={() => jobService.update(job.id, { show_to_agency: !job.show_to_agency } as any).then(() => qc.invalidateQueries({queryKey:['jobs']}))}
-                        title={job.show_to_agency ? 'Visible to agencies — click to hide' : 'Hidden from agencies — click to show'}
-                        className={`flex items-center gap-1 text-xs px-2 py-1 rounded-lg border transition-colors ${
-                          job.show_to_agency
-                            ? 'bg-purple-50 text-purple-700 border-purple-200'
-                            : 'bg-gray-50 text-gray-400 border-gray-200 hover:border-purple-200 hover:text-purple-500'
-                        }`}>
-                        🏢 {job.show_to_agency ? 'Agency: On' : 'Agency: Off'}
-                      </button>
+                    {/* Agency visibility — read-only badge, edit via pencil */}
+                    {job.show_to_agency && (
+                      <span className="flex items-center gap-1 text-xs px-2 py-1 rounded-lg bg-purple-50 text-purple-700 border border-purple-100">
+                        🏢 {(job.allowed_agency_ids?.length > 0) ? `${job.allowed_agency_ids.length} agenc${job.allowed_agency_ids.length > 1 ? 'ies' : 'y'}` : 'All agencies'}
+                      </span>
                     )}
                     {canEdit && (
                       <button onClick={()=>setEditJob(job)}
