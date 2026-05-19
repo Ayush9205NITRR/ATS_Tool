@@ -244,6 +244,7 @@ export function CandidatesPage() {
   const canAssign   = hasRole(['admin','super_admin'])
   const canAssignHR = hasRole(['admin','super_admin'])
   const isSuperAdmin = hasRole(['super_admin'])
+  const isAgency    = hasRole(['agency'])
 
   const { stageConfigs = [], STAGES } = (() => {
     const { data } = useQuery({
@@ -736,9 +737,11 @@ export function CandidatesPage() {
                                     <Calendar className="w-3.5 h-3.5"/>
                                   </ActionBtn>
                                 )}
-                                <ActionBtn onClick={()=>archiveOne.mutate({id:c.id,archive:!c.archived_at})} title={c.archived_at?'Unarchive':'Archive'}>
-                                  <Archive className="w-3.5 h-3.5"/>
-                                </ActionBtn>
+                                {canEdit && !isAgency && (
+                                  <ActionBtn onClick={()=>archiveOne.mutate({id:c.id,archive:!c.archived_at})} title={c.archived_at?'Unarchive':'Archive'}>
+                                    <Archive className="w-3.5 h-3.5"/>
+                                  </ActionBtn>
+                                )}
                                 {isSuperAdmin&&(
                                   <ActionBtn onClick={()=>setConfirmDelete(c.id)} title="Delete permanently" danger>
                                     <Trash2 className="w-3.5 h-3.5"/>
