@@ -355,7 +355,12 @@ export function CandidateProfilePage() {
       <div className="flex items-start justify-between gap-4 mb-5 flex-wrap">
         <div>
           <h1 className="text-xl font-semibold text-gray-900">{candidate.full_name}</h1>
-          <p className="text-sm text-gray-400 mt-0.5">{candidate.source_name} · {labelOf(candidate.source_category)}</p>
+          <p className="text-sm text-gray-400 mt-0.5">
+            {(candidate as any).agency?.name
+              ? <span>🏢 {(candidate as any).agency.name}</span>
+              : `${candidate.source_name} · ${labelOf(candidate.source_category)}`
+            }
+          </p>
         </div>
         <div className="relative">
           {canEdit && !isAgency ? (
@@ -759,9 +764,9 @@ export function CandidateProfilePage() {
           {isAgency && (
             <div className="bg-blue-50/40 rounded-xl border border-blue-100 px-5 py-4">
               <p className="text-sm font-semibold text-gray-700 mb-2">HR Feedback / Remarks</p>
-              {(candidate as any).agency_feedback ? (
+              {(candidate as any).agency_notes ? (
                 <p className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">
-                  {(candidate as any).agency_feedback}
+                  {(candidate as any).agency_notes}
                 </p>
               ) : (
                 <p className="text-xs text-gray-400 italic">
@@ -775,7 +780,7 @@ export function CandidateProfilePage() {
           {!isAgency && !isInterviewer && (candidate as any).agency_id && (
             <AgencyFeedbackEditor
               candidateId={candidate.id}
-              currentFeedback={(candidate as any).agency_feedback ?? ''}
+              currentFeedback={(candidate as any).agency_notes ?? ''}
               canEdit={canEdit}
             />
           )}
@@ -835,7 +840,7 @@ function AgencyFeedbackEditor({ candidateId, currentFeedback, canEdit }: {
 
   const save = async () => {
     setSaving(true)
-    await supabase.from('candidates').update({ agency_feedback: text }).eq('id', candidateId)
+    await supabase.from('candidates').update({ agency_notes: text }).eq('id', candidateId)
     qc.invalidateQueries({ queryKey: ['candidate', candidateId] })
     setSaving(false); setSaved(true); setTimeout(() => setSaved(false), 2000)
   }
