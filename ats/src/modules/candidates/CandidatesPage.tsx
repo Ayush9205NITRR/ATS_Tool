@@ -30,7 +30,6 @@ import { INTERVIEW_STAGES } from '../../types/database.types'
 import { formatDate, formatDateTime } from '../../shared/utils/helpers'
 import { ScheduleInterviewModal } from './ScheduleInterviewModal'
 import { SendEmailModal } from './SendEmailModal'
-import { useStages } from '../../shared/hooks/useStages'
 // ── Stage colours ─────────────────────────────────────────────
 const STAGE_PILL: Record<string,string> = {
   Applied:'bg-gray-100 text-gray-600', Screening:'bg-blue-50 text-blue-700',
@@ -242,8 +241,22 @@ export function CandidatesPage() {
   const canAssignHR = hasRole(['admin','super_admin'])
   const isSuperAdmin = hasRole(['super_admin'])
 
-  const { stageConfigs } = useStages()
-  const STAGES = stageConfigs.map(s => s.name)
+  const { stageConfigs = [], STAGES } = (() => {
+    const { data } = useQuery({
+      queryKey: ['app-settings','pipeline_stages'],
+      queryFn: async () => {
+        const { data } = await supabase.from('app_settings').select('value').eq('key','pipeline_stages').maybeSingle()
+        if (!data?.value) return []
+        try { const p = JSON.parse(data.value); return Array.isArray(p) ? p : [] } catch { return [] }
+      },
+      staleTime: 30_000,
+    })
+    const configs = (data ?? []) as any[]
+    const names = configs.length
+      ? configs.map((s: any) => typeof s === 'string' ? s : s.name)
+      : [...INTERVIEW_STAGES]
+    return { stageConfigs: configs, STAGES: names }
+  })()
 
   const [serverFilters, setServerFilters] = useState<CandidateFilters>({})
   const [search, setSearch]         = useState('')
