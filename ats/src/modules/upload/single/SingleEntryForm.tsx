@@ -10,7 +10,7 @@ import { useAuthStore } from '../../auth/authStore'
 import { useDuplicateCheck } from '../../../shared/hooks/useDuplicateCheck'
 import { DuplicateWarning } from '../../../shared/components/DuplicateWarning'
 import { Button } from '../../../shared/components/Button'
-import { SubSourceField } from '../../../shared/components/SubSourceField'
+import { SourceDropdown } from '../../../shared/components/SourceDropdown'
 import { supabase } from '../../../lib/supabaseClient'
 
 const schema = z.object({
@@ -43,7 +43,9 @@ export function SingleEntryForm({ onSuccess }: { onSuccess?: () => void }) {
   const qc = useQueryClient()
   const navigate = useNavigate()
   const [done, setDone] = useState(false)
-  const [subSource, setSubSource] = useState('')
+  const [source, setSource] = useState<{ category: string; name: string }>(
+    isAgency ? { category: 'agency', name: user?.full_name ?? '' } : { category: 'platform', name: '' }
+  )
   const [customValues, setCustomValues] = useState<Record<string,any>>({})
   const { duplicates, checking, check, reset: resetDup } = useDuplicateCheck()
 
@@ -72,16 +74,7 @@ export function SingleEntryForm({ onSuccess }: { onSuccess?: () => void }) {
 
   const watchEmail  = watch('email')
   const watchPhone  = watch('phone')
-  const watchSource = watch('source_category')
-
-  // Reset sub-source when source type changes
-  useEffect(() => { setSubSource('') }, [watchSource])
   useEffect(() => { check(watchEmail ?? '', watchPhone ?? '') }, [watchEmail, watchPhone])
-
-  // Agency: auto-set source_name to their own name
-  useEffect(() => {
-    if (isAgency && user?.full_name) setSubSource(user.full_name)
-  }, [isAgency, user?.full_name])
 
   const mutation = useMutation({
     mutationFn: async (data: FormData) => {
@@ -90,8 +83,8 @@ export function SingleEntryForm({ onSuccess }: { onSuccess?: () => void }) {
         email:                data.email,
         phone:                data.phone?.replace(/\D/g,'').slice(0,10) || null,
         job_id:               data.job_id || null,
-        source_category:      isAgency ? 'agency' : data.source_category,
-        source_name:          subSource || (isAgency ? user?.full_name ?? '' : ''),
+        source_category:      isAgency ? 'agency' : source.category,
+        source_name:          isAgency ? (user?.full_name ?? '') : source.name,
         resume_url:           data.resume_url || null,
         linkedin_url:         data.linkedin_url || null,
         notes:                data.notes || null,
@@ -112,7 +105,9 @@ export function SingleEntryForm({ onSuccess }: { onSuccess?: () => void }) {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['candidates'] })
       qc.invalidateQueries({ queryKey: ['widget'] })
-      setDone(true); resetDup(); resetForm(); setSubSource(isAgency ? user?.full_name ?? '' : ''); setCustomValues({})
+      setDone(true); resetDup(); resetForm()
+      setSource(isAgency ? { category: 'agency', name: user?.full_name ?? '' } : { category: 'platform', name: '' })
+      setCustomValues({})
       setTimeout(() => { setDone(false); onSuccess?.() }, 2000)
     },
   })
@@ -158,33 +153,18 @@ export function SingleEntryForm({ onSuccess }: { onSuccess?: () => void }) {
           )}
         </Field>
 
-        {/* Source — hidden for agency (auto = Agency) */}
-        {!isAgency && (
-          <Field label="Source Type *" error={errors.source_category?.message}>
-            <select {...register('source_category')} className={inputCls}>
-              <option value="platform">Platform</option>
-              <option value="agency">Agency</option>
-              <option value="college">College</option>
-            </select>
+        {/* Source — single combined dropdown (agency/platform/college + sub-source in one) */}
+        {!isAgency ? (
+          <Field label="Source *" className="sm:col-span-2">
+            <SourceDropdown value={source} onChange={setSource}/>
+            {!source.name && <p className="mt-1 text-xs text-amber-600">Select a source</p>}
+          </Field>
+        ) : (
+          <Field label="Agency" className="sm:col-span-1">
+            <input value={user?.full_name ?? ''} disabled
+              className="w-full px-3 py-2 border border-purple-200 rounded-lg text-sm bg-purple-50 text-purple-700 font-medium"/>
           </Field>
         )}
-
-        {/* Sub-Source — always a dropdown (type-aware) */}
-        <Field
-          label={isAgency ? 'Agency Name' : 'Sub-Source *'}
-          error={errors.source_name?.message}
-          className={isAgency ? 'sm:col-span-1' : ''}
-        >
-          {isAgency ? (
-            // Agency: show their own name, read-only
-            <input value={user?.full_name ?? ''} disabled className={`${inputCls} bg-purple-50 text-purple-700 font-medium`}/>
-          ) : (
-            <SubSourceField
-              sourceCategory={watchSource}
-              value={subSource}
-              onChange={setSubSource}/>
-          )}
-        </Field>
 
         <Field label="Resume URL" error={errors.resume_url?.message} className="sm:col-span-2">
           <input {...register('resume_url')} placeholder="https://drive.google.com/file/d/…" className={inputCls}/>
