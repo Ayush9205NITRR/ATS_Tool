@@ -95,10 +95,14 @@ const StageCell = memo(({ cid, value, canEdit, onUpdate, stages, stageConfigs }:
   stages:string[]; stageConfigs:{name:string;color:string;textColor:string}[]
 }) => {
   const cfg = stageConfigs.find(s=>s.name===value)
-  const pillCls = cfg ? `${cfg.color} ${cfg.textColor}` : 'bg-gray-100 text-gray-600'
-  const pill = <span className={`inline-flex items-center gap-0.5 text-xs px-2.5 py-1 rounded-md font-medium ${canEdit?'cursor-pointer hover:opacity-80':''} ${pillCls}`}>
-    {value}{canEdit&&<ChevronDown className="w-3 h-3 opacity-40 ml-0.5"/>}
-  </span>
+  const pillCls = cfg ? `${cfg.color} ${cfg.textColor}` : (STAGE_PILL[value] ?? 'bg-gray-100 text-gray-600')
+  const dotCls  = cfg ? cfg.color.replace('bg-','bg-').replace('-100','-400').replace('-50','-400') : (STAGE_BAR[value] ?? 'bg-gray-300')
+  const pill = (
+    <span className={`inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-md font-medium ${canEdit?'cursor-pointer hover:opacity-80':''} ${pillCls}`}>
+      <span className={`w-2 h-2 rounded-full flex-shrink-0 ${dotCls}`}/>
+      {value}{canEdit&&<ChevronDown className="w-3 h-3 opacity-40 ml-0.5"/>}
+    </span>
+  )
   if (!canEdit) return pill
   return (
     <Popup trigger={pill}>
