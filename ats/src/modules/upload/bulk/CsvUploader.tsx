@@ -1,525 +1,228 @@
-import { useState, useCallback } from 'react'
-import { useMutation, useQueryClient, useQuery } from '@tanstack/react-query'
-import { Upload, CheckCircle, AlertTriangle, ChevronRight, Sparkles, X } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { useForm } from 'react-hook-form'
+import { zodResolver } from '@hookform/resolvers/zod'
+import { z } from 'zod'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useNavigate } from 'react-router-dom'
+import { CheckCircle } from 'lucide-react'
 import { candidateService } from '../../candidates/candidateService'
 import { useAuthStore } from '../../auth/authStore'
+import { useDuplicateCheck } from '../../../shared/hooks/useDuplicateCheck'
+import { DuplicateWarning } from '../../../shared/components/DuplicateWarning'
 import { Button } from '../../../shared/components/Button'
 import { supabase } from '../../../lib/supabaseClient'
-import type { SourceCategory } from '../../../types/database.types'
 
-type Step = 1 | 2 | 3 | 4
+// Schema — source fields optional for agency (auto-filled)
+const schema = z.object({
+  full_name:       z.string().min(1, 'Name required'),
+  email:           z.string().email('Valid email required').transform(v => v.trim().toLowerCase()),
+  phone:           z.string()
+    .refine(v => !v?.trim() || v.replace(/\D/g,'').length === 10, '10 digits required')
+    .transform(v => v ? v.replace(/\D/g,'').slice(0,10) || undefined : undefined)
+    .optional(),
+  job_id:          z.string().optional(),
+  source_category: z.enum(['platform','agency','college']).optional(),
+  source_name:     z.string().optional(),
+  resume_url:      z.string().url('Enter valid URL').optional().or(z.literal('')),
+  linkedin_url:    z.string().url('Enter valid URL').optional().or(z.literal('')),
+  notes:           z.string().optional(),
+})
+type FormData = z.infer<typeof schema>
 
-// ── CSV Parser ────────────────────────────────────────────────
-function parseCSVRobust(text: string): Record<string, string>[] {
-  const lines: string[] = []
-  let current = '', inQuotes = false
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i]
-    if (ch === '"') { inQuotes = !inQuotes }
-    else if ((ch === '\n' || ch === '\r') && !inQuotes) {
-      if (current.trim()) lines.push(current)
-      current = ''
-      if (ch === '\r' && text[i+1] === '\n') i++
-      continue
-    }
-    current += ch
-  }
-  if (current.trim()) lines.push(current)
+const inputCls = 'w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white'
+const Field = ({ label, error, children, className }: { label:string; error?:string; children:React.ReactNode; className?:string }) => (
+  <div className={className}>
+    <label className="block text-sm font-medium text-gray-700 mb-1">{label}</label>
+    {children}
+    {error && <p className="mt-1 text-xs text-red-600">{error}</p>}
+  </div>
+)
 
-  const parseRow = (line: string): string[] => {
-    const fields: string[] = []
-    let field = '', inQ = false
-    for (let i = 0; i < line.length; i++) {
-      const ch = line[i]
-      if (ch === '"') { if (inQ && line[i+1] === '"') { field += '"'; i++ } else inQ = !inQ }
-      else if (ch === ',' && !inQ) { fields.push(field.trim()); field = '' }
-      else field += ch
-    }
-    fields.push(field.trim())
-    return fields
-  }
-
-  if (lines.length < 2) return []
-  const headers = parseRow(lines[0])
-  return lines.slice(1).map(line => {
-    const vals = parseRow(line)
-    return Object.fromEntries(headers.map((h, i) => [h.trim(), (vals[i] ?? '').trim()]))
-  })
-}
-
-function extractUrl(text: string): string | null {
-  if (!text) return null
-  const m = text.match(/\(https?:\/\/[^)]+\)/)
-  if (m) return m[0].slice(1, -1)
-  const u = text.match(/https?:\/\/[^\s,)]+/)
-  return u ? u[0] : null
-}
-
-function normalizeSource(raw: string): SourceCategory {
-  const v = (raw ?? '').toLowerCase()
-  if (v.includes('college') || v.includes('university') || v.includes('campus') || v.includes('institute')) return 'college'
-  if (v.includes('agency') || v.includes('consultant') || v.includes('recruiter')) return 'agency'
-  return 'platform'
-}
-
-function normalizePhone(raw: string): string | null {
-  if (!raw) return null
-  const d = raw.replace(/\D/g, '')
-  if (d.length === 10) return d
-  if (d.length === 12 && d.startsWith('91')) return d.slice(2)
-  if (d.length === 11 && d.startsWith('0')) return d.slice(1)
-  if (d.length > 10) return d.slice(-10)
-  return null // discard invalid phones
-}
-
-interface ColumnMap {
-  full_name: string; email: string; phone: string; linkedin: string
-  source: string; source_name: string; resume: string; notes: string; college: string
-}
-
-function autoDetectColumns(headers: string[]): Partial<ColumnMap> {
-  const find = (...patterns: string[]) =>
-    headers.find(h => patterns.some(p => h.toLowerCase().includes(p.toLowerCase()))) ?? ''
-  return {
-    full_name:   find('full name', 'name', 'candidate'),
-    email:       find('email', 'mail'),
-    phone:       find('phone', 'mobile', 'contact'),
-    linkedin:    find('linkedin', 'profile'),
-    source:      find('source'),
-    source_name: find('college/university', 'college', 'university', 'institution', 'agency'),
-    resume:      find('resume', 'cv'),
-    notes:       find('tell us', 'about yourself', 'summary', 'note', 'why'),
-    college:     find('college/university', 'university name', 'institute'),
-  }
-}
-
-function transformRow(
-  row: Record<string, string>,
-  colMap: Partial<ColumnMap>,
-  customFieldMap: Record<string, string>,
-  userId: string,
-  jobId: string | null
-): any {
-  const get = (key: keyof ColumnMap) => colMap[key] ? (row[colMap[key]!] ?? '') : ''
-  const sourceName = get('college') || get('source_name') || get('source') || 'Unknown'
-  const resumeUrl = extractUrl(get('resume'))
-
-  const custom_data: Record<string, string> = {}
-  for (const [fieldName, csvHeader] of Object.entries(customFieldMap)) {
-    if (csvHeader && row[csvHeader] !== undefined && row[csvHeader] !== '') {
-      custom_data[fieldName] = row[csvHeader].trim()
-    }
-  }
-
-  return {
-    full_name:             get('full_name').trim(),
-    email:                 get('email').trim().toLowerCase(),  // normalize
-    phone:                 normalizePhone(get('phone')),
-    linkedin_url:          extractUrl(get('linkedin')) || (get('linkedin').startsWith('http') ? get('linkedin') : null),
-    resume_url:            resumeUrl,
-    source_category:       normalizeSource(get('source') || 'college'),
-    source_name:           sourceName.trim() || 'Unknown',
-    notes:                 get('notes').slice(0, 500) || null,
-    current_stage:         'Applied',
-    status:                'active' as const,
-    tags:                  [],
-    assigned_interviewers: [],
-    job_id:                jobId || null,
-    hr_owner:              null,
-    screening_notes:       null,
-    interview_notes:       {},
-    custom_data,
-    uploaded_by:           userId,
-  }
-}
-
-interface DupInfo {
-  email?: string   // existing candidate name matched by email
-  phone?: string   // existing candidate name matched by phone
-}
-
-export function CsvUploader() {
+export function SingleEntryForm({ onSuccess }: { onSuccess?: () => void }) {
   const { user, hasRole } = useAuthStore()
   const isAgency = hasRole(['agency'])
   const qc = useQueryClient()
+  const navigate = useNavigate()
+  const [done, setDone] = useState(false)
+  const [customValues, setCustomValues] = useState<Record<string,any>>({})
+  const { duplicates, checking, check, reset: resetDup } = useDuplicateCheck()
 
-  const [step, setStep]           = useState<Step>(1)
-  const [rows, setRows]           = useState<Record<string, string>[]>([])
-  const [headers, setHeaders]     = useState<string[]>([])
-  const [colMap, setColMap]       = useState<Partial<ColumnMap>>({})
-  const [customFieldMap, setCustomFieldMap] = useState<Record<string, string>>({})
-  const [selectedJobId, setSelectedJobId]   = useState<string>('')
-  const [fileErr, setFileErr]     = useState('')
-  const [isAirtable, setIsAirtable] = useState(false)
-  const [transformed, setTransformed] = useState<any[]>([])
-  // Map: email|phone:value -> existing candidate name
-  const [dupMap, setDupMap] = useState<Record<string, string>>({})
-  // Which rows to SKIP (user can dismiss duplicates)
-  const [skippedDups, setSkippedDups] = useState<Set<number>>(new Set())
-
+  // Jobs — agency sees only show_to_agency=true jobs
   const { data: jobs = [] } = useQuery({
-    queryKey: ['jobs', 'open'],
-    queryFn: async () => { const { data } = await supabase.from('jobs').select('id,title').eq('status','open').order('title'); return data ?? [] },
+    queryKey: ['jobs', 'open', isAgency ? 'agency' : 'all'],
+    queryFn: async () => {
+      let q = supabase.from('jobs').select('id,title').eq('status','open').order('title')
+      if (isAgency) q = q.eq('show_to_agency', true)
+      const { data } = await q
+      return data ?? []
+    },
   })
 
   const { data: customFields = [] } = useQuery({
     queryKey: ['custom-fields'],
-    queryFn: async () => { const { data } = await supabase.from('custom_fields').select('*').eq('is_active',true).order('sort_order'); return (data ?? []) as any[] },
+    queryFn: async () => {
+      const { data } = await supabase.from('custom_fields').select('*').eq('is_active',true).order('sort_order')
+      return data ?? []
+    },
   })
+
+  const { register, handleSubmit, reset: resetForm, watch, formState: { errors } } = useForm<FormData>({
+    resolver: zodResolver(schema),
+    defaultValues: { source_category: isAgency ? 'agency' : 'platform' },
+  })
+
+  const watchEmail = watch('email')
+  const watchPhone = watch('phone')
+  useEffect(() => { check(watchEmail ?? '', watchPhone ?? '') }, [watchEmail, watchPhone])
 
   const mutation = useMutation({
-    mutationFn: (payload: any[]) => candidateService.bulkCreate(payload, user?.role, user?.id),
-    onSuccess: () => { qc.invalidateQueries({queryKey:['candidates']}); setStep(4) },
+    mutationFn: (data: FormData) => candidateService.create({
+      full_name:            data.full_name,
+      email:                data.email,
+      phone:                data.phone || null,
+      job_id:               data.job_id || null,
+      source_category:      isAgency ? 'agency' : (data.source_category ?? 'platform'),
+      source_name:          isAgency ? (user?.full_name ?? 'Agency') : (data.source_name ?? ''),
+      resume_url:           data.resume_url || null,
+      linkedin_url:         data.linkedin_url || null,
+      notes:                data.notes || null,
+      current_stage:        'Applied',
+      status:               'active',
+      tags:                 [],
+      assigned_interviewers:[],
+      hr_owner:             null,
+      screening_notes:      null,
+      interview_notes:      {},
+      custom_data:          customValues,
+      uploaded_by:          user!.id,
+    } as any, user?.role, user?.id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['candidates'] })
+      qc.invalidateQueries({ queryKey: ['widget'] })
+      setDone(true); resetDup(); resetForm(); setCustomValues({})
+      setTimeout(() => { setDone(false); onSuccess?.() }, 2000)
+    },
   })
 
-  const onFile = useCallback((file: File) => {
-    const reader = new FileReader()
-    reader.onload = e => {
-      const text = e.target?.result as string
-      const parsed = parseCSVRobust(text)
-      if (!parsed.length) { setFileErr('CSV empty or invalid.'); return }
-      const hdrs = Object.keys(parsed[0])
-      const isAt = hdrs.some(h => h.includes('Airtable') || h.includes('CGPA') || h.includes('relocat'))
-      setIsAirtable(isAt)
-      setRows(parsed); setHeaders(hdrs)
-      setColMap(autoDetectColumns(hdrs))
-      setCustomFieldMap({})
-      setFileErr(''); setStep(2)
-    }
-    reader.readAsText(file)
-  }, [])
-
-  const onDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault()
-    const file = e.dataTransfer.files[0]
-    if (file?.name.endsWith('.csv') || file?.type === 'text/csv') onFile(file)
-    else setFileErr('Please upload a .csv file.')
-  }, [onFile])
-
-  const preview = async () => {
-    const result = rows.map(r => transformRow(r, colMap, customFieldMap, user!.id, selectedJobId || null))
-    setTransformed(result)
-
-    // ── Dedup check — ALL rows, batched to avoid Supabase URL limit ──
-    const emails = [...new Set(result.filter(r => r.email).map(r => (r.email as string).trim().toLowerCase()))]
-    const phones = [...new Set(result.filter(r => r.phone).map(r => (r.phone as string).replace(/\D/g,'').slice(-10)).filter(p => p.length === 10))]
-
-    const map: Record<string, string> = {}
-
-    if (emails.length || phones.length) {
-      // Batch in groups of 20 to stay under URL limits
-      const BATCH = 20
-      for (let i = 0; i < Math.max(emails.length, phones.length); i += BATCH) {
-        const batchEmails = emails.slice(i, i + BATCH)
-        const batchPhones = phones.slice(i, i + BATCH)
-        const filters: string[] = []
-        batchEmails.forEach(e => filters.push(`email.ilike.${e}`))
-        batchPhones.forEach(p => filters.push(`phone.eq.${p}`))
-        if (!filters.length) continue
-
-        const { data } = await supabase
-          .from('candidates').select('full_name,email,phone')
-          .eq('status', 'active')
-          .or(filters.join(','))
-          .limit(200)
-
-        data?.forEach((ex: any) => {
-          if (ex.email) map[`email:${ex.email.toLowerCase().trim()}`] = ex.full_name
-          if (ex.phone) {
-            const p = ex.phone.replace(/\D/g,'').slice(-10)
-            if (p.length === 10) map[`phone:${p}`] = ex.full_name
-          }
-        })
-      }
-    }
-
-    setDupMap(map)
-    setStep(3)
-  }
-
-  const getDup = (r: any): DupInfo => {
-    const info: DupInfo = {}
-    if (r.email && dupMap[`email:${r.email.toLowerCase()}`]) info.email = dupMap[`email:${r.email.toLowerCase()}`]
-    if (r.phone) {
-      const p = r.phone.replace(/\D/g,'').slice(-10)
-      if (dupMap[`phone:${p}`]) info.phone = dupMap[`phone:${p}`]
-    }
-    return info
-  }
-
-  // Duplicates are ALWAYS blocked — not skippable by user
-  const dupIndexes = new Set(
-    transformed.map((r, i) => {
-      const dup = getDup(r)
-      return (dup.email || dup.phone) ? i : -1
-    }).filter(i => i >= 0)
-  )
-  const valid   = transformed.filter((r, i) => r.full_name && r.email && !dupIndexes.has(i))
-  const invalid = transformed.filter(r => !r.full_name || !r.email)
-  const dupRows = transformed.map((r, i) => ({ r, i, dup: getDup(r) })).filter(x => (x.dup.email || x.dup.phone) && x.r.full_name && x.r.email)
-
-  // ─── Step 1 ───────────────────────────────────────────────
-  if (step === 1) return (
-    <div>
-      <div onDrop={onDrop} onDragOver={e=>e.preventDefault()}
-        onClick={()=>document.getElementById('csv-inp')?.click()}
-        className="border-2 border-dashed border-gray-200 rounded-xl p-12 text-center hover:border-blue-400 transition-colors cursor-pointer bg-gray-50/50 hover:bg-blue-50/20">
-        <Upload className="w-8 h-8 text-gray-400 mx-auto mb-3"/>
-        <p className="text-sm font-semibold text-gray-700 mb-1">Drop your CSV here or click to browse</p>
-        <p className="text-xs text-gray-400">Supports Airtable exports, LinkedIn exports, and custom CSVs</p>
-        <input type="file" accept=".csv" id="csv-inp" className="hidden" onChange={e=>{const f=e.target.files?.[0];if(f)onFile(f)}}/>
-      </div>
-      {fileErr && <p className="mt-3 text-sm text-red-600 flex items-center gap-1"><AlertTriangle className="w-4 h-4"/>{fileErr}</p>}
-      <div className="mt-4 grid grid-cols-3 gap-3 text-center">
-        {[['✅','Airtable exports','Auto-detected'],['✅','LinkedIn CSV','Auto-detected'],['✅','Custom CSV','Column mapper']].map(([icon,title,sub])=>(
-          <div key={title} className="bg-gray-50 rounded-lg p-3">
-            <p className="text-lg mb-1">{icon}</p>
-            <p className="text-xs font-semibold text-gray-700">{title}</p>
-            <p className="text-xs text-gray-400">{sub}</p>
-          </div>
-        ))}
-      </div>
+  if (done) return (
+    <div className="flex flex-col items-center gap-3 py-12">
+      <CheckCircle className="w-10 h-10 text-green-500"/>
+      <p className="text-lg font-semibold text-gray-900">Candidate added!</p>
+      <Button variant="secondary" onClick={() => navigate('/candidates')}>View candidates</Button>
     </div>
   )
 
-  // ─── Step 2: Map ──────────────────────────────────────────
-  if (step === 2) {
-    const selectCls = (mapped: boolean) =>
-      `flex-1 px-3 py-1.5 border rounded-lg text-xs bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 ${mapped ? 'border-green-300 bg-green-50/50' : 'border-gray-200'}`
+  return (
+    <form onSubmit={handleSubmit(d => {
+      if (duplicates.length > 0) return
+      mutation.mutate(d)
+    })} className="space-y-4">
 
-    return (
-      <div>
-        <Breadcrumb step={2} total={rows.length} onBack={()=>setStep(1)}/>
-
-        {isAirtable && (
-          <div className="flex items-center gap-2 bg-blue-50 border border-blue-200 rounded-xl px-4 py-3 mb-4">
-            <Sparkles className="w-4 h-4 text-blue-500 flex-shrink-0"/>
-            <p className="text-sm text-blue-700"><strong>Airtable format detected!</strong> Columns auto-mapped. Verify and click Preview.</p>
-          </div>
-        )}
-
-        {/* Job assignment */}
-        <div className="flex items-center gap-3 mb-4 p-3 bg-gray-50 rounded-lg">
-          <span className="text-xs text-gray-600 w-36 flex-shrink-0">Assign to Job</span>
-          <select value={selectedJobId} onChange={e=>setSelectedJobId(e.target.value)}
-            className="flex-1 px-3 py-1.5 border border-gray-200 rounded-lg text-xs bg-white focus:outline-none">
-            <option value="">— No job —</option>
-            {(jobs as any[]).map(j=><option key={j.id} value={j.id}>{j.title}</option>)}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <Field label="Full Name *" error={errors.full_name?.message}>
+          <input {...register('full_name')} placeholder="Priya Sharma" className={inputCls}/>
+        </Field>
+        <Field label="Email *" error={errors.email?.message}>
+          <input {...register('email')} type="email" placeholder="priya@example.com" className={inputCls}/>
+        </Field>
+        <Field label="Phone" error={errors.phone?.message}>
+          <input {...register('phone')} placeholder="10-digit number" maxLength={10}
+            onInput={e => { (e.target as HTMLInputElement).value = (e.target as HTMLInputElement).value.replace(/\D/g,'').slice(0,10) }}
+            className={inputCls}/>
+        </Field>
+        <Field label="Job Opening" error={errors.job_id?.message}>
+          <select {...register('job_id')} className={inputCls}>
+            <option value="">Select job (optional)</option>
+            {(jobs as any[]).map(j => <option key={j.id} value={j.id}>{j.title}</option>)}
           </select>
-        </div>
-
-        {/* Standard fields */}
-        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Standard Fields</p>
-        <div className="space-y-2 mb-5">
-          {/* Agency: show badge, hide source */}
-          {isAgency && (
-            <div className="flex items-center gap-3 bg-purple-50 border border-purple-200 rounded-lg px-3 py-2">
-              <span className="text-xs text-purple-700 font-medium">🏢 Source auto-set to Agency for all uploaded candidates</span>
-            </div>
+          {isAgency && (jobs as any[]).length === 0 && (
+            <p className="mt-1 text-xs text-amber-600">No job openings available at this time.</p>
           )}
-          {([
-            ['full_name','Full Name *'],['email','Email *'],['phone','Phone'],
-            ['linkedin','LinkedIn URL'],
-            ...(!isAgency ? [['source','Source Type'],['source_name','Source / College']] as [keyof ColumnMap, string][] : []),
-            ['resume','Resume / CV'],['notes','Notes'],
-          ] as [keyof ColumnMap, string][]).map(([key,label])=>(
-            <div key={key} className="flex items-center gap-3">
-              <span className="text-gray-600 w-36 flex-shrink-0 text-xs">{label}</span>
-              <select value={colMap[key]??''} onChange={e=>setColMap(p=>({...p,[key]:e.target.value}))}
-                className={selectCls(!!colMap[key])}>
-                <option value="">— skip —</option>
-                {headers.map(h=><option key={h} value={h}>{h}</option>)}
-              </select>
-              {colMap[key] && <CheckCircle className="w-4 h-4 text-green-500 flex-shrink-0"/>}
-            </div>
-          ))}
-        </div>
+        </Field>
 
-        {/* Custom fields */}
-        {(customFields as any[]).length > 0 && (
+        {/* Source — hidden for agency */}
+        {!isAgency && (
           <>
-            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
-              Custom Fields
-              <span className="ml-1 text-gray-400 normal-case font-normal">— map if your CSV has these columns</span>
-            </p>
-            <div className="space-y-2 mb-5 bg-blue-50/30 rounded-lg p-3">
-              {(customFields as any[]).map(field => (
-                <div key={field.id} className="flex items-center gap-3">
-                  <div className="w-36 flex-shrink-0">
-                    <p className="text-xs text-gray-700">{field.field_label}</p>
-                    <p className="text-xs text-gray-400 font-mono">{field.field_name}</p>
-                  </div>
-                  <select
-                    value={customFieldMap[field.field_name] ?? ''}
-                    onChange={e => setCustomFieldMap(p => ({ ...p, [field.field_name]: e.target.value }))}
-                    className={selectCls(!!customFieldMap[field.field_name])}>
-                    <option value="">— skip —</option>
-                    {headers.map(h=><option key={h} value={h}>{h}</option>)}
-                  </select>
-                  {customFieldMap[field.field_name] && <CheckCircle className="w-4 h-4 text-blue-500 flex-shrink-0"/>}
-                </div>
-              ))}
-            </div>
+            <Field label="Source Type *" error={errors.source_category?.message}>
+              <select {...register('source_category')} className={inputCls}>
+                <option value="platform">Platform (LinkedIn, Naukri…)</option>
+                <option value="agency">Agency</option>
+                <option value="college">College</option>
+              </select>
+            </Field>
+            <Field label="Source Name *" error={errors.source_name?.message}>
+              <input {...register('source_name')} placeholder="LinkedIn / IIT Delhi / ABC Consultants" className={inputCls}/>
+            </Field>
           </>
         )}
 
-        <div className="flex justify-end">
-          <Button onClick={preview} icon={<ChevronRight className="w-4 h-4"/>}>Preview {rows.length} rows</Button>
-        </div>
+        {/* Sub-source for agency — which platform/channel they used */}
+        {isAgency && (
+          <Field label="Sub-Source" error={errors.source_name?.message} className="sm:col-span-2">
+            <input {...register('source_name')} placeholder="e.g. Naukri, LinkedIn, Internal database…" className={inputCls}/>
+            <p className="mt-1 text-xs text-gray-400">Where did you find this candidate?</p>
+          </Field>
+        )}
+
+        <Field label="Resume URL" error={errors.resume_url?.message} className="sm:col-span-2">
+          <input {...register('resume_url')} placeholder="https://drive.google.com/file/d/…" className={inputCls}/>
+        </Field>
+        <Field label="LinkedIn URL" error={errors.linkedin_url?.message} className="sm:col-span-2">
+          <input {...register('linkedin_url')} placeholder="https://linkedin.com/in/…" className={inputCls}/>
+        </Field>
+        <Field label="Notes" className="sm:col-span-2">
+          <textarea {...register('notes')} rows={3} placeholder="Any initial notes…" className={inputCls}/>
+        </Field>
       </div>
-    )
-  }
 
-  // ─── Step 3: Preview ──────────────────────────────────────
-  if (step === 3) {
-    const mappedCustom = (customFields as any[]).filter(f => customFieldMap[f.field_name])
-
-    return (
-      <div>
-        <Breadcrumb step={3} total={rows.length} onBack={()=>setStep(2)}/>
-
-        {/* Summary stats */}
-        <div className="grid grid-cols-3 gap-3 my-4">
-          <div className="bg-green-50 rounded-xl p-3 text-center">
-            <p className="text-2xl font-bold text-green-700">{valid.length}</p>
-            <p className="text-xs text-green-600">Will be uploaded</p>
-          </div>
-          <div className={`${invalid.length > 0 ? 'bg-red-50' : 'bg-gray-50'} rounded-xl p-3 text-center`}>
-            <p className={`text-2xl font-bold ${invalid.length > 0 ? 'text-red-600' : 'text-gray-400'}`}>{invalid.length}</p>
-            <p className={`text-xs ${invalid.length > 0 ? 'text-red-500' : 'text-gray-400'}`}>Missing name/email</p>
-          </div>
-          <div className={`${dupRows.length > 0 ? 'bg-red-50' : 'bg-gray-50'} rounded-xl p-3 text-center`}>
-            <p className={`text-2xl font-bold ${dupRows.length > 0 ? 'text-red-600' : 'text-gray-400'}`}>{dupRows.length}</p>
-            <p className={`text-xs ${dupRows.length > 0 ? 'text-red-500' : 'text-gray-400'}`}>Blocked (duplicates)</p>
-          </div>
-        </div>
-
-        {/* Blocked duplicates */}
-        {dupRows.length > 0 && (
-          <div className="mb-4 bg-red-50 border border-red-200 rounded-xl overflow-hidden">
-            <div className="px-4 py-2.5 border-b border-red-200 flex items-center gap-2">
-              <AlertTriangle className="w-4 h-4 text-red-600"/>
-              <p className="text-sm font-semibold text-red-800">
-                {dupRows.length} row{dupRows.length > 1 ? 's' : ''} blocked — already exist in database
-              </p>
-            </div>
-            <div className="divide-y divide-red-100">
-              {dupRows.map(({ r, i, dup }) => (
-                <div key={i} className="px-4 py-3 flex items-start gap-3">
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-gray-900">{r.full_name}</p>
-                    {dup.email && (
-                      <p className="text-xs text-red-700 mt-0.5">
-                        📧 Email <strong>{r.email}</strong> already exists — candidate: <em>{dup.email}</em>
-                      </p>
-                    )}
-                    {dup.phone && (
-                      <p className="text-xs text-red-700 mt-0.5">
-                        📱 Phone <strong>{r.phone}</strong> already exists — candidate: <em>{dup.phone}</em>
-                      </p>
-                    )}
+      {/* Custom fields — hidden from agency unless show_to_interviewer is true (re-use that flag) */}
+      {(customFields as any[]).filter((f:any) => !isAgency || f.show_to_interviewer !== false).length > 0 && (
+        <div className="border-t border-gray-100 pt-4 space-y-3">
+          <p className="text-sm font-medium text-gray-700">Additional Details</p>
+          {(customFields as any[])
+            .filter((f:any) => !isAgency || f.show_to_interviewer !== false)
+            .map((f:any) => (
+              <Field key={f.id} label={f.is_required ? `${f.field_label} *` : f.field_label}>
+                {f.field_type === 'boolean' ? (
+                  <div className="flex items-center gap-2">
+                    <input type="checkbox" onChange={e => setCustomValues(p=>({...p,[f.field_name]:e.target.checked}))}
+                      className="rounded border-gray-300 text-blue-600"/>
+                    <span className="text-sm text-gray-600">{f.field_label}</span>
                   </div>
-                  <span className="flex-shrink-0 text-xs px-2 py-0.5 bg-red-100 text-red-700 rounded-full font-medium">Blocked</span>
-                </div>
-              ))}
-            </div>
-            <div className="px-4 py-2.5 bg-red-50/80 border-t border-red-100">
-              <p className="text-xs text-red-600">These rows will NOT be imported. Update the CSV to fix duplicates and re-upload.</p>
-            </div>
-          </div>
-        )}
-
-        {/* Preview table */}
-        <div className="overflow-x-auto rounded-xl border border-gray-200">
-          <table className="w-full text-xs">
-            <thead>
-              <tr className="bg-gray-50 border-b border-gray-100">
-                <th className="text-left px-3 py-2.5 font-medium text-gray-500">Status</th>
-                <th className="text-left px-3 py-2.5 font-medium text-gray-500">Name</th>
-                <th className="text-left px-3 py-2.5 font-medium text-gray-500">Email</th>
-                <th className="text-left px-3 py-2.5 font-medium text-gray-500">Phone</th>
-                <th className="text-left px-3 py-2.5 font-medium text-gray-500">Source</th>
-                {mappedCustom.map(f => (
-                  <th key={f.id} className="text-left px-3 py-2.5 font-medium text-gray-500">{f.field_label}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {transformed.slice(0,30).map((r,i)=>{
-                const inv = !r.full_name || !r.email
-                const dup = getDup(r)
-                const isDup = !!(dup.email || dup.phone)
-                return (
-                  <tr key={i} className={`border-b border-gray-50 ${inv ? 'bg-red-50 opacity-50' : isDup ? 'bg-red-50 opacity-60' : ''}`}>
-                    <td className="px-3 py-2 whitespace-nowrap">
-                      {inv
-                        ? <span className="text-red-500 text-xs">✗ missing</span>
-                        : isDup
-                        ? <span className="text-red-600 text-xs font-medium">🚫 blocked</span>
-                        : <span className="text-green-500 text-xs">✓ ok</span>
-                      }
-                    </td>
-                    <td className="px-3 py-2 text-gray-700 max-w-[120px] truncate">{r.full_name||'—'}</td>
-                    <td className="px-3 py-2 text-gray-600 max-w-[160px] truncate">{r.email||'—'}</td>
-                    <td className="px-3 py-2 text-gray-500 whitespace-nowrap">{r.phone||'—'}</td>
-                    <td className="px-3 py-2 text-gray-500 max-w-[120px] truncate">{r.source_name}</td>
-                    {mappedCustom.map(f => (
-                      <td key={f.id} className="px-3 py-2 text-gray-600">{r.custom_data?.[f.field_name]||'—'}</td>
-                    ))}
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
-          {transformed.length>30 && <p className="text-xs text-center text-gray-400 py-2">+{transformed.length-30} more rows not shown</p>}
+                ) : (
+                  <input type={f.field_type === 'number'?'number':f.field_type==='date'?'date':f.field_type==='url'?'url':'text'}
+                    placeholder={f.field_label}
+                    onChange={e => setCustomValues(p=>({...p,[f.field_name]:e.target.value}))}
+                    className={inputCls}/>
+                )}
+              </Field>
+            ))}
         </div>
+      )}
 
-        {mutation.error && (
-          <div className="mt-3 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
-            <p className="text-sm text-red-600">{(mutation.error as Error).message}</p>
-          </div>
-        )}
+      {/* Duplicate warning */}
+      {(duplicates.length > 0 || checking) && (
+        <DuplicateWarning duplicates={duplicates} checking={checking}
+          onViewProfile={id => window.open(`/candidates/${id}`, '_blank')}/>
+      )}
 
-        <div className="flex justify-between mt-5 items-center">
-          <Button variant="secondary" onClick={()=>setStep(2)}>← Back</Button>
-          <div className="text-right">
-            {dupRows.length > 0 && (
-              <p className="text-xs text-red-500 mb-1">{dupRows.length} duplicate{dupRows.length>1?'s':''} blocked · {valid.length} new will be uploaded</p>
-            )}
-            <Button onClick={()=>mutation.mutate(valid)} loading={mutation.isPending} disabled={valid.length===0}>
-              Upload {valid.length} candidate{valid.length!==1?'s':''}
-            </Button>
-          </div>
+      {mutation.error && (
+        <div className="bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+          <p className="text-sm text-red-600">{(mutation.error as Error).message}</p>
         </div>
-      </div>
-    )
-  }
+      )}
 
-  // ─── Step 4: Done ─────────────────────────────────────────
-  return (
-    <div className="flex flex-col items-center justify-center py-12 gap-3">
-      <CheckCircle className="w-12 h-12 text-green-500"/>
-      <p className="text-lg font-semibold text-gray-900">Upload complete!</p>
-      <p className="text-sm text-gray-500">{valid.length} candidates added.</p>
-      <Button variant="secondary" onClick={()=>{setStep(1);setRows([]);setTransformed([]);setCustomFieldMap({});setSkippedDups(new Set())}}>
-        Upload another file
-      </Button>
-    </div>
-  )
-}
-
-function Breadcrumb({step,total,onBack}:{step:number;total:number;onBack:()=>void}) {
-  const steps = ['Upload','Map columns','Preview','Done']
-  return (
-    <div className="mb-4">
-      <div className="flex items-center gap-1 text-xs text-gray-400 mb-1">
-        {steps.map((s,i)=>(
-          <span key={i} className={`flex items-center gap-1 ${i+1===step?'text-blue-600 font-semibold':''}`}>
-            {i>0&&<ChevronRight className="w-3 h-3"/>}{s}
+      <div className="flex justify-end pt-2">
+        {duplicates.length > 0 ? (
+          <span className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+            🚫 Duplicate found — fix email/phone before adding
           </span>
-        ))}
+        ) : (
+          <Button type="submit" loading={mutation.isPending} disabled={checking}>
+            {checking ? 'Checking…' : 'Add Candidate'}
+          </Button>
+        )}
       </div>
-      <p className="text-xs text-gray-400">{total} rows detected</p>
-    </div>
+    </form>
   )
 }
