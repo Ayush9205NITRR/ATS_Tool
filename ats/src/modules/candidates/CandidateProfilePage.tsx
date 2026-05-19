@@ -72,7 +72,10 @@ export function CandidateProfilePage() {
   const [savingEditNote, setSavingEditNote] = useState(false)
 
   // Edit mode drafts
-  const [contactDraft, setContactDraft] = useState({ email: '', phone: '', linkedin_url: '', resume_url: '' })
+  const [contactDraft, setContactDraft] = useState({
+    full_name: '', email: '', phone: '', linkedin_url: '', resume_url: '',
+    source_category: '', source_name: '',
+  })
   const [generalNotesDraft, setGeneralNotesDraft] = useState('')
   const [interviewDateDraft, setInterviewDateDraft] = useState('')
   const [customDataDraft, setCustomDataDraft] = useState<Record<string, string>>({})
@@ -124,15 +127,16 @@ export function CandidateProfilePage() {
   const interviewerUsers = allUsers.filter(u => u.role === 'interviewer')
 
   // Enter edit mode — snapshot current values
-  // Enter edit mode — snapshot current values into drafts
-  // NOT wrapped in useCallback to avoid stale closure with candidate data
   const enterEditMode = () => {
     if (!candidate) return
     setContactDraft({
-      email: candidate.email,
+      full_name: candidate.full_name ?? '',
+      email: candidate.email ?? '',
       phone: candidate.phone ?? '',
       linkedin_url: candidate.linkedin_url ?? '',
       resume_url: candidate.resume_url ?? '',
+      source_category: (candidate as any).source_category ?? '',
+      source_name: (candidate as any).source_name ?? '',
     })
     setGeneralNotesDraft((candidate as any).notes ?? '')
     setInterviewDateDraft(toDatetimeLocal((candidate as any).interview_date))
@@ -155,10 +159,13 @@ export function CandidateProfilePage() {
   const saveAll = useMutation({
     mutationFn: async () => {
       const { error } = await supabase.from('candidates').update({
+        full_name: contactDraft.full_name || undefined,
         email: contactDraft.email,
         phone: contactDraft.phone || null,
         linkedin_url: contactDraft.linkedin_url || null,
         resume_url: contactDraft.resume_url || null,
+        source_category: contactDraft.source_category || null,
+        source_name: contactDraft.source_name || null,
         notes: generalNotesDraft || null,
         interview_date: toISO(interviewDateDraft),
         custom_data: customDataDraft,
@@ -356,6 +363,14 @@ export function CandidateProfilePage() {
             <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Contact</p>
             {editMode ? (
               <div className="space-y-2.5">
+                {/* Name */}
+                <div>
+                  <label className="block text-xs text-gray-400 mb-0.5">Full Name</label>
+                  <input value={contactDraft.full_name}
+                    onChange={e => setContactDraft(p => ({ ...p, full_name: e.target.value }))}
+                    className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-slate-400"/>
+                </div>
+                {/* Contact fields */}
                 {([
                   ['email','Email','email'],
                   ['phone','Phone','tel'],
@@ -370,6 +385,26 @@ export function CandidateProfilePage() {
                       className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-slate-400"/>
                   </div>
                 ))}
+                {/* Source */}
+                <div>
+                  <label className="block text-xs text-gray-400 mb-0.5">Source</label>
+                  <select value={contactDraft.source_category}
+                    onChange={e => setContactDraft(p => ({ ...p, source_category: e.target.value }))}
+                    className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-slate-400">
+                    <option value="">—</option>
+                    <option value="platform">Platform</option>
+                    <option value="agency">Agency</option>
+                    <option value="college">College</option>
+                  </select>
+                </div>
+                {/* Sub-source */}
+                <div>
+                  <label className="block text-xs text-gray-400 mb-0.5">Sub-Source</label>
+                  <input value={contactDraft.source_name}
+                    onChange={e => setContactDraft(p => ({ ...p, source_name: e.target.value }))}
+                    placeholder="e.g. LinkedIn, IIT Delhi, Naukri…"
+                    className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-slate-400"/>
+                </div>
               </div>
             ) : (
               <div className="space-y-2">
