@@ -310,8 +310,11 @@ export function CandidatesPage() {
   const { data: candidates=[], isLoading } = useCandidates({ ...serverFilters, search:search||undefined })
 
   // Agency sees only specific columns — no HR/Interviewer
-  const AGENCY_VISIBLE = new Set(['stage','job','subsource','email','phone','resume','notes'])
-  const effectiveVisible = isAgency ? AGENCY_VISIBLE : visibleCols
+  // Agency visible: all columns EXCEPT hr_owner and interviewer
+  const AGENCY_HIDDEN = new Set(['hr_owner','interviewer'])
+  const effectiveVisible = isAgency
+    ? new Set([...DEFAULT_VISIBLE, 'subsource','email','phone','resume','notes','updated_at','source'].filter(k => !AGENCY_HIDDEN.has(k)))
+    : visibleCols
 
   const orderedVisible = useMemo(() => {
     const cf = (customFields as any[]).map(f=>`cf_${f.field_name}`)
@@ -505,8 +508,8 @@ export function CandidatesPage() {
               </select>
             </div>
 
-            {/* Bulk */}
-            {selectedIds.size>0&&(
+            {/* Bulk — disabled for agency */}
+            {selectedIds.size>0 && !isAgency &&(
               <div className="relative">
                 <button onClick={()=>setShowBulkMenu(o=>!o)}
                   className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">
