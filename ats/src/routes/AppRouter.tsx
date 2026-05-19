@@ -41,7 +41,7 @@ export function AppRouter() {
               <AuthGuard roles={['admin','super_admin','hr_team']}><JobsPage /></AuthGuard>
             } />
             <Route path="/upload" element={
-              <AuthGuard roles={['admin','super_admin','hr_team']}><UploadPage /></AuthGuard>
+              <AuthGuard roles={['admin','super_admin','hr_team','agency']}><UploadPage /></AuthGuard>
             } />
 
             {/* Super Admin only */}
