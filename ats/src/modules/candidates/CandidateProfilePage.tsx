@@ -14,24 +14,22 @@ import { useAuthStore } from '../auth/authStore'
 import { formatDateTime, formatDate, formatRelative, labelOf } from '../../shared/utils/helpers'
 import { supabase } from '../../lib/supabaseClient'
 import { INTERVIEW_STAGES } from '../../types/database.types'
+import { useStages } from '../../shared/hooks/useStages'
 
-const NOTES_SECTIONS = [
-  { key: 'screening',   label: 'Screening Call' },
-  { key: 'r1',          label: 'R1 Interview' },
-  { key: 'case_study',  label: 'Case Study' },
-  { key: 'r2',          label: 'R2 Interview' },
-  { key: 'r3',          label: 'R3 Interview' },
-  { key: 'cf_virtual',  label: 'CF Virtual' },
-  { key: 'cf_inperson', label: 'CF In-Person' },
-]
-
-const STAGE_COLOURS: Record<string, string> = {
+// NOTES_SECTIONS is now built dynamically from stageConfigs (see below)
+// Fallback static map for stage colors (overridden by stageConfigs if available)
+const STAGE_COLOURS_FALLBACK: Record<string, string> = {
   Applied:'bg-gray-100 text-gray-600', Screening:'bg-blue-50 text-blue-700',
   R1:'bg-indigo-50 text-indigo-700', 'Case Study':'bg-amber-50 text-amber-700',
   R2:'bg-orange-50 text-orange-700', R3:'bg-orange-100 text-orange-800',
   'CF (Virtual)':'bg-purple-50 text-purple-700', 'CF (In-Person)':'bg-purple-100 text-purple-800',
   Offer:'bg-violet-50 text-violet-700', Hired:'bg-green-50 text-green-700',
   Rejected:'bg-red-50 text-red-600',
+}
+
+// Convert stage name to a stable key for interview_notes object
+function stageToKey(name: string): string {
+  return name.toLowerCase().replace(/[^a-z0-9]/g, '_')
 }
 
 // Unified pill design — same for HR Owner and Interviewers
@@ -275,9 +273,21 @@ export function CandidateProfilePage() {
   if (isLoading) return <div className="flex justify-center py-24"><Loader2 className="w-6 h-6 animate-spin text-blue-500"/></div>
   if (!candidate) return <p className="text-gray-500 py-8 text-center">Candidate not found.</p>
 
+  const { stageConfigs } = useStages()
   const stages = (candidate as any)?.job?.pipeline_stages?.length
     ? (candidate as any).job.pipeline_stages
-    : [...INTERVIEW_STAGES]
+    : stageConfigs.map((s: any) => s.name)
+
+  // Dynamic notes sections — only stages with hasNotes:true
+  const NOTES_SECTIONS = stageConfigs
+    .filter((s: any) => s.hasNotes)
+    .map((s: any) => ({ key: stageToKey(s.name), label: s.name }))
+
+  // Dynamic stage color
+  const stageColor = (name: string) => {
+    const cfg = stageConfigs.find((s: any) => s.name === name)
+    return cfg ? `${cfg.color} ${cfg.textColor}` : (STAGE_COLOURS_FALLBACK[name] ?? 'bg-gray-100 text-gray-600')
+  }
   const interviewNotes = (candidate as any).interview_notes ?? {}
   const assignedInterviewers: string[] = (candidate as any).assigned_interviewers ?? []
   const assignedHROwners: string[] = (candidate as any)?.assigned_hr_owners?.length > 0
@@ -328,7 +338,7 @@ export function CandidateProfilePage() {
           {canEdit ? (
             <>
               <button onClick={() => setStageOpen(o => !o)}
-                className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium border ${STAGE_COLOURS[candidate.current_stage] ?? 'bg-gray-100 text-gray-600'} border-transparent`}>
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium border ${stageColor(candidate.current_stage)} border-transparent`}>
                 {candidate.current_stage}<ChevronDown className="w-3.5 h-3.5 opacity-60"/>
               </button>
               {stageOpen && (
@@ -338,7 +348,7 @@ export function CandidateProfilePage() {
                     {stages.map((s: string) => (
                       <button key={s} onClick={() => { updateStage.mutate({ id: candidate.id, stage: s }); setStageOpen(false) }}
                         className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50 flex items-center justify-between gap-2">
-                        <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${STAGE_COLOURS[s] ?? 'bg-gray-100'}`}>{s}</span>
+                        <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${stageColor(s)}`}>{s}</span>
                         {s === candidate.current_stage && <Check className="w-3.5 h-3.5 text-slate-600"/>}
                       </button>
                     ))}
@@ -347,7 +357,7 @@ export function CandidateProfilePage() {
               )}
             </>
           ) : (
-            <span className={`px-3 py-1.5 rounded-lg text-sm font-medium ${STAGE_COLOURS[candidate.current_stage] ?? 'bg-gray-100 text-gray-600'}`}>
+            <span className={`px-3 py-1.5 rounded-lg text-sm font-medium ${stageColor(candidate.current_stage)}`}>
               {candidate.current_stage}
             </span>
           )}
