@@ -2,7 +2,7 @@
 // DATABASE TYPES v2 — mirrors Supabase schema exactly.
 // ============================================================
 
-export type Role = 'super_admin' | 'admin' | 'hr_team' | 'interviewer'
+export type Role = 'super_admin' | 'admin' | 'hr_team' | 'interviewer' | 'agency'
 export type SourceCategory = 'platform' | 'agency' | 'college'
 export type CandidateStatus = 'active' | 'rejected' | 'hired' | 'withdrawn'
 export type JobStatus = 'draft' | 'open' | 'paused' | 'closed'
