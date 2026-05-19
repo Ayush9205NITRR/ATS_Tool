@@ -327,21 +327,21 @@ export function CandidatesPage() {
   })
 
   const bulkUpdate = useMutation({
-    mutationFn: async({field,value}:{field:string;value:any})=>{
+    mutationFn: async ({ field, value }: { field: string; value: any }) => {
       const ids = Array.from(selectedIds)
       let payload: Record<string, any>
 
       if (field === 'hr_owner') {
-        // Single UUID field — direct update
         payload = { hr_owner: value || null }
       } else if (field === 'assigned_interviewers') {
         payload = { assigned_interviewers: Array.isArray(value) ? value : [value] }
       } else {
+        // current_stage, job_id, source_category, source_name, interview_date — direct set
         payload = { [field]: value }
       }
 
       const { error } = await supabase.from('candidates').update(payload).in('id', ids)
-      if (error) { console.error('[bulkUpdate]', error); throw error }
+      if (error) { console.error('[bulkUpdate]', field, error); throw error }
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['candidates'] })
@@ -479,9 +479,14 @@ export function CandidatesPage() {
                   <>
                     <div className="fixed inset-0 z-40" onClick={()=>{setShowBulkMenu(false);setBulkField(null)}}/>
                     <div className="absolute right-0 top-full mt-1.5 bg-white border border-gray-100 rounded-xl shadow-lg z-50 p-2 w-52">
-                      {[['current_stage','Change Stage'],['job_id','Assign Job'],
-                        ...(canAssignHR?[['hr_owner','Assign HR Owner']]:[] as any),
-                        ['assigned_interviewers','Assign Interviewer']
+                      {[
+                        ['current_stage',       'Change Stage'],
+                        ['job_id',              'Assign Job'],
+                        ['source_category',     'Change Source'],
+                        ['source_name',         'Change Sub-Source'],
+                        ['interview_date',      'Set Interview Date'],
+                        ...(canAssignHR ? [['hr_owner','Assign HR Owner']] : [] as any),
+                        ['assigned_interviewers','Assign Interviewer'],
                       ].map(([f,lbl])=>(
                         <button key={f} onClick={()=>{setBulkField(f);setBulkSelectValue('')}}
                           className={`w-full text-left text-sm px-3 py-2 rounded-lg transition-colors ${bulkField===f?'bg-blue-50 text-blue-700':'text-gray-700 hover:bg-gray-50'}`}>
@@ -500,30 +505,59 @@ export function CandidatesPage() {
                           </button>
                         )}
                       </div>
-                      {bulkField&&bulkField!=='__delete__'&&(
+                      {bulkField && bulkField !== '__delete__' && (
                         <div className="border-t border-gray-100 mt-1 pt-2 px-1 space-y-2" onClick={e=>e.stopPropagation()}>
-                          <select
-                            value={bulkSelectValue}
-                            onChange={e => setBulkSelectValue(e.target.value)}
-                            className="w-full px-2.5 py-1.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white">
-                            <option value="" disabled>Choose…</option>
-                            {bulkField==='current_stage'?INTERVIEW_STAGES.map(s=><option key={s} value={s}>{s}</option>)
-                              :bulkField==='job_id'?(jobs as any[]).map(j=><option key={j.id} value={j.id}>{j.title}</option>)
-                              :bulkField==='assigned_interviewers'?(interviewers as any[]).map(u=><option key={u.id} value={u.id}>{u.full_name}</option>)
-                              :bulkField==='hr_owner'?(hrUsers as any[]).map(u=><option key={u.id} value={u.id}>{u.full_name}</option>)
-                              :null
-                            }
-                          </select>
+
+                          {/* Date input for interview_date */}
+                          {bulkField === 'interview_date' ? (
+                            <input type="datetime-local"
+                              value={bulkSelectValue}
+                              onChange={e => setBulkSelectValue(e.target.value)}
+                              className="w-full px-2.5 py-1.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white"/>
+                          ) : bulkField === 'source_name' ? (
+                            /* Free-text for sub-source */
+                            <input type="text"
+                              value={bulkSelectValue}
+                              onChange={e => setBulkSelectValue(e.target.value)}
+                              placeholder="e.g. IIT Delhi, Naukri, LinkedIn…"
+                              className="w-full px-2.5 py-1.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white"/>
+                          ) : (
+                            /* Select for all other fields */
+                            <select
+                              value={bulkSelectValue}
+                              onChange={e => setBulkSelectValue(e.target.value)}
+                              className="w-full px-2.5 py-1.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white">
+                              <option value="" disabled>Choose…</option>
+                              {bulkField === 'current_stage'
+                                ? INTERVIEW_STAGES.map(s => <option key={s} value={s}>{s}</option>)
+                                : bulkField === 'job_id'
+                                ? (jobs as any[]).map(j => <option key={j.id} value={j.id}>{j.title}</option>)
+                                : bulkField === 'source_category'
+                                ? ['platform','agency','college'].map(s => <option key={s} value={s}>{s.charAt(0).toUpperCase()+s.slice(1)}</option>)
+                                : bulkField === 'assigned_interviewers'
+                                ? (interviewers as any[]).map(u => <option key={u.id} value={u.id}>{u.full_name}</option>)
+                                : bulkField === 'hr_owner'
+                                ? (hrUsers as any[]).map(u => <option key={u.id} value={u.id}>{u.full_name}</option>)
+                                : null
+                              }
+                            </select>
+                          )}
+
                           <button
                             disabled={bulkUpdate.isPending || !bulkSelectValue}
                             onClick={e => {
                               e.stopPropagation()
-                              if (bulkSelectValue) bulkUpdate.mutate({ field: bulkField!, value: bulkSelectValue })
+                              if (!bulkSelectValue) return
+                              // interview_date needs ISO string
+                              const val = bulkField === 'interview_date'
+                                ? new Date(bulkSelectValue).toISOString()
+                                : bulkSelectValue
+                              bulkUpdate.mutate({ field: bulkField!, value: val })
                             }}
                             className="w-full py-1.5 bg-gray-900 text-white rounded-lg text-xs font-medium hover:bg-gray-800 disabled:opacity-40 transition-colors flex items-center justify-center gap-1.5">
                             {bulkUpdate.isPending
                               ? <><Loader2 className="w-3 h-3 animate-spin"/>Updating…</>
-                              : `Apply to ${selectedIds.size} candidate${selectedIds.size!==1?'s':''}`
+                              : `Apply to ${selectedIds.size} candidate${selectedIds.size !== 1 ? 's' : ''}`
                             }
                           </button>
                         </div>
