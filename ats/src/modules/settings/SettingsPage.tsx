@@ -377,7 +377,7 @@ export function SettingsPage() {
   )
 }
 
-// ── Edit User Modal ───────────────────────────────────────────
+export default SettingsPage
 function EditUserModal({ user, onSave, onClose, saving, error }: {
   user: any
   onSave: (data: { full_name:string; email:string; password?:string }) => void
