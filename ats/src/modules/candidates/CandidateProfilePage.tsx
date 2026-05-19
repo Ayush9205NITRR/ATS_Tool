@@ -14,7 +14,6 @@ import { useAuthStore } from '../auth/authStore'
 import { formatDateTime, formatDate, formatRelative, labelOf } from '../../shared/utils/helpers'
 import { supabase } from '../../lib/supabaseClient'
 import { INTERVIEW_STAGES } from '../../types/database.types'
-import { useStages } from '../../shared/hooks/useStages'
 
 const NOTES_SECTIONS = [
   { key: 'screening',   label: 'Screening Call' },
@@ -276,11 +275,9 @@ export function CandidateProfilePage() {
   if (isLoading) return <div className="flex justify-center py-24"><Loader2 className="w-6 h-6 animate-spin text-blue-500"/></div>
   if (!candidate) return <p className="text-gray-500 py-8 text-center">Candidate not found.</p>
 
-  const { stages: globalStages } = useStages()
-  // Use job-specific pipeline or global stages
   const stages = (candidate as any)?.job?.pipeline_stages?.length
     ? (candidate as any).job.pipeline_stages
-    : globalStages
+    : [...INTERVIEW_STAGES]
   const interviewNotes = (candidate as any).interview_notes ?? {}
   const assignedInterviewers: string[] = (candidate as any).assigned_interviewers ?? []
   const assignedHROwners: string[] = (candidate as any)?.assigned_hr_owners?.length > 0
