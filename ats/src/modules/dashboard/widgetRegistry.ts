@@ -12,6 +12,7 @@ import { InterviewerStatsWidget } from './widgets/InterviewerStatsWidget'
 import { AnalyticsWidget }        from './widgets/AnalyticsWidget'
 import { JobFunnelWidget }        from './widgets/JobFunnelWidget'
 import { SourceSplitWidget }      from './widgets/SourceSplitWidget'
+import { AgencyDashboardWidget }  from './widgets/AgencyDashboardWidget'
 
 export interface WidgetConfig {
   id: string; title: string; component: ComponentType
@@ -32,4 +33,5 @@ export const WIDGET_REGISTRY: WidgetConfig[] = [
   { id:'funnel-stages',     title:'Pipeline Funnel',        component:FunnelStagesWidget,      size:'lg', roles:['super_admin','admin','hr_team'],               description:'Overall stage distribution' },
   { id:'source-breakdown',  title:'Source Chart',           component:SourceBreakdownWidget,   size:'md', roles:['super_admin','admin'],                         description:'Bar chart by source category' },
   { id:'hr-team',           title:'HR Team Overview',       component:HRTeamWidget,            size:'lg', roles:['super_admin'],                                 description:'HR member → jobs → candidates' },
+  { id:'agency-dashboard',  title:'My Submissions',         component:AgencyDashboardWidget,   size:'md', roles:['agency'],                                      description:'Stage breakdown of submitted candidates' },
 ]
