@@ -158,12 +158,14 @@ export function CsvUploader() {
   const [skippedDups, setSkippedDups] = useState<Set<number>>(new Set())
 
   const { data: jobs = [] } = useQuery({
-    queryKey: ['jobs', 'open', isAgency ? 'agency' : 'all'],
+    queryKey: ['jobs', 'open', isAgency ? `agency-${user?.id}` : 'all'],
     queryFn: async () => {
-      let q = supabase.from('jobs').select('id,title').eq('status','open').order('title')
-      if (isAgency) q = q.eq('show_to_agency', true)
-      const { data } = await q
-      return data ?? []
+      const { data } = await supabase.from('jobs').select('id,title,show_to_agency,allowed_agency_ids').eq('status','open').order('title')
+      if (!isAgency || !user?.id) return data ?? []
+      return (data ?? []).filter((j:any) =>
+        j.show_to_agency &&
+        (!j.allowed_agency_ids || j.allowed_agency_ids.length === 0 || j.allowed_agency_ids.includes(user.id))
+      )
     },
   })
 
