@@ -5,7 +5,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { supabase } from '../../lib/supabaseClient'
 import { useAuthStore } from '../auth/authStore'
 import { Check, Loader2, Mail, User, Building, Plus, X, GripVertical } from 'lucide-react'
-import { useStages, useSaveStages, DEFAULT_STAGES } from '../../shared/hooks/useStages'
+import { useStages, useSaveStages, DEFAULT_STAGE_CONFIGS, COLOR_OPTIONS, type StageConfig } from '../../shared/hooks/useStages'
 
 interface Setting { key: string; value: string }
 
@@ -214,65 +214,63 @@ Warm regards,
 
 // ── Stage Editor — Super Admin only ───────────────────────────
 function StageEditor() {
-  const { stages, isLoading } = useStages()
+  const { stageConfigs, isLoading } = useStages()
   const saveStages = useSaveStages()
-  const [draft, setDraft] = useState<string[]>([])
+  const [draft, setDraft] = useState<StageConfig[]>([])
   const [editing, setEditing] = useState(false)
-  const [newStage, setNewStage] = useState('')
+  const [newName, setNewName] = useState('')
+  const [newColor, setNewColor] = useState(COLOR_OPTIONS[0])
   const [saved, setSaved] = useState(false)
+  const [editingIdx, setEditingIdx] = useState<number | null>(null)
 
-  const startEdit = () => { setDraft([...stages]); setEditing(true); setSaved(false) }
-  const cancel    = () => { setEditing(false); setDraft([]) }
+  const startEdit = () => { setDraft(stageConfigs.map(s => ({...s}))); setEditing(true); setSaved(false) }
+  const cancel    = () => { setEditing(false); setDraft([]); setEditingIdx(null) }
 
   const addStage = () => {
-    const s = newStage.trim()
-    if (!s || draft.includes(s)) return
-    setDraft(p => [...p, s])
-    setNewStage('')
+    const n = newName.trim()
+    if (!n || draft.some(s => s.name === n)) return
+    setDraft(p => [...p, { name:n, color:newColor.bg, textColor:newColor.text, hasNotes:true }])
+    setNewName('')
   }
 
-  const removeStage = (s: string) => setDraft(p => p.filter(x => x !== s))
-
+  const remove   = (i: number) => setDraft(p => p.filter((_,j) => j !== i))
   const moveUp   = (i: number) => { if (i===0) return; const n=[...draft]; [n[i-1],n[i]]=[n[i],n[i-1]]; setDraft(n) }
   const moveDown = (i: number) => { if (i===draft.length-1) return; const n=[...draft]; [n[i],n[i+1]]=[n[i+1],n[i]]; setDraft(n) }
+
+  const update = (i: number, patch: Partial<StageConfig>) =>
+    setDraft(p => p.map((s,j) => j===i ? {...s,...patch} : s))
 
   const save = async () => {
     if (!draft.length) return
     await saveStages.mutateAsync(draft)
-    setSaved(true); setEditing(false); setDraft([])
+    setSaved(true); setEditing(false); setDraft([]); setEditingIdx(null)
     setTimeout(() => setSaved(false), 2000)
   }
 
   const reset = async () => {
-    await saveStages.mutateAsync(DEFAULT_STAGES)
-    setSaved(true); setEditing(false); setDraft([])
+    await saveStages.mutateAsync(DEFAULT_STAGE_CONFIGS)
+    setSaved(true); setEditing(false); setDraft([]); setEditingIdx(null)
   }
+
+  const configs = isLoading ? DEFAULT_STAGE_CONFIGS : stageConfigs
 
   return (
     <div className="border-t border-gray-100 pt-6 space-y-4">
       <div className="flex items-center justify-between">
         <div>
           <h3 className="text-sm font-semibold text-gray-900">Pipeline Stages</h3>
-          <p className="text-xs text-gray-500 mt-0.5">
-            Changes reflect everywhere — Candidate page, Profile, Notes, Filters.
-          </p>
+          <p className="text-xs text-gray-500 mt-0.5">Rename, reorder, set colors, and control which stages show a notes section.</p>
         </div>
         {!editing ? (
           <div className="flex gap-2">
-            <button onClick={reset}
-              className="text-xs text-gray-400 hover:text-gray-600 px-2 py-1 rounded transition-colors">
-              Reset to default
-            </button>
-            <button onClick={startEdit}
-              className="text-xs px-3 py-1.5 bg-gray-900 text-white rounded-lg hover:bg-gray-800 transition-colors">
-              Edit stages
-            </button>
+            <button onClick={reset} className="text-xs text-gray-400 hover:text-gray-600 px-2 py-1 rounded transition-colors">Reset default</button>
+            <button onClick={startEdit} className="text-xs px-3 py-1.5 bg-gray-900 text-white rounded-lg hover:bg-gray-800 transition-colors">Edit stages</button>
           </div>
         ) : (
           <div className="flex gap-2">
             <button onClick={cancel} className="text-xs text-gray-500 hover:text-gray-700 px-2 py-1 rounded">Cancel</button>
             <button onClick={save} disabled={saveStages.isPending || !draft.length}
-              className="text-xs px-3 py-1.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-40 flex items-center gap-1 transition-colors">
+              className="text-xs px-3 py-1.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-40 flex items-center gap-1.5 transition-colors">
               {saveStages.isPending ? <Loader2 className="w-3 h-3 animate-spin"/> : saved ? <Check className="w-3 h-3"/> : null}
               Save & apply
             </button>
@@ -281,52 +279,82 @@ function StageEditor() {
       </div>
 
       {editing ? (
-        <div className="space-y-2">
-          {/* Ordered stage list */}
-          <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+        <div className="space-y-3">
+          <div className="bg-white border border-gray-200 rounded-xl overflow-hidden divide-y divide-gray-50">
             {draft.map((s, i) => (
-              <div key={s} className={`flex items-center gap-2 px-3 py-2.5 ${i>0?'border-t border-gray-50':''} group hover:bg-gray-50/50`}>
-                <div className="flex flex-col gap-0.5">
-                  <button onClick={() => moveUp(i)} disabled={i===0}
-                    className="text-gray-200 hover:text-gray-500 disabled:opacity-0 leading-none text-xs">▲</button>
-                  <button onClick={() => moveDown(i)} disabled={i===draft.length-1}
-                    className="text-gray-200 hover:text-gray-500 disabled:opacity-0 leading-none text-xs">▼</button>
-                </div>
-                <span className="w-5 h-5 flex items-center justify-center text-xs text-gray-400 font-mono">{i+1}</span>
-                <span className="flex-1 text-sm text-gray-800">{s}</span>
-                {/* Protect terminal stages */}
-                {!['Hired','Rejected'].includes(s) ? (
-                  <button onClick={() => removeStage(s)}
-                    className="opacity-0 group-hover:opacity-100 text-gray-300 hover:text-red-500 transition-all">
-                    <X className="w-3.5 h-3.5"/>
+              <div key={i} className="px-3 py-2.5 hover:bg-gray-50/40 transition-colors">
+                <div className="flex items-center gap-2">
+                  {/* Reorder */}
+                  <div className="flex flex-col gap-0 flex-shrink-0">
+                    <button onClick={() => moveUp(i)} disabled={i===0} className="text-gray-200 hover:text-gray-500 disabled:opacity-0 leading-[1.1] text-xs">▲</button>
+                    <button onClick={() => moveDown(i)} disabled={i===draft.length-1} className="text-gray-200 hover:text-gray-500 disabled:opacity-0 leading-[1.1] text-xs">▼</button>
+                  </div>
+                  {/* Color swatch */}
+                  <button onClick={() => setEditingIdx(editingIdx===i ? null : i)}
+                    className={`w-6 h-6 rounded-full flex-shrink-0 border-2 ${s.color} ${editingIdx===i?'border-gray-500':'border-transparent'} hover:border-gray-400 transition-all`}/>
+                  {/* Name (editable inline) */}
+                  <input value={s.name}
+                    onChange={e => update(i, { name: e.target.value })}
+                    className="flex-1 text-sm bg-transparent border-b border-transparent hover:border-gray-200 focus:border-gray-400 focus:outline-none py-0.5 transition-colors"/>
+                  {/* Notes toggle */}
+                  <button onClick={() => update(i, { hasNotes: !s.hasNotes })}
+                    title={s.hasNotes ? 'Notes enabled — click to disable' : 'Notes disabled — click to enable'}
+                    className={`text-xs px-2 py-0.5 rounded-full border flex-shrink-0 transition-colors ${
+                      s.hasNotes ? 'bg-blue-50 text-blue-600 border-blue-200' : 'bg-gray-50 text-gray-400 border-gray-200'
+                    }`}>
+                    {s.hasNotes ? '📝 Notes on' : 'Notes off'}
                   </button>
-                ) : (
-                  <span className="text-xs text-gray-300 opacity-0 group-hover:opacity-100">locked</span>
+                  {/* Delete */}
+                  {!['Hired','Rejected'].includes(s.name) ? (
+                    <button onClick={() => remove(i)} className="text-gray-200 hover:text-red-500 transition-colors flex-shrink-0">
+                      <X className="w-3.5 h-3.5"/>
+                    </button>
+                  ) : <div className="w-3.5"/>}
+                </div>
+                {/* Color picker (inline expand) */}
+                {editingIdx === i && (
+                  <div className="mt-2.5 pl-8 flex flex-wrap gap-1.5">
+                    {COLOR_OPTIONS.map(opt => (
+                      <button key={opt.bg} onClick={() => { update(i, { color:opt.bg, textColor:opt.text }); setEditingIdx(null) }}
+                        title={opt.label}
+                        className={`w-6 h-6 rounded-full ${opt.bg} border-2 hover:scale-110 transition-transform ${s.color===opt.bg?'border-gray-600':'border-transparent'}`}/>
+                    ))}
+                  </div>
                 )}
               </div>
             ))}
           </div>
 
           {/* Add new stage */}
-          <div className="flex gap-2">
-            <input value={newStage} onChange={e => setNewStage(e.target.value)}
-              onKeyDown={e => { if (e.key==='Enter') { e.preventDefault(); addStage() }}}
-              placeholder="Add a new stage…"
+          <div className="flex gap-2 items-center">
+            {/* Color for new stage */}
+            <div className="relative group/nc">
+              <button className={`w-8 h-8 rounded-full flex-shrink-0 border-2 border-gray-200 ${newColor.bg}`}/>
+              <div className="absolute left-0 top-full mt-1 bg-white border border-gray-200 rounded-xl shadow-lg p-2 z-10 hidden group-hover/nc:flex flex-wrap gap-1.5 w-40">
+                {COLOR_OPTIONS.map(opt => (
+                  <button key={opt.bg} onClick={() => setNewColor(opt)}
+                    className={`w-6 h-6 rounded-full ${opt.bg} border-2 hover:scale-110 transition-transform ${newColor.bg===opt.bg?'border-gray-600':'border-transparent'}`}/>
+                ))}
+              </div>
+            </div>
+            <input value={newName} onChange={e=>setNewName(e.target.value)}
+              onKeyDown={e=>{if(e.key==='Enter'){e.preventDefault();addStage()}}}
+              placeholder="New stage name…"
               className="flex-1 px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"/>
-            <button onClick={addStage} disabled={!newStage.trim()}
-              className="px-3 py-2 bg-gray-900 text-white rounded-lg text-sm hover:bg-gray-800 disabled:opacity-40 transition-colors flex items-center gap-1">
+            <button onClick={addStage} disabled={!newName.trim()}
+              className="px-3 py-2 bg-gray-900 text-white rounded-lg text-sm hover:bg-gray-800 disabled:opacity-40 flex items-center gap-1 transition-colors flex-shrink-0">
               <Plus className="w-4 h-4"/>Add
             </button>
           </div>
-          <p className="text-xs text-gray-400">⚠️ Hired and Rejected are terminal stages and cannot be removed. Changing stage names will not retroactively update existing candidates.</p>
+          <p className="text-xs text-gray-400">Click the color circle to change color. "Notes on/off" controls whether notes appear on candidate profiles for that stage.</p>
         </div>
       ) : (
-        /* Read-only view */
         <div className="flex flex-wrap gap-1.5">
-          {(isLoading ? DEFAULT_STAGES : stages).map((s, i) => (
-            <div key={s} className="flex items-center gap-1 bg-gray-100 text-gray-600 text-xs px-2.5 py-1 rounded-full">
-              <span className="text-gray-400 font-mono">{i+1}.</span>
-              {s}
+          {configs.map((s, i) => (
+            <div key={i} className={`flex items-center gap-1.5 ${s.color} ${s.textColor} text-xs px-2.5 py-1 rounded-full`}>
+              <span className="opacity-50 font-mono">{i+1}.</span>
+              {s.name}
+              {s.hasNotes && <span className="text-xs opacity-60">📝</span>}
             </div>
           ))}
         </div>
