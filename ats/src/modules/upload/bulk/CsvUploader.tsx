@@ -139,7 +139,8 @@ interface DupInfo {
 }
 
 export function CsvUploader() {
-  const { user } = useAuthStore()
+  const { user, hasRole } = useAuthStore()
+  const isAgency = hasRole(['agency'])
   const qc = useQueryClient()
 
   const [step, setStep]           = useState<Step>(1)
@@ -167,7 +168,7 @@ export function CsvUploader() {
   })
 
   const mutation = useMutation({
-    mutationFn: (payload: any[]) => candidateService.bulkCreate(payload),
+    mutationFn: (payload: any[]) => candidateService.bulkCreate(payload, user?.role, user?.id),
     onSuccess: () => { qc.invalidateQueries({queryKey:['candidates']}); setStep(4) },
   })
 
@@ -310,10 +311,17 @@ export function CsvUploader() {
         {/* Standard fields */}
         <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Standard Fields</p>
         <div className="space-y-2 mb-5">
+          {/* Agency: show badge, hide source */}
+          {isAgency && (
+            <div className="flex items-center gap-3 bg-purple-50 border border-purple-200 rounded-lg px-3 py-2">
+              <span className="text-xs text-purple-700 font-medium">🏢 Source auto-set to Agency for all uploaded candidates</span>
+            </div>
+          )}
           {([
             ['full_name','Full Name *'],['email','Email *'],['phone','Phone'],
-            ['linkedin','LinkedIn URL'],['source','Source Type'],
-            ['source_name','Source / College'],['resume','Resume / CV'],['notes','Notes'],
+            ['linkedin','LinkedIn URL'],
+            ...(!isAgency ? [['source','Source Type'],['source_name','Source / College']] as [keyof ColumnMap, string][] : []),
+            ['resume','Resume / CV'],['notes','Notes'],
           ] as [keyof ColumnMap, string][]).map(([key,label])=>(
             <div key={key} className="flex items-center gap-3">
               <span className="text-gray-600 w-36 flex-shrink-0 text-xs">{label}</span>
