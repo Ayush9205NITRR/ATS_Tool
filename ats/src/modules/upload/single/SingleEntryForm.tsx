@@ -11,6 +11,7 @@ import { useDuplicateCheck } from '../../../shared/hooks/useDuplicateCheck'
 import { DuplicateWarning } from '../../../shared/components/DuplicateWarning'
 import { Button } from '../../../shared/components/Button'
 import { supabase } from '../../../lib/supabaseClient'
+import { useAgencies } from '../../../shared/hooks/useAgencies'
 
 // Schema — source fields optional for agency (auto-filled)
 const schema = z.object({
@@ -46,6 +47,7 @@ export function SingleEntryForm({ onSuccess }: { onSuccess?: () => void }) {
   const [done, setDone] = useState(false)
   const [customValues, setCustomValues] = useState<Record<string,any>>({})
   const { duplicates, checking, check, reset: resetDup } = useDuplicateCheck()
+  const { data: agencies = [] } = useAgencies()
 
   // Jobs — agency sees only show_to_agency=true jobs
   const { data: jobs = [] } = useQuery({
@@ -71,8 +73,10 @@ export function SingleEntryForm({ onSuccess }: { onSuccess?: () => void }) {
     defaultValues: { source_category: isAgency ? 'agency' : 'platform' },
   })
 
-  const watchEmail = watch('email')
-  const watchPhone = watch('phone')
+  const watchEmail  = watch('email')
+  const watchPhone  = watch('phone')
+  const watchSource = watch('source_category')
+  const isSourceAgency = watchSource === 'agency'
   useEffect(() => { check(watchEmail ?? '', watchPhone ?? '') }, [watchEmail, watchPhone])
 
   const mutation = useMutation({
@@ -140,26 +144,46 @@ export function SingleEntryForm({ onSuccess }: { onSuccess?: () => void }) {
           )}
         </Field>
 
-        {/* Source — hidden for agency */}
+        {/* Source — hidden for agency (auto-set) */}
         {!isAgency && (
-          <>
-            <Field label="Source Type *" error={errors.source_category?.message}>
-              <select {...register('source_category')} className={inputCls}>
-                <option value="platform">Platform (LinkedIn, Naukri…)</option>
-                <option value="agency">Agency</option>
-                <option value="college">College</option>
-              </select>
-            </Field>
-            <Field label="Source Name *" error={errors.source_name?.message}>
-              <input {...register('source_name')} placeholder="LinkedIn / IIT Delhi / ABC Consultants" className={inputCls}/>
-            </Field>
-          </>
+          <Field label="Source Type *" error={errors.source_category?.message}>
+            <select {...register('source_category')} className={inputCls}>
+              <option value="platform">Platform (LinkedIn, Naukri…)</option>
+              <option value="agency">Agency</option>
+              <option value="college">College</option>
+            </select>
+          </Field>
         )}
 
-        {/* Sub-source for agency — which platform/channel they used */}
+        {/* Sub-Source — dynamic based on source type */}
+        {!isAgency && (
+          <Field label="Sub-Source *" error={errors.source_name?.message}>
+            {isSourceAgency ? (
+              /* When Source = Agency → dropdown from agencies table */
+              <select {...register('source_name')} className={inputCls}>
+                <option value="">Select agency…</option>
+                {agencies.map(a => (
+                  <option key={a.id} value={a.name}>{a.name}</option>
+                ))}
+                {agencies.length === 0 && (
+                  <option disabled value="">No agencies found — add in Settings → Agencies</option>
+                )}
+              </select>
+            ) : (
+              /* Platform or College → free text */
+              <input {...register('source_name')}
+                placeholder={watchSource === 'college' ? 'e.g. IIT Delhi, IIM Bangalore' : 'e.g. LinkedIn, Naukri, Referral'}
+                className={inputCls}/>
+            )}
+          </Field>
+        )}
+
+        {/* Agency role — sub-source is where they found candidate */}
         {isAgency && (
           <Field label="Sub-Source" error={errors.source_name?.message} className="sm:col-span-2">
-            <input {...register('source_name')} placeholder="e.g. Naukri, LinkedIn, Internal database…" className={inputCls}/>
+            <input {...register('source_name')}
+              placeholder="e.g. Naukri, LinkedIn, Internal database…"
+              className={inputCls}/>
             <p className="mt-1 text-xs text-gray-400">Where did you find this candidate?</p>
           </Field>
         )}
