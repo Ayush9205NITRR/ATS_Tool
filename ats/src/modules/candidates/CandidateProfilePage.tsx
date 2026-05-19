@@ -14,26 +14,9 @@ import { useAuthStore } from '../auth/authStore'
 import { formatDateTime, formatDate, formatRelative, labelOf } from '../../shared/utils/helpers'
 import { supabase } from '../../lib/supabaseClient'
 import { INTERVIEW_STAGES } from '../../types/database.types'
-import { useStages } from '../../shared/hooks/useStages'
 
-// NOTES_SECTIONS is now built dynamically from stageConfigs (see below)
-// Fallback static map for stage colors (overridden by stageConfigs if available)
-const STAGE_COLOURS_FALLBACK: Record<string, string> = {
-  Applied:'bg-gray-100 text-gray-600', Screening:'bg-blue-50 text-blue-700',
-  R1:'bg-indigo-50 text-indigo-700', 'Case Study':'bg-amber-50 text-amber-700',
-  R2:'bg-orange-50 text-orange-700', R3:'bg-orange-100 text-orange-800',
-  'CF (Virtual)':'bg-purple-50 text-purple-700', 'CF (In-Person)':'bg-purple-100 text-purple-800',
-  Offer:'bg-violet-50 text-violet-700', Hired:'bg-green-50 text-green-700',
-  Rejected:'bg-red-50 text-red-600',
-}
-
-// Convert stage name to a stable key for interview_notes object
-function stageToKey(name: string): string {
-  return name.toLowerCase().replace(/[^a-z0-9]/g, '_')
-}
-
-// Unified pill design — same for HR Owner and Interviewers
-const PILL_BASE    = 'px-2.5 py-1 rounded-full text-xs font-medium border transition-all cursor-pointer select-none'
+// Unified pill design
+const PILL_BASE     = 'px-2.5 py-1 rounded-full text-xs font-medium border transition-all cursor-pointer select-none'
 const PILL_OFF     = 'bg-white border-gray-200 text-gray-600 hover:border-gray-400 hover:text-gray-800'
 const PILL_ON      = 'bg-slate-800 text-white border-slate-800'
 const PILL_DISABLED = 'bg-gray-50 border-gray-100 text-gray-400 cursor-default'
@@ -273,20 +256,59 @@ export function CandidateProfilePage() {
   if (isLoading) return <div className="flex justify-center py-24"><Loader2 className="w-6 h-6 animate-spin text-blue-500"/></div>
   if (!candidate) return <p className="text-gray-500 py-8 text-center">Candidate not found.</p>
 
-  const { stageConfigs } = useStages()
-  const stages = (candidate as any)?.job?.pipeline_stages?.length
-    ? (candidate as any).job.pipeline_stages
-    : stageConfigs.map((s: any) => s.name)
+  // Fetch stages config from DB (optional enhancement)
+  const { data: stageConfigsRaw = [] } = useQuery({
+    queryKey: ['app-settings', 'pipeline_stages'],
+    queryFn: async () => {
+      const { data } = await supabase.from('app_settings').select('value').eq('key','pipeline_stages').maybeSingle()
+      if (!data?.value) return []
+      try { const p = JSON.parse(data.value); return Array.isArray(p) ? p : [] } catch { return [] }
+    },
+    staleTime: 30_000,
+  })
 
-  // Dynamic notes sections — only stages with hasNotes:true
-  const NOTES_SECTIONS = stageConfigs
-    .filter((s: any) => s.hasNotes)
-    .map((s: any) => ({ key: stageToKey(s.name), label: s.name }))
+  // Stage names — job pipeline → DB config → hardcoded default
+  const stages: string[] = (() => {
+    const jobStages = (candidate as any)?.job?.pipeline_stages
+    if (jobStages?.length) return jobStages
+    if (stageConfigsRaw.length) return stageConfigsRaw.map((s: any) => typeof s === 'string' ? s : s.name)
+    return [...INTERVIEW_STAGES]
+  })()
 
-  // Dynamic stage color
-  const stageColor = (name: string) => {
-    const cfg = stageConfigs.find((s: any) => s.name === name)
-    return cfg ? `${cfg.color} ${cfg.textColor}` : (STAGE_COLOURS_FALLBACK[name] ?? 'bg-gray-100 text-gray-600')
+  // Notes sections — DB config if available, else sensible defaults
+  const NOTES_SECTIONS: { key: string; label: string }[] = (() => {
+    const richConfigs = stageConfigsRaw.filter((s: any) => typeof s === 'object' && s.hasNotes)
+    if (richConfigs.length) {
+      return richConfigs.map((s: any) => ({
+        key: s.name.toLowerCase().replace(/[^a-z0-9]/g, '_'),
+        label: s.name,
+      }))
+    }
+    // Default — standard interview rounds
+    return [
+      { key: 'screening',   label: 'Screening'     },
+      { key: 'r1',          label: 'R1'             },
+      { key: 'case_study',  label: 'Case Study'     },
+      { key: 'r2',          label: 'R2'             },
+      { key: 'r3',          label: 'R3'             },
+      { key: 'cf_virtual',  label: 'CF (Virtual)'   },
+      { key: 'cf_inperson', label: 'CF (In-Person)' },
+    ]
+  })()
+
+  // Stage pill color — DB config → hardcoded map → gray fallback
+  const STAGE_COLOURS: Record<string, string> = {
+    Applied:'bg-gray-100 text-gray-600',      Screening:'bg-blue-50 text-blue-700',
+    R1:'bg-indigo-50 text-indigo-700',        'Case Study':'bg-amber-50 text-amber-700',
+    R2:'bg-orange-50 text-orange-700',        R3:'bg-orange-100 text-orange-800',
+    'CF (Virtual)':'bg-purple-50 text-purple-700', 'CF (In-Person)':'bg-purple-100 text-purple-800',
+    Offer:'bg-violet-50 text-violet-700',     Hired:'bg-green-50 text-green-700',
+    Rejected:'bg-red-50 text-red-600',
+  }
+  const stageColor = (name: string): string => {
+    const cfg = stageConfigsRaw.find((s: any) => typeof s === 'object' && s.name === name)
+    if (cfg?.color) return `${cfg.color} ${cfg.textColor}`
+    return STAGE_COLOURS[name] ?? 'bg-gray-100 text-gray-600'
   }
   const interviewNotes = (candidate as any).interview_notes ?? {}
   const assignedInterviewers: string[] = (candidate as any).assigned_interviewers ?? []
