@@ -15,7 +15,7 @@ import { formatDateTime, formatDate, formatRelative, labelOf } from '../../share
 import { supabase } from '../../lib/supabaseClient'
 import { INTERVIEW_STAGES } from '../../types/database.types'
 import { useAgencies } from '../../shared/hooks/useAgencies'
-import { SubSourceField } from '../../shared/components/SubSourceField'
+import { SourceDropdown } from '../../shared/components/SourceDropdown'
 
 // Unified pill design
 const PILL_BASE     = 'px-2.5 py-1 rounded-full text-xs font-medium border transition-all cursor-pointer select-none'
@@ -430,25 +430,12 @@ export function CandidateProfilePage() {
                       className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-slate-400"/>
                   </div>
                 ))}
-                {/* Source */}
-                <div>
+                {/* Source — single combined dropdown */}
+                <div className="sm:col-span-2">
                   <label className="block text-xs text-gray-400 mb-0.5">Source</label>
-                  <select value={contactDraft.source_category}
-                    onChange={e => setContactDraft(p => ({ ...p, source_category: e.target.value, source_name: '' }))}
-                    className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-slate-400">
-                    <option value="">—</option>
-                    <option value="platform">Platform</option>
-                    <option value="agency">Agency</option>
-                    <option value="college">College</option>
-                  </select>
-                </div>
-                {/* Sub-source — dynamic dropdown */}
-                <div>
-                  <label className="block text-xs text-gray-400 mb-0.5">Sub-Source</label>
-                  <SubSourceField
-                    sourceCategory={contactDraft.source_category}
-                    value={contactDraft.source_name}
-                    onChange={v => setContactDraft(p => ({ ...p, source_name: v }))}
+                  <SourceDropdown
+                    value={{ category: contactDraft.source_category, name: contactDraft.source_name }}
+                    onChange={v => setContactDraft(p => ({ ...p, source_category: v.category, source_name: v.name }))}
                   />
                 </div>
               </div>
