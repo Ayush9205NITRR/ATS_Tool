@@ -616,7 +616,6 @@ export function CandidatesPage() {
               <FilterBar filters={activeFilters} onChange={setActiveFilters}
                 jobs={jobs as any[]} interviewers={interviewers as any[]}
                 hrUsers={hrUsers as any[]} mode={filterMode} onModeChange={setFilterMode}
-                stages={STAGES}
                 customFieldDefs={(customFields as any[]).map(f=>({field_name:f.field_name,field_label:f.field_label,field_type:f.field_type}))}/>
             </div>
           )}
