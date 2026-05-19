@@ -4,14 +4,71 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
-import { CheckCircle } from 'lucide-react'
+import { CheckCircle, ChevronDown } from 'lucide-react'
 import { candidateService } from '../../candidates/candidateService'
 import { useAuthStore } from '../../auth/authStore'
 import { useDuplicateCheck } from '../../../shared/hooks/useDuplicateCheck'
 import { DuplicateWarning } from '../../../shared/components/DuplicateWarning'
 import { Button } from '../../../shared/components/Button'
-import { SourceDropdown } from '../../../shared/components/SourceDropdown'
 import { supabase } from '../../../lib/supabaseClient'
+
+const PLATFORM_SOURCES = ['LinkedIn','Naukri','Indeed','Internshala','Shine','Monster','Foundit','Apna','Referral','Website','Other']
+
+function SourceDropdown({ value, onChange, disabled }: {
+  value: { category: string; name: string }
+  onChange: (v: { category: string; name: string }) => void
+  disabled?: boolean
+}) {
+  const [open, setOpen] = useState(false)
+  const [collegeText, setCollegeText] = useState(value.category === 'college' ? value.name : '')
+  const { data: agencies = [] } = useQuery({
+    queryKey: ['agency-users'],
+    queryFn: async () => {
+      const { data } = await supabase.from('users').select('id,full_name').eq('role','agency').eq('is_active',true).order('full_name')
+      return (data ?? []).map((u:any) => ({ id: u.id, name: u.full_name }))
+    },
+    staleTime: 60_000,
+  })
+  const label = value.name
+    ? value.category === 'agency' ? `🏢 ${value.name}` : value.category === 'platform' ? `🔗 ${value.name}` : `🎓 ${value.name}`
+    : 'Select source…'
+  return (
+    <div className="relative">
+      <button type="button" disabled={disabled} onClick={() => setOpen(o => !o)}
+        className={`w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white focus:outline-none flex items-center justify-between text-left ${value.name ? 'text-gray-900' : 'text-gray-400'}`}>
+        <span>{label}</span><ChevronDown className="w-4 h-4 text-gray-400 flex-shrink-0"/>
+      </button>
+      {open && (<>
+        <div className="fixed inset-0 z-40" onClick={() => setOpen(false)}/>
+        <div className="absolute left-0 top-full mt-1 w-full bg-white border border-gray-200 rounded-xl shadow-xl z-50 max-h-64 overflow-y-auto">
+          {agencies.length > 0 && <div>
+            <div className="px-3 py-1.5 text-xs font-semibold text-gray-400 uppercase bg-gray-50 border-b border-gray-100">🏢 Agency</div>
+            {(agencies as any[]).map((a:any) => <button key={a.id} type="button" onClick={() => { onChange({ category:'agency', name:a.name }); setOpen(false) }}
+              className={`w-full text-left px-3 py-2 text-sm hover:bg-purple-50 flex items-center justify-between ${value.category==='agency'&&value.name===a.name?'text-purple-700 font-medium bg-purple-50':'text-gray-700'}`}>
+              {a.name}{value.category==='agency'&&value.name===a.name&&<span className="text-purple-600">✓</span>}
+            </button>)}
+          </div>}
+          <div>
+            <div className="px-3 py-1.5 text-xs font-semibold text-gray-400 uppercase bg-gray-50 border-b border-gray-100">🔗 Platform</div>
+            {PLATFORM_SOURCES.map(p => <button key={p} type="button" onClick={() => { onChange({ category:'platform', name:p }); setOpen(false) }}
+              className={`w-full text-left px-3 py-2 text-sm hover:bg-blue-50 flex items-center justify-between ${value.category==='platform'&&value.name===p?'text-blue-700 font-medium bg-blue-50':'text-gray-700'}`}>
+              {p}{value.category==='platform'&&value.name===p&&<span className="text-blue-600">✓</span>}
+            </button>)}
+          </div>
+          <div>
+            <div className="px-3 py-1.5 text-xs font-semibold text-gray-400 uppercase bg-gray-50 border-b border-gray-100">🎓 College</div>
+            <div className="px-3 py-2">
+              <input type="text" value={collegeText} onClick={e=>e.stopPropagation()}
+                onChange={e => { setCollegeText(e.target.value); if(e.target.value) onChange({ category:'college', name:e.target.value }) }}
+                onKeyDown={e => { if(e.key==='Enter'){e.preventDefault();if(collegeText)setOpen(false)} }}
+                placeholder="Type college name…" className="w-full px-2.5 py-1.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"/>
+            </div>
+          </div>
+        </div>
+      </>)}
+    </div>
+  )
+}
 
 const schema = z.object({
   full_name:       z.string().min(1, 'Name required'),
