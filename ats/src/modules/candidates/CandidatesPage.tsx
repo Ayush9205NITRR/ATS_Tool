@@ -294,21 +294,32 @@ export function CandidatesPage() {
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
   )
 
-  const { data: jobs=[] }        = useQuery({ queryKey:['jobs','filter'],        queryFn:async()=>{const{data}=await supabase.from('jobs').select('id,title').order('title');return data??[]} })
+  const { data: jobs=[] } = useQuery({
+    queryKey: ['jobs','filter', isAgency ? 'agency' : 'all'],
+    queryFn: async () => {
+      let q = supabase.from('jobs').select('id,title').order('title')
+      if (isAgency) q = (q as any).eq('show_to_agency', true)
+      const { data } = await q
+      return data ?? []
+    }
+  })
   const { data: hrUsers=[] }     = useQuery({ queryKey:['users','hr'],           queryFn:async()=>{const{data}=await supabase.from('users').select('id,full_name').in('role',['hr_team','admin','super_admin']).eq('is_active',true);return data??[]} })
   const { data: interviewers=[] }= useQuery({ queryKey:['users','interviewers'], queryFn:async()=>{const{data}=await supabase.from('users').select('id,full_name').eq('role','interviewer').eq('is_active',true);return data??[]} })
   const { data: customFields=[] }= useQuery({ queryKey:['custom-fields'],        queryFn:async()=>{const{data}=await supabase.from('custom_fields').select('*').eq('is_active',true).order('sort_order');return data??[]} })
 
   const { data: candidates=[], isLoading } = useCandidates({ ...serverFilters, search:search||undefined })
 
+  // Agency sees only specific columns — no HR/Interviewer
+  const AGENCY_VISIBLE = new Set(['stage','job','subsource','email','phone','resume','notes'])
+  const effectiveVisible = isAgency ? AGENCY_VISIBLE : visibleCols
+
   const orderedVisible = useMemo(() => {
     const cf = (customFields as any[]).map(f=>`cf_${f.field_name}`)
-    const all = [...colOrder, ...cf].filter(k => visibleCols.has(k))
-    // Pinned cols come first (after name which is always frozen)
+    const all = [...colOrder, ...cf].filter(k => effectiveVisible.has(k))
     const pinned   = all.filter(k => pinnedCols.has(k))
     const unpinned = all.filter(k => !pinnedCols.has(k))
     return [...pinned, ...unpinned]
-  }, [colOrder, visibleCols, customFields, pinnedCols])
+  }, [colOrder, effectiveVisible, customFields, pinnedCols])
 
   const displayed = useMemo(() => {
     let list = candidates.filter((c:any) => showArchived ? !!c.archived_at : !c.archived_at)
