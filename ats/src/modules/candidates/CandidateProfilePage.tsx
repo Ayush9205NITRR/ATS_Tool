@@ -15,7 +15,6 @@ import { formatDateTime, formatDate, formatRelative, labelOf } from '../../share
 import { supabase } from '../../lib/supabaseClient'
 import { INTERVIEW_STAGES } from '../../types/database.types'
 import { useAgencies } from '../../shared/hooks/useAgencies'
-import { SourceDropdown } from '../../shared/components/SourceDropdown'
 
 // Unified pill design
 const PILL_BASE     = 'px-2.5 py-1 rounded-full text-xs font-medium border transition-all cursor-pointer select-none'
@@ -430,10 +429,10 @@ export function CandidateProfilePage() {
                       className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-slate-400"/>
                   </div>
                 ))}
-                {/* Source — single combined dropdown */}
+                {/* Source — combined dropdown */}
                 <div className="sm:col-span-2">
                   <label className="block text-xs text-gray-400 mb-0.5">Source</label>
-                  <SourceDropdown
+                  <ProfileSourceDropdown
                     value={{ category: contactDraft.source_category, name: contactDraft.source_name }}
                     onChange={v => setContactDraft(p => ({ ...p, source_category: v.category, source_name: v.name }))}
                   />
@@ -867,6 +866,55 @@ function AgencyFeedbackEditor({ candidateId, currentFeedback, canEdit }: {
       ) : (
         <p className="text-sm text-gray-700 whitespace-pre-wrap">{text || <span className="text-gray-400 italic text-xs">No feedback added yet.</span>}</p>
       )}
+    </div>
+  )
+}
+
+const _PLATFORM_SOURCES = ['LinkedIn','Naukri','Indeed','Internshala','Shine','Monster','Foundit','Apna','Referral','Website','Other']
+
+function ProfileSourceDropdown({ value, onChange }: {
+  value: { category: string; name: string }
+  onChange: (v: { category: string; name: string }) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [collegeText, setCollegeText] = useState(value.category === 'college' ? value.name : '')
+  const { data: agencies = [] } = useAgencies()
+  const label = value.name
+    ? value.category === 'agency' ? `🏢 ${value.name}` : value.category === 'platform' ? `🔗 ${value.name}` : `🎓 ${value.name}`
+    : 'Select source…'
+  return (
+    <div className="relative">
+      <button type="button" onClick={() => setOpen(o => !o)}
+        className={`w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm bg-white focus:outline-none flex items-center justify-between ${value.name ? 'text-gray-900' : 'text-gray-400'}`}>
+        <span>{label}</span><ChevronDown className="w-3.5 h-3.5 text-gray-400"/>
+      </button>
+      {open && (<>
+        <div className="fixed inset-0 z-40" onClick={() => setOpen(false)}/>
+        <div className="absolute left-0 top-full mt-1 w-full bg-white border border-gray-200 rounded-xl shadow-xl z-50 max-h-56 overflow-y-auto">
+          {(agencies as any[]).length > 0 && <div>
+            <div className="px-3 py-1.5 text-xs font-semibold text-gray-400 uppercase bg-gray-50 border-b">🏢 Agency</div>
+            {(agencies as any[]).map((a:any) => <button key={a.id} type="button" onClick={() => { onChange({ category:'agency', name:a.name }); setOpen(false) }}
+              className={`w-full text-left px-3 py-2 text-sm hover:bg-purple-50 flex items-center justify-between ${value.category==='agency'&&value.name===a.name?'text-purple-700 bg-purple-50':'text-gray-700'}`}>
+              {a.name}{value.category==='agency'&&value.name===a.name&&<span>✓</span>}
+            </button>)}
+          </div>}
+          <div>
+            <div className="px-3 py-1.5 text-xs font-semibold text-gray-400 uppercase bg-gray-50 border-b">🔗 Platform</div>
+            {_PLATFORM_SOURCES.map(p => <button key={p} type="button" onClick={() => { onChange({ category:'platform', name:p }); setOpen(false) }}
+              className={`w-full text-left px-3 py-2 text-sm hover:bg-blue-50 flex items-center justify-between ${value.category==='platform'&&value.name===p?'text-blue-700 bg-blue-50':'text-gray-700'}`}>
+              {p}{value.category==='platform'&&value.name===p&&<span>✓</span>}
+            </button>)}
+          </div>
+          <div>
+            <div className="px-3 py-1.5 text-xs font-semibold text-gray-400 uppercase bg-gray-50 border-b">🎓 College</div>
+            <div className="px-3 py-2">
+              <input type="text" value={collegeText} onClick={e=>e.stopPropagation()}
+                onChange={e => { setCollegeText(e.target.value); if(e.target.value) onChange({ category:'college', name:e.target.value }) }}
+                placeholder="Type college name…" className="w-full px-2.5 py-1.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"/>
+            </div>
+          </div>
+        </div>
+      </>)}
     </div>
   )
 }
