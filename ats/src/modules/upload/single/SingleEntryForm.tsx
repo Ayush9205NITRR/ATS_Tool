@@ -39,7 +39,8 @@ const inputCls = 'w-full px-3 py-2 border border-gray-300 rounded-lg text-sm foc
 interface Props { onSuccess?: () => void }
 
 export function SingleEntryForm({ onSuccess }: Props) {
-  const { user } = useAuthStore()
+  const { user, hasRole } = useAuthStore()
+  const isAgency = hasRole(['agency'])
   const qc = useQueryClient()
   const navigate = useNavigate()
   const [done, setDone] = useState(false)
@@ -93,7 +94,9 @@ export function SingleEntryForm({ onSuccess }: Props) {
         interview_notes: {},
         custom_data: customValues,
         uploaded_by: user!.id,
-      } as any),
+        // Agency: source auto-set in service
+        source_category: isAgency ? 'agency' : (data.source_category ?? 'platform'),
+      } as any, user?.role, user?.id),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['candidates'] })
       qc.invalidateQueries({ queryKey: ['widget'] })
@@ -166,17 +169,27 @@ export function SingleEntryForm({ onSuccess }: Props) {
           </select>
         </Field>
 
-        <Field label="Source Type *" error={errors.source_category?.message}>
-          <select {...register('source_category')} className={inputCls}>
-            <option value="platform">Platform (LinkedIn, Naukri…)</option>
-            <option value="agency">Agency</option>
-            <option value="college">College</option>
-          </select>
-        </Field>
-
-        <Field label="Source Name *" error={errors.source_name?.message}>
-          <input {...register('source_name')} placeholder="LinkedIn / ABC Consultants / IIT Delhi" className={inputCls}/>
-        </Field>
+        {/* Source — hidden for agency (auto-set to Agency) */}
+        {isAgency ? (
+          <Field label="Source" className="sm:col-span-2">
+            <div className="flex items-center gap-2 px-3 py-2 bg-purple-50 border border-purple-200 rounded-lg text-sm text-purple-700 font-medium">
+              🏢 Agency (auto-assigned)
+            </div>
+          </Field>
+        ) : (
+          <>
+            <Field label="Source Type *" error={errors.source_category?.message}>
+              <select {...register('source_category')} className={inputCls}>
+                <option value="platform">Platform (LinkedIn, Naukri…)</option>
+                <option value="agency">Agency</option>
+                <option value="college">College</option>
+              </select>
+            </Field>
+            <Field label="Source Name *" error={errors.source_name?.message}>
+              <input {...register('source_name')} placeholder="LinkedIn / ABC Consultants / IIT Delhi" className={inputCls}/>
+            </Field>
+          </>
+        )}
 
         <Field label="Resume URL (Google Drive)" error={errors.resume_url?.message} className="sm:col-span-2">
           <input {...register('resume_url')} placeholder="https://drive.google.com/file/d/…" className={inputCls}/>
