@@ -96,27 +96,29 @@ const SourceCell = memo(({ cid, category, canEdit, onUpdate }: {
   cid:string; category:string; canEdit:boolean
   onUpdate:(id:string,f:string,v:any)=>void
 }) => {
+  const badgeCls =
+    category==='agency'   ? 'bg-violet-50 text-violet-700 border-violet-100' :
+    category==='platform' ? 'bg-sky-50 text-sky-700 border-sky-100' :
+    category==='college'  ? 'bg-amber-50 text-amber-700 border-amber-100' :
+    'bg-gray-50 text-gray-400 border-gray-100'
+  const label = category ? category.charAt(0).toUpperCase()+category.slice(1) : '—'
   const badge = (
-    <span className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-medium ${canEdit?'cursor-pointer hover:opacity-80':''} ${
-      category==='agency'?'bg-purple-50 text-purple-700':
-      category==='platform'?'bg-blue-50 text-blue-700':
-      category==='college'?'bg-amber-50 text-amber-700':
-      'bg-gray-50 text-gray-400'
-    }`}>
-      {category==='agency'?'🏢':category==='platform'?'🔗':category==='college'?'🎓':''}
-      {category ? category.charAt(0).toUpperCase()+category.slice(1) : '—'}
-      {canEdit && <ChevronDown className="w-2.5 h-2.5 opacity-50"/>}
+    <span className={`inline-flex items-center gap-0.5 text-xs px-2 py-0.5 rounded border font-medium ${canEdit?'cursor-pointer hover:opacity-75':''} ${badgeCls}`}>
+      {label}{canEdit && <ChevronDown className="w-2.5 h-2.5 opacity-40"/>}
     </span>
   )
   if (!canEdit) return badge
   return (
     <Popup trigger={badge}>
-      <div className="px-1 py-1">
-        {[['platform','🔗 Platform'],['agency','🏢 Agency'],['college','🎓 College']].map(([cat,lbl])=>(
+      <div className="px-1 py-1 min-w-[130px]">
+        <p className="text-xs text-gray-400 font-medium px-2 pt-1 pb-0.5">Source Type</p>
+        {[['platform','Platform'],['agency','Agency'],['college','College']].map(([cat,lbl])=>(
           <button key={cat}
             onClick={()=>{ onUpdate(cid,'source_category',cat); onUpdate(cid,'source_name','') }}
-            className={`w-full text-left text-xs px-2.5 py-2 rounded hover:bg-gray-50 flex items-center justify-between gap-4 ${category===cat?'font-semibold text-gray-900':'text-gray-600'}`}>
-            {lbl}{category===cat&&<Check className="w-3 h-3 text-blue-500"/>}
+            className={`w-full text-left text-xs px-2.5 py-2 rounded flex items-center justify-between gap-3 transition-colors ${
+              category===cat?'bg-blue-50 text-blue-700 font-medium':'text-gray-600 hover:bg-gray-50'
+            }`}>
+            {lbl}{category===cat&&<Check className="w-3 h-3"/>}
           </button>
         ))}
       </div>
@@ -370,22 +372,19 @@ export function CandidatesPage() {
   const isSuperAdmin = hasRole(['super_admin'])
   const isAgency    = hasRole(['agency'])
 
-  const { stageConfigs = [], STAGES } = (() => {
-    const { data } = useQuery({
-      queryKey: ['app-settings','pipeline_stages'],
-      queryFn: async () => {
-        const { data } = await supabase.from('app_settings').select('value').eq('key','pipeline_stages').maybeSingle()
-        if (!data?.value) return []
-        try { const p = JSON.parse(data.value); return Array.isArray(p) ? p : [] } catch { return [] }
-      },
-      staleTime: 30_000,
-    })
-    const configs = (data ?? []) as any[]
-    const names = configs.length
-      ? configs.map((s: any) => typeof s === 'string' ? s : s.name)
-      : [...INTERVIEW_STAGES]
-    return { stageConfigs: configs, STAGES: names }
-  })()
+  const { data: stageRaw = [] } = useQuery({
+    queryKey: ['app-settings', 'pipeline_stages'],
+    queryFn: async () => {
+      const { data } = await supabase.from('app_settings').select('value').eq('key','pipeline_stages').maybeSingle()
+      if (!data?.value) return []
+      try { const p = JSON.parse(data.value); return Array.isArray(p) ? p : [] } catch { return [] }
+    },
+    staleTime: 0,
+  })
+  const stageConfigs = stageRaw as any[]
+  const STAGES: string[] = stageConfigs.length
+    ? stageConfigs.map((s: any) => typeof s === 'string' ? s : s.name)
+    : [...INTERVIEW_STAGES]
 
   // ── Filters persisted in URL so back button restores them ─────
   const [serverFilters, setServerFilters] = useState<CandidateFilters>(() => ({
