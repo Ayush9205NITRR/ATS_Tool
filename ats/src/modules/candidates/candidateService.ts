@@ -57,25 +57,24 @@ export async function findDuplicates(
   candidates: { email?: string; phone?: string | null }[],
   excludeId?: string
 ): Promise<{ emailDups: Set<string>; phoneDups: Set<string> }> {
-  const emails = candidates.map(c => normalizeEmail(c.email)).filter(Boolean) as string[]
-  const phones = candidates.map(c => normalizePhone(c.phone)).filter(Boolean) as string[]
-
-  const orFilters: string[] = []
-  if (emails.length) emails.forEach(e => orFilters.push(`email.ilike.${e}`))
-  if (phones.length) phones.forEach(p => orFilters.push(`phone.eq.${p}`))
-  if (!orFilters.length) return { emailDups: new Set(), phoneDups: new Set() }
-
-  let q = supabase.from('candidates').select('email,phone').eq('status','active')
-    .or(orFilters.slice(0, 30).join(','))  // Supabase limit
-  if (excludeId) q = q.neq('id', excludeId)
-  const { data } = await q
-
   const emailDups = new Set<string>()
   const phoneDups = new Set<string>()
-  ;(data ?? []).forEach((r: any) => {
-    if (r.email) emailDups.add(r.email.toLowerCase().trim())
-    if (r.phone) phoneDups.add(r.phone.replace(/\D/g,'').slice(-10))
-  })
+
+  for (const c of candidates.slice(0, 20)) {
+    const email = normalizeEmail(c.email) || null
+    const phone = normalizePhone(c.phone) || null
+    if (!email && !phone) continue
+
+    const { data } = await supabase.rpc('check_candidate_duplicate', {
+      p_email: email,
+      p_phone: phone,
+      p_exclude_id: excludeId ?? null,
+    })
+    ;(data ?? []).forEach((r: any) => {
+      if (r.existing_email) emailDups.add(r.existing_email.toLowerCase().trim())
+      if (r.existing_phone) phoneDups.add(r.existing_phone.replace(/\D/g,'').slice(-10))
+    })
+  }
   return { emailDups, phoneDups }
 }
 
