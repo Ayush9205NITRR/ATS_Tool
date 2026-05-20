@@ -652,9 +652,14 @@ export function CandidatesPage() {
           {showFilterBar&&(
             <div className="absolute left-0 top-full mt-1.5 z-50">
               <FilterBar filters={activeFilters} onChange={setActiveFilters}
-                jobs={jobs as any[]} interviewers={interviewers as any[]}
-                hrUsers={hrUsers as any[]} mode={filterMode} onModeChange={setFilterMode}
-                customFieldDefs={(customFields as any[]).map(f=>({field_name:f.field_name,field_label:f.field_label,field_type:f.field_type}))}/>
+                jobs={jobs as any[]}
+                interviewers={isAgency ? [] : interviewers as any[]}
+                hrUsers={isAgency ? [] : hrUsers as any[]}
+                mode={filterMode} onModeChange={setFilterMode}
+                hideHrFields={isAgency}
+                customFieldDefs={(customFields as any[])
+                  .filter((f:any) => !isAgency || f.show_to_agency !== false)
+                  .map(f=>({field_name:f.field_name,field_label:f.field_label,field_type:f.field_type}))}/>
             </div>
           )}
         </div>
