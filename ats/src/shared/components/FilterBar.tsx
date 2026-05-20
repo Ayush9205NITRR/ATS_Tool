@@ -215,12 +215,14 @@ interface Props {
   onModeChange: (m: FilterMode) => void
   customFieldDefs?: CustomFieldDef[]
   stages?: string[]
+  hideHrFields?: boolean  // Agency: hide HR Owner, Interviewer filters
 }
 
-export function FilterBar({ filters, onChange, jobs, interviewers, hrUsers, mode, onModeChange, customFieldDefs = [], stages }: Props) {
+export function FilterBar({ filters, onChange, jobs, interviewers, hrUsers, mode, onModeChange, customFieldDefs = [], stages, hideHrFields }: Props) {
   // Build dynamic field list including custom fields
+  const HR_ONLY_FIELDS = new Set(['hr_owner','interviewer'])
   const allFields: FieldDef[] = [
-    ...SYSTEM_FIELDS,
+    ...SYSTEM_FIELDS.filter(f => !hideHrFields || !HR_ONLY_FIELDS.has(f.key)),
     ...customFieldDefs.map(cf => ({
       key: `cf_${cf.field_name}`,
       label: cf.field_label,
