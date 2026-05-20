@@ -215,8 +215,9 @@ export function SettingsPage() {
             </div>
           )}
 
-          <Modal open={showUserModal} onClose={() => setShowUserModal(false)} title="Add Team Member" size="sm">            <form onSubmit={hu(d => createUser.mutate(d))} className="space-y-4">
-              {[['full_name','Full Name','Priya Sharma','text'],['email','Email','priya@company.com','email'],['password','Temporary Password','','password']].map(([key,label,ph,type]) => (
+          <Modal open={showUserModal} onClose={() => setShowUserModal(false)} title="Add Team Member" size="sm">
+            <form onSubmit={hu(d => createUser.mutate(d))} className="space-y-4">
+              {[['full_name','Full Name *','e.g. ABC Consultants (agency name)','text'],['email','Email *','priya@company.com','email'],['password','Temporary Password *','','password']].map(([key,label,ph,type]) => (
                 <div key={key}>
                   <label className="block text-sm font-medium text-gray-700 mb-1">{label}</label>
                   <input {...ru(key as any)} type={type} placeholder={ph} className={inputCls}/>
@@ -232,6 +233,9 @@ export function SettingsPage() {
                   <option value="admin">Admin</option>
                   <option value="super_admin">Super Admin</option>
                 </select>
+                <p className="mt-1.5 text-xs text-gray-400">
+                  💡 <strong>For Agency:</strong> Use the agency company name as "Full Name" — this becomes the agency identifier. Candidates uploaded by them will automatically link to this account.
+                </p>
               </div>
               {createUser.error && <p className="text-sm text-red-600">{(createUser.error as Error).message}</p>}
               <div className="flex justify-end gap-2 pt-1">
