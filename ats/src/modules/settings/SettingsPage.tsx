@@ -288,12 +288,12 @@ export function SettingsPage() {
           ) : (
             <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
               <div className="grid grid-cols-12 px-5 py-2.5 bg-gray-50 border-b border-gray-100 text-xs font-semibold text-gray-400 uppercase tracking-wide">
-                <div className="col-span-4">Field</div>
+                <div className="col-span-4">Field / API Key</div>
                 <div className="col-span-2">Type</div>
                 <div className="col-span-2">Required</div>
                 <div className="col-span-2">Interviewer</div>
                 <div className="col-span-1">Agency</div>
-                <div className="col-span-1">Actions</div>
+                <div className="col-span-1">Status</div>
               </div>
               {(fields as any[]).map((field, i) => (
                 <div key={field.id} className={`grid grid-cols-12 items-center px-5 py-3 ${i > 0 ? 'border-t border-gray-100' : ''} hover:bg-gray-50/30 transition-colors`}>
