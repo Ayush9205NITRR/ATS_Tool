@@ -83,7 +83,8 @@ export const candidateService = {
   list: async (filters: CandidateFilters = {}) => {
     let query = supabase
       .from('candidates')
-      .select('*, job:jobs(id, title, pipeline_stages, jd_link), agency:agencies(id, name)')
+      // agency_id references users.id — join as agency_user
+      .select('*, job:jobs(id, title, pipeline_stages, jd_link), agency_user:users!agency_id(id, full_name)')
       .order('created_at', { ascending: false })
 
     if (filters.stage)           query = query.eq('current_stage', filters.stage)
@@ -96,37 +97,31 @@ export const candidateService = {
     }
 
     const { data, error } = await query
-    if (error) throw error
+    if (error) { console.error('[candidateService.list]', error); throw error }
     return data ?? []
   },
 
   getById: async (id: string) => {
     const { data, error } = await supabase
       .from('candidates')
-      .select('*, job:jobs(id, title, pipeline_stages, jd_link), agency:agencies(id, name)')
+      .select('*, job:jobs(id, title, pipeline_stages, jd_link), agency_user:users!agency_id(id, full_name)')
       .eq('id', id)
       .single()
-    if (error) throw error
+    if (error) { console.error('[candidateService.getById]', error); throw error }
     return data
   },
 
   create: async (payload: Omit<Candidate, 'id' | 'created_at' | 'updated_at'>, callerRole?: string, callerId?: string) => {
     const normalized = normalizePayload(payload)
 
-    // Agency: hardcode source_category, fetch true agency_id from users table
+    // Agency: agency_id = their own user id, source_name = their full_name
     if (callerRole === 'agency' && callerId) {
       normalized.source_category = 'agency' as any
-      // Get the actual agency_id (from agencies table) linked to this user
-      const { data: userRow } = await supabase
-        .from('users').select('agency_id,full_name').eq('id', callerId).maybeSingle()
-      if (userRow?.agency_id) {
-        ;(normalized as any).agency_id = userRow.agency_id
-        // Auto-fill source_name with agency name if not set
-        if (!normalized.source_name) {
-          const { data: agencyRow } = await supabase
-            .from('agencies').select('name').eq('id', userRow.agency_id).maybeSingle()
-          if (agencyRow?.name) normalized.source_name = agencyRow.name
-        }
+      ;(normalized as any).agency_id = callerId
+      if (!normalized.source_name) {
+        const { data: userRow } = await supabase
+          .from('users').select('full_name').eq('id', callerId).maybeSingle()
+        if (userRow?.full_name) normalized.source_name = userRow.full_name
       }
     }
 
@@ -141,7 +136,6 @@ export const candidateService = {
     const { data, error } = await supabase
       .from('candidates').insert(normalized).select().single()
     if (error) {
-      // Catch DB unique constraint — show generic message
       if (error.code === '23505') throw new Error('Candidate already exists.')
       throw error
     }
@@ -166,21 +160,15 @@ export const candidateService = {
   bulkCreate: async (candidates: Omit<Candidate, 'id' | 'created_at' | 'updated_at'>[], callerRole?: string, callerId?: string) => {
     let normalized = candidates.map(normalizePayload)
 
-    // Agency: hardcode source + fetch true agency_id
+    // Agency: agency_id = their own user id, source_name = their full_name
     if (callerRole === 'agency' && callerId) {
       const { data: userRow } = await supabase
-        .from('users').select('agency_id,full_name').eq('id', callerId).maybeSingle()
-      let agencyId = userRow?.agency_id ?? null
-      let agencyName = ''
-      if (agencyId) {
-        const { data: agencyRow } = await supabase
-          .from('agencies').select('name').eq('id', agencyId).maybeSingle()
-        agencyName = agencyRow?.name ?? userRow?.full_name ?? ''
-      }
+        .from('users').select('full_name').eq('id', callerId).maybeSingle()
+      const agencyName = userRow?.full_name ?? ''
       normalized = normalized.map(c => ({
         ...c,
         source_category: 'agency' as any,
-        agency_id: agencyId,
+        agency_id: callerId,                        // agency_id = user's own id
         source_name: c.source_name || agencyName,
       }))
     }
