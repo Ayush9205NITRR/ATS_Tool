@@ -18,7 +18,7 @@ export function InterviewerStatsWidget() {
         { data: feedback },
       ] = await Promise.all([
         supabase.from('candidates')
-          .select('id, full_name, current_stage, interview_date, job:jobs(title)')
+          .select('id, full_name, current_stage, interview_date, job_id')
           .contains('assigned_interviewers', [user!.id])
           .eq('status','active'),
         supabase.from('interview_feedback')
