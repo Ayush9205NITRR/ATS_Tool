@@ -83,8 +83,7 @@ export const candidateService = {
   list: async (filters: CandidateFilters = {}) => {
     let query = supabase
       .from('candidates')
-      // agency_id references users.id — join as agency_user
-      .select('*, job:jobs(id, title, pipeline_stages, jd_link), agency_user:users!agency_id(id, full_name)')
+      .select('*, job:jobs(id, title, pipeline_stages, jd_link)')
       .order('created_at', { ascending: false })
 
     if (filters.stage)           query = query.eq('current_stage', filters.stage)
@@ -104,7 +103,7 @@ export const candidateService = {
   getById: async (id: string) => {
     const { data, error } = await supabase
       .from('candidates')
-      .select('*, job:jobs(id, title, pipeline_stages, jd_link), agency_user:users!agency_id(id, full_name)')
+      .select('*, job:jobs(id, title, pipeline_stages, jd_link)')
       .eq('id', id)
       .single()
     if (error) { console.error('[candidateService.getById]', error); throw error }
