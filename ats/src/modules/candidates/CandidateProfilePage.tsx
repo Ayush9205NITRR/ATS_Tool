@@ -655,7 +655,8 @@ export function CandidateProfilePage() {
             )}
           </div>
 
-          {/* General Notes — clean, no heavy border */}
+          {/* General Notes — hidden from agency */}
+          {!isAgency && (
           <div>
             <div className="flex items-center justify-between mb-2 px-1">
               <p className="text-sm font-semibold text-gray-700">General Notes</p>
@@ -675,8 +676,10 @@ export function CandidateProfilePage() {
               )
             )}
           </div>
+          )}
 
-          {/* Interview Notes — clean feed, no outer border */}
+          {/* Interview Notes — hidden from agency */}
+          {!isAgency && (
           <div>
             <p className="text-sm font-semibold text-gray-700 mb-3 px-1">Interview Notes</p>
             <div className="space-y-0">
@@ -761,12 +764,10 @@ export function CandidateProfilePage() {
               })}
             </div>
           </div>
+          )} {/* end !isAgency — Interview Notes hidden from agency */}
 
-          {/* ══ AGENCY NOTES — Privacy Matrix ══════════════════════════
-              ✅ HR / Super Admin / Admin : Read + Write
-              ✅ Agency users             : Read only (their own candidates)
-              ❌ Interviewers             : Never shown (not in DOM)
-              ══════════════════════════════════════════════════════════ */}
+          {/* Agency Feedback — Privacy Matrix:
+              HR/Admin: Read+Write | Agency: Read-only | Interviewer: Hidden */}
           {!isInterviewer && (
             <>
               {/* Agency reads — clean read-only box */}
@@ -789,7 +790,7 @@ export function CandidateProfilePage() {
               )}
 
               {/* HR/Admin write — shown whenever candidate came from agency */}
-              {!isAgency && (candidate as any).agency_id && (
+              {!isAgency && (
                 <AgencyFeedbackEditor
                   candidateId={candidate.id}
                   currentFeedback={(candidate as any).agency_notes ?? ''}
