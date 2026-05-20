@@ -26,13 +26,32 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       return
     }
     // Fetch profile from public.users table
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('users')
       .select('*')
       .eq('id', session.user.id)
       .single()
 
-    set({ user: data ?? null, session, loading: false })
+    if (error) {
+      console.error('[authStore] Failed to fetch user profile:', error.message)
+    }
+
+    if (!data) {
+      // Profile missing — create it from session metadata
+      const meta = session.user.user_metadata ?? {}
+      const email = session.user.email ?? ''
+      const { data: inserted } = await supabase.from('users').insert({
+        id: session.user.id,
+        email,
+        full_name: meta.full_name ?? email.split('@')[0],
+        role: 'hr_team',
+        is_active: true,
+      }).select().single()
+      set({ user: inserted ?? null, session, loading: false })
+      return
+    }
+
+    set({ user: data, session, loading: false })
   },
 
   signOut: async () => {
