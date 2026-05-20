@@ -4,7 +4,7 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
-import { CheckCircle, ChevronDown } from 'lucide-react'
+import { CheckCircle } from 'lucide-react'
 import { candidateService } from '../../candidates/candidateService'
 import { useAuthStore } from '../../auth/authStore'
 import { useDuplicateCheck } from '../../../shared/hooks/useDuplicateCheck'
@@ -12,73 +12,43 @@ import { DuplicateWarning } from '../../../shared/components/DuplicateWarning'
 import { Button } from '../../../shared/components/Button'
 import { supabase } from '../../../lib/supabaseClient'
 
-const PLATFORM_SOURCES = ['LinkedIn','Naukri','Indeed','Internshala','Shine','Monster','Foundit','Apna','Referral','Website','Other']
+const PLATFORM_SRCS = ['LinkedIn','Naukri','Indeed','Internshala','Shine','Monster','Foundit','Apna','Referral','Website','Other']
 
-function SourceDropdown({ value, onChange, disabled }: {
-  value: { category: string; name: string }
-  onChange: (v: { category: string; name: string }) => void
-  disabled?: boolean
+// Inline SubSourceField — no external file dependency
+function SubSourceField({ sourceCategory, value, onChange, required }: {
+  sourceCategory: string; value: string; onChange:(v:string)=>void; required?: boolean
 }) {
-  const [open, setOpen] = useState(false)
-  const [collegeText, setCollegeText] = useState(value.category === 'college' ? value.name : '')
   const { data: agencies = [] } = useQuery({
-    queryKey: ['agency-users'],
+    queryKey: ['agency-users-subsource'],
     queryFn: async () => {
       const { data } = await supabase.from('users').select('id,full_name').eq('role','agency').eq('is_active',true).order('full_name')
       return (data ?? []).map((u:any) => ({ id: u.id, name: u.full_name }))
     },
     staleTime: 60_000,
   })
-  const label = value.name
-    ? value.category === 'agency' ? `🏢 ${value.name}` : value.category === 'platform' ? `🔗 ${value.name}` : `🎓 ${value.name}`
-    : 'Select source…'
-  return (
-    <div className="relative">
-      <button type="button" disabled={disabled} onClick={() => setOpen(o => !o)}
-        className={`w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white focus:outline-none flex items-center justify-between text-left ${value.name ? 'text-gray-900' : 'text-gray-400'}`}>
-        <span>{label}</span><ChevronDown className="w-4 h-4 text-gray-400 flex-shrink-0"/>
-      </button>
-      {open && (<>
-        <div className="fixed inset-0 z-40" onClick={() => setOpen(false)}/>
-        <div className="absolute left-0 top-full mt-1 w-full bg-white border border-gray-200 rounded-xl shadow-xl z-50 max-h-64 overflow-y-auto">
-          {agencies.length > 0 && <div>
-            <div className="px-3 py-1.5 text-xs font-semibold text-gray-400 uppercase bg-gray-50 border-b border-gray-100">🏢 Agency</div>
-            {(agencies as any[]).map((a:any) => <button key={a.id} type="button" onClick={() => { onChange({ category:'agency', name:a.name }); setOpen(false) }}
-              className={`w-full text-left px-3 py-2 text-sm hover:bg-purple-50 flex items-center justify-between ${value.category==='agency'&&value.name===a.name?'text-purple-700 font-medium bg-purple-50':'text-gray-700'}`}>
-              {a.name}{value.category==='agency'&&value.name===a.name&&<span className="text-purple-600">✓</span>}
-            </button>)}
-          </div>}
-          <div>
-            <div className="px-3 py-1.5 text-xs font-semibold text-gray-400 uppercase bg-gray-50 border-b border-gray-100">🔗 Platform</div>
-            {PLATFORM_SOURCES.map(p => <button key={p} type="button" onClick={() => { onChange({ category:'platform', name:p }); setOpen(false) }}
-              className={`w-full text-left px-3 py-2 text-sm hover:bg-blue-50 flex items-center justify-between ${value.category==='platform'&&value.name===p?'text-blue-700 font-medium bg-blue-50':'text-gray-700'}`}>
-              {p}{value.category==='platform'&&value.name===p&&<span className="text-blue-600">✓</span>}
-            </button>)}
-          </div>
-          <div>
-            <div className="px-3 py-1.5 text-xs font-semibold text-gray-400 uppercase bg-gray-50 border-b border-gray-100">🎓 College</div>
-            <div className="px-3 py-2">
-              <input type="text" value={collegeText} onClick={e=>e.stopPropagation()}
-                onChange={e => { setCollegeText(e.target.value); if(e.target.value) onChange({ category:'college', name:e.target.value }) }}
-                onKeyDown={e => { if(e.key==='Enter'){e.preventDefault();if(collegeText)setOpen(false)} }}
-                placeholder="Type college name…" className="w-full px-2.5 py-1.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"/>
-            </div>
-          </div>
-        </div>
-      </>)}
-    </div>
+  const cls = 'w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500'
+  if (!sourceCategory) return <input disabled placeholder="Select source type first…" className={`${cls} bg-gray-50 text-gray-400`}/>
+  if (sourceCategory === 'agency') return (
+    <select value={value} onChange={e=>onChange(e.target.value)} className={cls} required={required}>
+      <option value="">Select agency…</option>
+      {(agencies as any[]).map((a:any) => <option key={a.id} value={a.name}>{a.name}</option>)}
+    </select>
   )
+  if (sourceCategory === 'platform') return (
+    <select value={value} onChange={e=>onChange(e.target.value)} className={cls} required={required}>
+      <option value="">Select platform…</option>
+      {PLATFORM_SRCS.map(p => <option key={p} value={p}>{p}</option>)}
+    </select>
+  )
+  return <input type="text" value={value} onChange={e=>onChange(e.target.value)} placeholder="e.g. IIT Delhi, BITS Pilani…" className={cls} required={required}/>
 }
 
 const schema = z.object({
   full_name:       z.string().min(1, 'Name required'),
   email:           z.string().email('Valid email required').transform(v => v.trim().toLowerCase()),
-  phone:           z.string()
-    .refine(v => !v?.trim() || v.replace(/\D/g,'').length === 10, '10 digits required')
-    .optional(),
-  job_id:          z.string().optional(),
-  source_category: z.enum(['platform','agency','college']).default('platform'),
-  source_name:     z.string().optional(),
+  phone:           z.string().refine(v => !v?.trim() || v.replace(/\D/g,'').length === 10, '10-digit number required').optional(),
+  job_id:          z.string().min(1, 'Job selection is required'),
+  source_category: z.enum(['platform','agency','college']).optional(),
   resume_url:      z.string().url('Valid URL').optional().or(z.literal('')),
   linkedin_url:    z.string().url('Valid URL').optional().or(z.literal('')),
   notes:           z.string().optional(),
@@ -100,19 +70,23 @@ export function SingleEntryForm({ onSuccess }: { onSuccess?: () => void }) {
   const qc = useQueryClient()
   const navigate = useNavigate()
   const [done, setDone] = useState(false)
-  const [source, setSource] = useState<{ category: string; name: string }>(
-    isAgency ? { category: 'agency', name: user?.full_name ?? '' } : { category: 'platform', name: '' }
-  )
+  const [sourceCategory, setSourceCategory] = useState(isAgency ? 'agency' : '')
+  const [sourceName, setSourceName] = useState(isAgency ? (user?.full_name ?? '') : '')
   const [customValues, setCustomValues] = useState<Record<string,any>>({})
   const { duplicates, checking, check, reset: resetDup } = useDuplicateCheck()
 
+  // Reset sub-source when source changes
+  useEffect(() => { if (!isAgency) setSourceName('') }, [sourceCategory])
+
+  // Jobs — agency sees only jobs assigned to them
   const { data: jobs = [] } = useQuery({
-    queryKey: ['jobs', 'open', isAgency ? 'agency' : 'all'],
+    queryKey: ['jobs', 'open', isAgency ? `agency-${user?.id}` : 'all'],
     queryFn: async () => {
-      let q = supabase.from('jobs').select('id,title').eq('status','open').order('title')
-      if (isAgency) q = (q as any).eq('show_to_agency', true)
-      const { data } = await q
-      return data ?? []
+      const { data } = await supabase.from('jobs').select('id,title,show_to_agency,allowed_agency_ids').eq('status','open').order('title')
+      if (!isAgency || !user?.id) return data ?? []
+      return (data ?? []).filter((j:any) =>
+        j.show_to_agency && (!j.allowed_agency_ids || j.allowed_agency_ids.length === 0 || j.allowed_agency_ids.includes(user.id))
+      )
     },
   })
 
@@ -124,13 +98,12 @@ export function SingleEntryForm({ onSuccess }: { onSuccess?: () => void }) {
     },
   })
 
-  const { register, handleSubmit, reset: resetForm, watch, setValue, formState: { errors } } = useForm<FormData>({
+  const { register, handleSubmit, reset: resetForm, watch, formState: { errors } } = useForm<FormData>({
     resolver: zodResolver(schema),
-    defaultValues: { source_category: isAgency ? 'agency' : 'platform' },
   })
 
-  const watchEmail  = watch('email')
-  const watchPhone  = watch('phone')
+  const watchEmail = watch('email')
+  const watchPhone = watch('phone')
   useEffect(() => { check(watchEmail ?? '', watchPhone ?? '') }, [watchEmail, watchPhone])
 
   const mutation = useMutation({
@@ -139,9 +112,9 @@ export function SingleEntryForm({ onSuccess }: { onSuccess?: () => void }) {
         full_name:            data.full_name,
         email:                data.email,
         phone:                data.phone?.replace(/\D/g,'').slice(0,10) || null,
-        job_id:               data.job_id || null,
-        source_category:      isAgency ? 'agency' : source.category,
-        source_name:          isAgency ? (user?.full_name ?? '') : source.name,
+        job_id:               data.job_id,
+        source_category:      isAgency ? 'agency' : (sourceCategory || 'platform'),
+        source_name:          isAgency ? (user?.full_name ?? '') : sourceName,
         resume_url:           data.resume_url || null,
         linkedin_url:         data.linkedin_url || null,
         notes:                data.notes || null,
@@ -154,7 +127,6 @@ export function SingleEntryForm({ onSuccess }: { onSuccess?: () => void }) {
         interview_notes:      {},
         custom_data:          customValues,
         uploaded_by:          user!.id,
-        // Agency: set agency_id to their own user id
         ...(isAgency ? { agency_id: user!.id } : {}),
       }
       return candidateService.create(payload, user?.role, user?.id)
@@ -163,7 +135,8 @@ export function SingleEntryForm({ onSuccess }: { onSuccess?: () => void }) {
       qc.invalidateQueries({ queryKey: ['candidates'] })
       qc.invalidateQueries({ queryKey: ['widget'] })
       setDone(true); resetDup(); resetForm()
-      setSource(isAgency ? { category: 'agency', name: user?.full_name ?? '' } : { category: 'platform', name: '' })
+      setSourceCategory(isAgency ? 'agency' : '')
+      setSourceName(isAgency ? (user?.full_name ?? '') : '')
       setCustomValues({})
       setTimeout(() => { setDone(false); onSuccess?.() }, 2000)
     },
@@ -177,10 +150,7 @@ export function SingleEntryForm({ onSuccess }: { onSuccess?: () => void }) {
     </div>
   )
 
-  // Visible custom fields for this role
-  const visibleCustomFields = (customFields as any[]).filter(f =>
-    isAgency ? f.show_to_agency !== false : true
-  )
+  const visibleCustomFields = (customFields as any[]).filter(f => !isAgency || f.show_to_agency !== false)
 
   return (
     <form onSubmit={handleSubmit(d => {
@@ -189,46 +159,74 @@ export function SingleEntryForm({ onSuccess }: { onSuccess?: () => void }) {
     })} className="space-y-4">
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+
+        {/* Name */}
         <Field label="Full Name *" error={errors.full_name?.message}>
           <input {...register('full_name')} placeholder="Priya Sharma" className={inputCls}/>
         </Field>
+
+        {/* Email */}
         <Field label="Email *" error={errors.email?.message}>
           <input {...register('email')} type="email" placeholder="priya@example.com" className={inputCls}/>
         </Field>
+
+        {/* Phone */}
         <Field label="Phone" error={errors.phone?.message}>
           <input {...register('phone')} placeholder="10-digit number" maxLength={10}
             onInput={e => { (e.target as HTMLInputElement).value = (e.target as HTMLInputElement).value.replace(/\D/g,'').slice(0,10) }}
             className={inputCls}/>
         </Field>
-        <Field label="Job Opening">
+
+        {/* Job — Mandatory */}
+        <Field label="Job Opening *" error={errors.job_id?.message}>
           <select {...register('job_id')} className={inputCls}>
-            <option value="">Select job (optional)</option>
+            <option value="">Select job *</option>
             {(jobs as any[]).map(j => <option key={j.id} value={j.id}>{j.title}</option>)}
           </select>
           {isAgency && (jobs as any[]).length === 0 && (
-            <p className="mt-1 text-xs text-amber-600">No active job openings available.</p>
+            <p className="mt-1 text-xs text-red-500">No job openings available — contact HR.</p>
           )}
         </Field>
 
-        {/* Source — single combined dropdown (agency/platform/college + sub-source in one) */}
+        {/* Source — hidden for agency (auto-set) */}
         {!isAgency ? (
-          <Field label="Source *" className="sm:col-span-2">
-            <SourceDropdown value={source} onChange={setSource}/>
-            {!source.name && <p className="mt-1 text-xs text-amber-600">Select a source</p>}
+          <Field label="Source *">
+            <select value={sourceCategory} onChange={e => setSourceCategory(e.target.value)} className={inputCls}>
+              <option value="">Select source type…</option>
+              <option value="platform">🔗 Platform</option>
+              <option value="agency">🏢 Agency</option>
+              <option value="college">🎓 College</option>
+            </select>
           </Field>
         ) : (
-          <Field label="Agency" className="sm:col-span-1">
-            <input value={user?.full_name ?? ''} disabled
-              className="w-full px-3 py-2 border border-purple-200 rounded-lg text-sm bg-purple-50 text-purple-700 font-medium"/>
+          <Field label="Agency">
+            <input value={user?.full_name ?? ''} disabled className={`${inputCls} bg-purple-50 text-purple-700 font-medium border-purple-200`}/>
           </Field>
         )}
 
+        {/* Sub-Source — dynamic based on source */}
+        {!isAgency && (
+          <Field label={sourceCategory === 'agency' ? 'Agency Name *' : sourceCategory === 'college' ? 'College Name *' : 'Platform *'}>
+            <SubSourceField
+              sourceCategory={sourceCategory}
+              value={sourceName}
+              onChange={setSourceName}
+              required
+            />
+          </Field>
+        )}
+
+        {/* Resume */}
         <Field label="Resume URL" error={errors.resume_url?.message} className="sm:col-span-2">
           <input {...register('resume_url')} placeholder="https://drive.google.com/file/d/…" className={inputCls}/>
         </Field>
+
+        {/* LinkedIn */}
         <Field label="LinkedIn URL" error={errors.linkedin_url?.message} className="sm:col-span-2">
           <input {...register('linkedin_url')} placeholder="https://linkedin.com/in/…" className={inputCls}/>
         </Field>
+
+        {/* Notes */}
         <Field label="Notes" className="sm:col-span-2">
           <textarea {...register('notes')} rows={3} placeholder="Any initial notes…" className={inputCls}/>
         </Field>
@@ -248,8 +246,7 @@ export function SingleEntryForm({ onSuccess }: { onSuccess?: () => void }) {
                     <span className="text-sm text-gray-600">{f.field_label}</span>
                   </div>
                 ) : (
-                  <input
-                    type={f.field_type==='number'?'number':f.field_type==='date'?'date':f.field_type==='url'?'url':'text'}
+                  <input type={f.field_type==='number'?'number':f.field_type==='date'?'date':f.field_type==='url'?'url':'text'}
                     placeholder={f.field_label}
                     onChange={e => setCustomValues(p=>({...p,[f.field_name]:e.target.value}))}
                     className={inputCls}/>
@@ -274,7 +271,7 @@ export function SingleEntryForm({ onSuccess }: { onSuccess?: () => void }) {
       <div className="flex justify-end pt-2">
         {duplicates.length > 0 ? (
           <span className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
-            🚫 Duplicate found — fix email/phone before adding
+            🚫 Duplicate — fix email/phone before adding
           </span>
         ) : (
           <Button type="submit" loading={mutation.isPending} disabled={checking}>
