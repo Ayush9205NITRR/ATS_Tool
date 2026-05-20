@@ -40,11 +40,25 @@ export function InterviewsPage() {
       // Fetch all candidates assigned to me
       const { data: candidates, error: cErr } = await supabase
         .from('candidates')
-        .select('id, full_name, current_stage, interview_date, job:jobs(title)')
+        .select('id, full_name, current_stage, interview_date, job_id')
         .contains('assigned_interviewers', [user!.id])
         .eq('status', 'active')
 
       if (cErr) throw cErr
+
+      // Fetch job titles separately (no join needed)
+      const jobIds = [...new Set((candidates ?? []).map(c => c.job_id).filter(Boolean))]
+      const jobsMap: Record<string, string> = {}
+      if (jobIds.length) {
+        const { data: jobs } = await supabase.from('jobs').select('id,title').in('id', jobIds)
+        ;(jobs ?? []).forEach(j => { jobsMap[j.id] = j.title })
+      }
+
+      // Attach job title to each candidate
+      const candidatesWithJob = (candidates ?? []).map(c => ({
+        ...c,
+        job: c.job_id ? { title: jobsMap[c.job_id] ?? null } : null,
+      }))
 
       // Fetch my submitted feedback
       const { data: feedback, error: fErr } = await supabase
@@ -57,7 +71,7 @@ export function InterviewsPage() {
       const doneMap = new Map((feedback ?? []).map(f => [f.candidate_id, f.submitted_at as string]))
 
       return {
-        all: candidates ?? [],
+        all: candidatesWithJob,
         doneMap,
         pending:   (candidates ?? []).filter(c => !doneMap.has(c.id)),
         submitted: (candidates ?? []).filter(c =>  doneMap.has(c.id)),
