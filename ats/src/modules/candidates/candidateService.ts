@@ -80,9 +80,11 @@ export async function findDuplicates(
 
 export const candidateService = {
   list: async (filters: CandidateFilters = {}) => {
+    // Simple select without join to avoid schema cache issues
+    // Job data fetched separately where needed
     let query = supabase
       .from('candidates')
-      .select('*, job:jobs!job_id(id, title, pipeline_stages, jd_link)')
+      .select('*')
       .order('created_at', { ascending: false })
 
     if (filters.stage)           query = query.eq('current_stage', filters.stage)
@@ -95,29 +97,17 @@ export const candidateService = {
     }
 
     const { data, error } = await query
-    if (error) {
-      console.error('[candidateService.list]', error)
-      // If join fails, try without join
-      if (error.message?.includes('schema') || error.message?.includes('join')) {
-        const { data: plain } = await supabase.from('candidates').select('*').order('created_at', { ascending: false })
-        return plain ?? []
-      }
-      throw error
-    }
+    if (error) { console.error('[candidateService.list]', error); throw error }
     return data ?? []
   },
 
   getById: async (id: string) => {
     const { data, error } = await supabase
       .from('candidates')
-      .select('*, job:jobs!job_id(id, title, pipeline_stages, jd_link)')
+      .select('*')
       .eq('id', id)
       .single()
-    if (error) {
-      // Fallback without join
-      const { data: plain } = await supabase.from('candidates').select('*').eq('id', id).single()
-      return plain
-    }
+    if (error) { console.error('[candidateService.getById]', error); throw error }
     return data
   },
 
