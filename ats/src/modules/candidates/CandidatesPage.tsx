@@ -89,66 +89,103 @@ function Popup({ trigger, children }: { trigger:React.ReactNode; children:React.
   )
 }
 
-// ── Source cell (with sub-source) ────────────────────────────
+// ── Source cell — shows category only, click to change ────────
 const PLATFORM_SRC_LIST = ['LinkedIn','Naukri','Indeed','Internshala','Shine','Monster','Foundit','Apna','Referral','Website','Other']
 
-const SourceCell = memo(({ cid, category, name, canEdit, onUpdate }: {
+const SourceCell = memo(({ cid, category, canEdit, onUpdate }: {
+  cid:string; category:string; canEdit:boolean
+  onUpdate:(id:string,f:string,v:any)=>void
+}) => {
+  const badge = (
+    <span className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-medium ${canEdit?'cursor-pointer hover:opacity-80':''} ${
+      category==='agency'?'bg-purple-50 text-purple-700':
+      category==='platform'?'bg-blue-50 text-blue-700':
+      category==='college'?'bg-amber-50 text-amber-700':
+      'bg-gray-50 text-gray-400'
+    }`}>
+      {category==='agency'?'🏢':category==='platform'?'🔗':category==='college'?'🎓':''}
+      {category ? category.charAt(0).toUpperCase()+category.slice(1) : '—'}
+      {canEdit && <ChevronDown className="w-2.5 h-2.5 opacity-50"/>}
+    </span>
+  )
+  if (!canEdit) return badge
+  return (
+    <Popup trigger={badge}>
+      <div className="px-1 py-1">
+        {[['platform','🔗 Platform'],['agency','🏢 Agency'],['college','🎓 College']].map(([cat,lbl])=>(
+          <button key={cat}
+            onClick={()=>{ onUpdate(cid,'source_category',cat); onUpdate(cid,'source_name','') }}
+            className={`w-full text-left text-xs px-2.5 py-2 rounded hover:bg-gray-50 flex items-center justify-between gap-4 ${category===cat?'font-semibold text-gray-900':'text-gray-600'}`}>
+            {lbl}{category===cat&&<Check className="w-3 h-3 text-blue-500"/>}
+          </button>
+        ))}
+      </div>
+    </Popup>
+  )
+})
+
+// ── Sub-Source cell — shows source_name, dropdown by category ──
+const SubSourceCell = memo(({ cid, category, name, canEdit, onUpdate }: {
   cid:string; category:string; name:string; canEdit:boolean
   onUpdate:(id:string,f:string,v:any)=>void
 }) => {
   const [agencyUsers, setAgencyUsers] = useState<{id:string;full_name:string}[]>([])
   const [loaded, setLoaded] = useState(false)
-  const badge = (
-    <span className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-medium cursor-pointer hover:opacity-80 ${
-      category==='agency'?'bg-purple-50 text-purple-700':category==='platform'?'bg-blue-50 text-blue-700':category?'bg-amber-50 text-amber-700':'bg-gray-50 text-gray-400'
-    }`}>
-      {category==='agency'?'🏢':category==='platform'?'🔗':category==='college'?'🎓':''}
-      {name || (category ? category.charAt(0).toUpperCase()+category.slice(1) : '—')}
-      {canEdit && <ChevronDown className="w-2.5 h-2.5 opacity-50"/>}
+
+  const display = name || <span className="text-gray-300">—</span>
+  if (!canEdit || !category) return <span className="text-xs text-gray-600">{display}</span>
+
+  const trigger = (
+    <span className="inline-flex items-center gap-0.5 text-xs text-gray-700 cursor-pointer hover:text-blue-600 max-w-[120px] truncate">
+      {name || <span className="text-gray-400 italic">select…</span>}
+      <ChevronDown className="w-2.5 h-2.5 opacity-50 flex-shrink-0"/>
     </span>
   )
-  if (!canEdit) return badge
 
   const loadAgencies = () => {
-    if (loaded) return
-    setLoaded(true)
+    if (loaded) return; setLoaded(true)
     supabase.from('users').select('id,full_name').eq('role','agency').eq('is_active',true).order('full_name')
       .then(({data}) => setAgencyUsers(data ?? []))
   }
 
-  return (
-    <Popup trigger={<span onClick={loadAgencies}>{badge}</span>}>
-      {/* Source type selector */}
-      <div className="px-2 py-1 border-b border-gray-100">
-        <p className="text-xs text-gray-400 font-medium mb-1">Source</p>
-        {[['platform','🔗 Platform'],['agency','🏢 Agency'],['college','🎓 College']].map(([cat,lbl])=>(
-          <button key={cat} onClick={()=>{ onUpdate(cid,'source_category',cat); onUpdate(cid,'source_name','') }}
-            className={`w-full text-left text-xs px-2 py-1.5 rounded hover:bg-gray-50 flex items-center justify-between ${category===cat?'font-semibold text-gray-900':'text-gray-600'}`}>
-            {lbl}{category===cat&&<Check className="w-3 h-3 text-blue-500"/>}
-          </button>
-        ))}
+  if (category === 'agency') return (
+    <Popup trigger={<span onClick={loadAgencies}>{trigger}</span>}>
+      <div className="px-1 py-1 max-h-52 overflow-y-auto">
+        {agencyUsers.length === 0
+          ? <p className="text-xs text-gray-400 px-2 py-2 italic">No agency users found</p>
+          : agencyUsers.map(u => (
+            <button key={u.id} onClick={() => onUpdate(cid, 'source_name', u.full_name)}
+              className={`w-full text-left text-xs px-2.5 py-2 rounded hover:bg-purple-50 flex items-center justify-between gap-3 ${name===u.full_name?'text-purple-700 font-semibold bg-purple-50':''}`}>
+              {u.full_name}{name===u.full_name&&<Check className="w-3 h-3 text-purple-500"/>}
+            </button>
+          ))
+        }
       </div>
-      {/* Sub-source */}
-      <div className="px-2 py-1">
-        <p className="text-xs text-gray-400 font-medium mb-1">Sub-Source</p>
-        {category==='agency' && agencyUsers.map(u=>(
-          <button key={u.id} onClick={()=>onUpdate(cid,'source_name',u.full_name)}
-            className={`w-full text-left text-xs px-2 py-1.5 rounded hover:bg-purple-50 flex items-center justify-between ${name===u.full_name?'text-purple-700 font-semibold':''}`}>
-            {u.full_name}{name===u.full_name&&<Check className="w-3 h-3 text-purple-500"/>}
-          </button>
-        ))}
-        {category==='platform' && PLATFORM_SRC_LIST.map(p=>(
-          <button key={p} onClick={()=>onUpdate(cid,'source_name',p)}
-            className={`w-full text-left text-xs px-2 py-1.5 rounded hover:bg-blue-50 flex items-center justify-between ${name===p?'text-blue-700 font-semibold':''}`}>
+    </Popup>
+  )
+
+  if (category === 'platform') return (
+    <Popup trigger={trigger}>
+      <div className="px-1 py-1">
+        {PLATFORM_SRC_LIST.map(p => (
+          <button key={p} onClick={() => onUpdate(cid, 'source_name', p)}
+            className={`w-full text-left text-xs px-2.5 py-2 rounded hover:bg-blue-50 flex items-center justify-between gap-3 ${name===p?'text-blue-700 font-semibold bg-blue-50':''}`}>
             {p}{name===p&&<Check className="w-3 h-3 text-blue-500"/>}
           </button>
         ))}
-        {category==='college' && (
-          <input type="text" defaultValue={name}
-            onBlur={e=>{if(e.target.value!==name)onUpdate(cid,'source_name',e.target.value)}}
-            placeholder="College name…" className="w-full px-2 py-1.5 text-xs border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-blue-400"/>
-        )}
-        {!category && <p className="text-xs text-gray-400 italic">Select source type first</p>}
+      </div>
+    </Popup>
+  )
+
+  // College — inline text edit
+  return (
+    <Popup trigger={trigger}>
+      <div className="px-2 py-2">
+        <input type="text" defaultValue={name} autoFocus
+          onBlur={e => { if(e.target.value !== name) onUpdate(cid, 'source_name', e.target.value) }}
+          onKeyDown={e => { if(e.key==='Enter') (e.target as HTMLInputElement).blur() }}
+          placeholder="College name…"
+          className="w-full px-2.5 py-1.5 text-xs border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-blue-400"/>
       </div>
     </Popup>
   )
@@ -805,10 +842,10 @@ export function CandidatesPage() {
                               if (key==='stage') return <td key="stage" className="px-3 py-2.5"><StageCell cid={c.id} value={c.current_stage} canEdit={canEdit} onUpdate={onUpdate} stages={STAGES} stageConfigs={stageConfigs}/></td>
                               if (key==='job') return <td key="job" className="px-3 py-2.5"><SelectCell cid={c.id} field="job_id" display={c.job?.title ?? getName(jobs as any[],c.job_id)} canEdit={canAssign} onUpdate={onUpdate} options={(jobs as any[]).map(j=>({label:j.title,value:j.id}))}/></td>
                               if (key==='source') return <td key="source" className="px-3 py-2.5">
-                                <SourceCell cid={c.id} category={c.source_category} name={c.source_name} canEdit={canEdit} onUpdate={onUpdate}/>
+                                <SourceCell cid={c.id} category={c.source_category} canEdit={canEdit} onUpdate={onUpdate}/>
                               </td>
-                              if (key==='subsource') return <td key="subsource" className="px-3 py-2.5 text-xs text-gray-600">
-                                {c.source_name || <span className="text-gray-300">—</span>}
+                              if (key==='subsource') return <td key="subsource" className="px-3 py-2.5">
+                                <SubSourceCell cid={c.id} category={c.source_category} name={c.source_name??''} canEdit={canEdit} onUpdate={onUpdate}/>
                               </td>
                               if (key==='hr_owner') return <td key="hr_owner" className="px-3 py-2.5"><SelectCell cid={c.id} field="hr_owner" display={getName(hrUsers as any[],c.hr_owner)} canEdit={canAssignHR} onUpdate={onUpdate} options={(hrUsers as any[]).map(u=>({label:u.full_name,value:u.id}))}/></td>
                               if (key==='interviewer') return <td key="interviewer" className="px-3 py-2.5"><MultiCell cid={c.id} field="assigned_interviewers" ids={c.assigned_interviewers??[]} canEdit={canEdit} onUpdate={(id,_,arr)=>onUpdate(id,'assigned_interviewers',arr)} options={(interviewers as any[]).map(u=>({label:u.full_name,value:u.id}))}/></td>
