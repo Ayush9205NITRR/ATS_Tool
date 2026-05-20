@@ -71,7 +71,7 @@ export function SettingsPage() {
   // ── Users ─────────────────────────────────────────────────
   const { data: users = [], isLoading: usersLoading } = useQuery({
     queryKey: ['users'],
-    queryFn: async () => { const { data } = await supabase.from('users').select('*').order('created_at', { ascending: false }); return (data ?? []) as User[] },
+    queryFn: async () => { const { data } = await supabase.from('users').select('*').order('full_name', { ascending: true }); return (data ?? []) as User[] },
   })
 
   const { register: ru, handleSubmit: hu, reset: resetU, formState: { errors: eu } } = useForm<UserFormData>({
