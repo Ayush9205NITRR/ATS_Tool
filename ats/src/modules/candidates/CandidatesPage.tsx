@@ -27,6 +27,7 @@ import { useAuthStore } from '../auth/authStore'
 import { supabase } from '../../lib/supabaseClient'
 import type { CandidateFilters } from './candidateService'
 import { INTERVIEW_STAGES } from '../../types/database.types'
+import { useStages as useStagesHook } from '../../shared/hooks/useStages'
 import { formatDate, formatDateTime } from '../../shared/utils/helpers'
 import { ScheduleInterviewModal } from './ScheduleInterviewModal'
 import { SendEmailModal } from './SendEmailModal'
@@ -372,16 +373,8 @@ export function CandidatesPage() {
   const isSuperAdmin = hasRole(['super_admin'])
   const isAgency    = hasRole(['agency'])
 
-  const { data: stageRaw = [] } = useQuery({
-    queryKey: ['app-settings', 'pipeline_stages'],
-    queryFn: async () => {
-      const { data } = await supabase.from('app_settings').select('value').eq('key','pipeline_stages').maybeSingle()
-      if (!data?.value) return []
-      try { const p = JSON.parse(data.value); return Array.isArray(p) ? p : [] } catch { return [] }
-    },
-    staleTime: 0,
-  })
-  const stageConfigs = stageRaw as any[]
+  // Stages — shared hook (synced with OrgSettingsTab, CandidateProfilePage)
+  const { stageConfigs } = useStagesHook()
   const STAGES: string[] = stageConfigs.length
     ? stageConfigs.map((s: any) => typeof s === 'string' ? s : s.name)
     : [...INTERVIEW_STAGES]
@@ -416,9 +409,24 @@ export function CandidatesPage() {
   const [bulkField, setBulkField]         = useState<string|null>(null)
   const [confirmDelete, setConfirmDelete] = useState<string|null>(null)
   const [groupBy, setGroupBy] = useState('')
-  const [colOrder, setColOrder]     = useState<string[]>(DEFAULT_ORDER)
-  const [visibleCols, setVisibleCols] = useState<Set<string>>(DEFAULT_VISIBLE)
-  const [pinnedCols, setPinnedCols]   = useState<Set<string>>(new Set<string>())
+  // ── Column layout — persisted in localStorage ─────────────────
+  const LS_KEY = 'ats_col_layout_v1'
+  const savedLayout = (() => {
+    try { return JSON.parse(localStorage.getItem(LS_KEY) ?? '{}') } catch { return {} }
+  })()
+
+  const [colOrder, setColOrder]       = useState<string[]>(savedLayout.colOrder ?? DEFAULT_ORDER)
+  const [visibleCols, setVisibleCols] = useState<Set<string>>(new Set(savedLayout.visibleCols ?? [...DEFAULT_VISIBLE]))
+  const [pinnedCols, setPinnedCols]   = useState<Set<string>>(new Set(savedLayout.pinnedCols ?? []))
+
+  // Save layout whenever it changes
+  useEffect(() => {
+    localStorage.setItem(LS_KEY, JSON.stringify({
+      colOrder,
+      visibleCols: [...visibleCols],
+      pinnedCols: [...pinnedCols],
+    }))
+  }, [colOrder, visibleCols, pinnedCols])
   const [scheduleCandidate, setScheduleCandidate] = useState<any | null>(null)
   const [sendEmailCandidates, setSendEmailCandidates] = useState<any[]>([])
   const [bulkSelectValue, setBulkSelectValue] = useState('')
