@@ -495,7 +495,7 @@ export function CandidateProfilePage() {
             <div className="px-5 py-4 space-y-4">
               <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Assignment</p>
 
-              {/* HR Owner — SINGLE select pill (click to assign, click again to unassign) */}
+              {/* HR Owner */}
               <div>
                 <p className="text-xs text-gray-500 mb-2">HR Owner <span className="text-gray-300">(single)</span></p>
                 {hrUsers.length === 0 ? (
@@ -564,7 +564,16 @@ export function CandidateProfilePage() {
             </div>
           )}
 
-          {/* Additional Details — custom fields in left sidebar */}
+          {/* Interview Date — visible to agency as read-only */}
+          {isAgency && (candidate as any).interview_date && (
+            <div className="px-5 py-4">
+              <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">Interview</p>
+              <div className="flex items-center gap-2 text-sm text-gray-700">
+                <span className="text-blue-500">📅</span>
+                {formatDateTime((candidate as any).interview_date)}
+              </div>
+            </div>
+          )}
           {(() => {
             const visibleFields = (customFields as any[]).filter((f: any) =>
               !isInterviewer || f.show_to_interviewer !== false
@@ -767,11 +776,10 @@ export function CandidateProfilePage() {
           </div>
           )} {/* end !isAgency — Interview Notes hidden from agency */}
 
-          {/* Agency Feedback — Privacy Matrix:
+          {/* Agency Feedback — only shown when source_category = 'agency'
               HR/Admin: Read+Write | Agency: Read-only | Interviewer: Hidden */}
-          {!isInterviewer && (
+          {!isInterviewer && (candidate as any).source_category === 'agency' && (
             <>
-              {/* Agency reads — clean read-only box */}
               {isAgency && (
                 <div className="bg-blue-50/60 rounded-xl border border-blue-100 px-5 py-4">
                   <p className="text-sm font-semibold text-gray-700 mb-2 flex items-center gap-2">
@@ -783,14 +791,10 @@ export function CandidateProfilePage() {
                       {(candidate as any).agency_notes}
                     </p>
                   ) : (
-                    <p className="text-xs text-gray-400 italic">
-                      No feedback shared yet. HR will post remarks here once they've reviewed the candidate.
-                    </p>
+                    <p className="text-xs text-gray-400 italic">No feedback shared yet.</p>
                   )}
                 </div>
               )}
-
-              {/* HR/Admin write — shown whenever candidate came from agency */}
               {!isAgency && (
                 <AgencyFeedbackEditor
                   candidateId={candidate.id}
