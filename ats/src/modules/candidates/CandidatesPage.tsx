@@ -317,12 +317,15 @@ export function CandidatesPage() {
     : visibleCols
 
   const orderedVisible = useMemo(() => {
-    const cf = (customFields as any[]).map(f=>`cf_${f.field_name}`)
+    // Custom fields — only show those with show_in_columns !== false (and show_to_agency for agency)
+    const cf = (customFields as any[])
+      .filter((f:any) => f.show_in_columns !== false && (!isAgency || f.show_to_agency !== false))
+      .map(f => `cf_${f.field_name}`)
     const all = [...colOrder, ...cf].filter(k => effectiveVisible.has(k))
     const pinned   = all.filter(k => pinnedCols.has(k))
     const unpinned = all.filter(k => !pinnedCols.has(k))
     return [...pinned, ...unpinned]
-  }, [colOrder, effectiveVisible, customFields, pinnedCols])
+  }, [colOrder, effectiveVisible, customFields, pinnedCols, isAgency])
 
   const displayed = useMemo(() => {
     let list = candidates.filter((c:any) => showArchived ? !!c.archived_at : !c.archived_at)
@@ -421,9 +424,11 @@ export function CandidatesPage() {
   },[])
 
   const allColDefs = useMemo(()=>[
-    ...COLS,
-    ...(customFields as any[]).map(f=>({key:`cf_${f.field_name}`,label:f.field_label,width:130}))
-  ],[customFields])
+    ...COLS.filter(c => !isAgency || !['hr_owner','interviewer'].includes(c.key)),
+    ...(customFields as any[])
+      .filter((f:any) => f.show_in_columns !== false && (!isAgency || f.show_to_agency !== false))
+      .map(f=>({key:`cf_${f.field_name}`,label:f.field_label,width:130}))
+  ],[customFields, isAgency])
 
   const GROUPS = [
     {value:'',label:'No grouping'},
@@ -734,11 +739,20 @@ export function CandidatesPage() {
                             {orderedVisible.map(key=>{
                               if (key==='stage') return <td key="stage" className="px-3 py-2.5"><StageCell cid={c.id} value={c.current_stage} canEdit={canEdit} onUpdate={onUpdate} stages={STAGES} stageConfigs={stageConfigs}/></td>
                               if (key==='job') return <td key="job" className="px-3 py-2.5"><SelectCell cid={c.id} field="job_id" display={c.job?.title ?? getName(jobs as any[],c.job_id)} canEdit={canAssign} onUpdate={onUpdate} options={(jobs as any[]).map(j=>({label:j.title,value:j.id}))}/></td>
-                              if (key==='source') return <td key="source" className="px-3 py-2.5 text-xs text-gray-500 capitalize">{c.source_category??'—'}</td>
-                              if (key==='subsource') return <td key="subsource" className="px-3 py-2.5 text-xs text-gray-500">
-                                {c.agency?.name
-                                  ? <span className="flex items-center gap-1"><span className="text-purple-600">🏢</span>{c.agency.name}</span>
-                                  : c.source_name ?? '—'}
+                              if (key==='source') return <td key="source" className="px-3 py-2.5">
+                                {c.source_category ? (
+                                  <span className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-medium ${
+                                    c.source_category==='agency'   ? 'bg-purple-50 text-purple-700' :
+                                    c.source_category==='platform' ? 'bg-blue-50 text-blue-700' :
+                                    'bg-amber-50 text-amber-700'
+                                  }`}>
+                                    {c.source_category==='agency'?'🏢':c.source_category==='platform'?'🔗':'🎓'}
+                                    {c.source_category.charAt(0).toUpperCase()+c.source_category.slice(1)}
+                                  </span>
+                                ) : <span className="text-gray-300 text-xs">—</span>}
+                              </td>
+                              if (key==='subsource') return <td key="subsource" className="px-3 py-2.5 text-xs text-gray-600">
+                                {c.source_name || <span className="text-gray-300">—</span>}
                               </td>
                               if (key==='hr_owner') return <td key="hr_owner" className="px-3 py-2.5"><SelectCell cid={c.id} field="hr_owner" display={getName(hrUsers as any[],c.hr_owner)} canEdit={canAssignHR} onUpdate={onUpdate} options={(hrUsers as any[]).map(u=>({label:u.full_name,value:u.id}))}/></td>
                               if (key==='interviewer') return <td key="interviewer" className="px-3 py-2.5"><MultiCell cid={c.id} field="assigned_interviewers" ids={c.assigned_interviewers??[]} canEdit={canEdit} onUpdate={(id,_,arr)=>onUpdate(id,'assigned_interviewers',arr)} options={(interviewers as any[]).map(u=>({label:u.full_name,value:u.id}))}/></td>
