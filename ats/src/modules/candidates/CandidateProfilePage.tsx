@@ -78,13 +78,14 @@ export function CandidateProfilePage() {
   // Agencies list — used by SubSourceField internally via useAgencies hook
 
   // Stage config from DB — must be before early returns (Rules of Hooks)
-  const { data: stageConfigsRaw = [] } = useQuery({    queryKey: ['app-settings', 'pipeline_stages'],
+  const { data: stageConfigsRaw = [] } = useQuery({
+    queryKey: ['app-settings', 'pipeline_stages'],
     queryFn: async () => {
       const { data } = await supabase.from('app_settings').select('value').eq('key','pipeline_stages').maybeSingle()
       if (!data?.value) return []
       try { const p = JSON.parse(data.value); return Array.isArray(p) ? p : [] } catch { return [] }
     },
-    staleTime: 30_000,
+    staleTime: 0,  // Always fresh — ensures stage changes from Settings are reflected immediately
   })
 
   // Custom fields — filtered by role visibility
