@@ -170,7 +170,7 @@ export function SettingsPage() {
 
       {/* Tabs */}
       <div className="flex gap-1 mb-6 bg-gray-100 p-1 rounded-lg w-fit">
-        {([['users', <Users className="w-4 h-4"/>, 'Team Members'], ['fields', <Columns className="w-4 h-4"/>, 'Custom Fields'], ['emails', <Mail className="w-4 h-4"/>, 'Email Templates'], ['org', <Mail className="w-4 h-4"/>, 'Org Settings']] as const).map(([t, icon, label]) => (
+        {([['users', <Users className="w-4 h-4"/>, 'Team Members'], ['fields', <Columns className="w-4 h-4"/>, 'Fields'], ['emails', <Mail className="w-4 h-4"/>, 'Email Templates'], ['org', <Mail className="w-4 h-4"/>, 'Org Settings']] as const).map(([t, icon, label]) => (
           <button key={t} onClick={() => setTab(t as Tab)}
             className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors ${tab === t ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
             {icon}{label}
@@ -281,7 +281,7 @@ export function SettingsPage() {
                 <div key={field.id} className={`grid grid-cols-12 items-center px-5 py-3.5 ${i > 0 ? 'border-t border-gray-100' : ''} hover:bg-gray-50/40 transition-colors`}>                  <div className="col-span-1 text-gray-300"><GripVertical className="w-4 h-4"/></div>
                   <div className="col-span-3">
                     <p className="text-sm font-medium text-gray-900">{field.field_label}</p>
-                    <p className="text-xs text-gray-400 font-mono mt-0.5">{field.field_name}</p>
+                    <p className="text-xs text-blue-500 font-mono mt-0.5 bg-blue-50 px-1.5 py-0.5 rounded inline-block">{field.field_name}</p>
                   </div>
                   <div className="col-span-2">
                     {editingField?.id === field.id ? (
