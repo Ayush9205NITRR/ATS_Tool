@@ -373,11 +373,10 @@ export function CandidatesPage() {
   const isSuperAdmin = hasRole(['super_admin'])
   const isAgency    = hasRole(['agency'])
 
-  // Stages — shared hook (synced with OrgSettingsTab, CandidateProfilePage)
+  // Stages — shared hook (synced with OrgSettingsTab, CandidateProfilePage, FilterBar)
   const { stageConfigs } = useStagesHook()
-  const STAGES: string[] = stageConfigs.length
-    ? stageConfigs.map((s: any) => typeof s === 'string' ? s : s.name)
-    : [...INTERVIEW_STAGES]
+  // stageConfigs always has data (defaults to DEFAULT_STAGE_CONFIGS if DB empty)
+  const STAGES: string[] = stageConfigs.map(s => s.name)
 
   // ── Filters persisted in URL so back button restores them ─────
   const [serverFilters, setServerFilters] = useState<CandidateFilters>(() => ({
