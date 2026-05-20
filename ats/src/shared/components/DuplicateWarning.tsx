@@ -1,7 +1,7 @@
 // ============================================================
-// DUPLICATE WARNING — reusable banner shown when duplicates found
+// DUPLICATE BLOCK — hard block, no override allowed
 // ============================================================
-import { AlertTriangle, ExternalLink } from 'lucide-react'
+import { XCircle, ExternalLink } from 'lucide-react'
 import type { DuplicateMatch } from '../hooks/useDuplicateCheck'
 
 interface Props {
@@ -11,21 +11,9 @@ interface Props {
 }
 
 const MATCH_LABELS = {
-  email: 'Same email',
-  phone: 'Same phone',
-  both:  'Same email & phone',
-}
-
-const MATCH_COLOURS = {
-  email: 'bg-amber-50 border-amber-300 text-amber-800',
-  phone: 'bg-amber-50 border-amber-300 text-amber-800',
-  both:  'bg-red-50 border-red-300 text-red-800',
-}
-
-const BADGE_COLOURS = {
-  email: 'bg-amber-100 text-amber-700',
-  phone: 'bg-amber-100 text-amber-700',
-  both:  'bg-red-100 text-red-700',
+  email: 'Email already exists',
+  phone: 'Phone already exists',
+  both:  'Email & phone already exist',
 }
 
 export function DuplicateWarning({ duplicates, checking, onViewProfile }: Props) {
@@ -40,39 +28,46 @@ export function DuplicateWarning({ duplicates, checking, onViewProfile }: Props)
 
   if (duplicates.length === 0) return null
 
-  const severity = duplicates.some(d => d.match_type === 'both') ? 'both' : duplicates[0].match_type
-
   return (
-    <div className={`border rounded-xl p-3 ${MATCH_COLOURS[severity]}`}>
-      <div className="flex items-start gap-2 mb-2">
-        <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5"/>
-        <p className="text-sm font-semibold">
-          {duplicates.length === 1 ? 'Possible duplicate found' : `${duplicates.length} possible duplicates found`}
-        </p>
+    <div className="border border-red-300 rounded-xl p-3 bg-red-50">
+      <div className="flex items-start gap-2 mb-2.5">
+        <XCircle className="w-4 h-4 text-red-600 flex-shrink-0 mt-0.5"/>
+        <div>
+          <p className="text-sm font-semibold text-red-800">
+            Candidate already exists — cannot add
+          </p>
+          <p className="text-xs text-red-600 mt-0.5">
+            A candidate with this email or phone number is already in the system.
+          </p>
+        </div>
       </div>
       <div className="space-y-2">
         {duplicates.map(d => (
-          <div key={d.id} className="flex items-center justify-between bg-white/60 rounded-lg px-3 py-2">
+          <div key={d.id} className="flex items-center justify-between bg-white/70 rounded-lg px-3 py-2.5 border border-red-100">
             <div className="min-w-0">
               <div className="flex items-center gap-2 flex-wrap">
-                <p className="text-sm font-medium">{d.full_name}</p>
-                <span className={`text-xs px-1.5 py-0.5 rounded-full ${BADGE_COLOURS[d.match_type]}`}>
+                <p className="text-sm font-medium text-gray-900">{d.full_name}</p>
+                <span className="text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-700 font-medium">
                   {MATCH_LABELS[d.match_type]}
                 </span>
                 <span className="text-xs text-gray-500">{d.current_stage}</span>
               </div>
-              <p className="text-xs text-gray-500 truncate">{d.email}{d.phone ? ` · ${d.phone}` : ''}</p>
+              <p className="text-xs text-gray-500 truncate mt-0.5">
+                {d.email}{d.phone ? ` · ${d.phone}` : ''}
+              </p>
             </div>
             {onViewProfile && (
               <button onClick={() => onViewProfile(d.id)}
-                className="flex items-center gap-1 text-xs text-blue-600 hover:underline flex-shrink-0 ml-2">
-                View <ExternalLink className="w-3 h-3"/>
+                className="flex items-center gap-1 text-xs text-blue-600 hover:underline flex-shrink-0 ml-3 font-medium">
+                View profile <ExternalLink className="w-3 h-3"/>
               </button>
             )}
           </div>
         ))}
       </div>
-      <p className="text-xs mt-2 opacity-70">You can still proceed — just verify this isn't a duplicate.</p>
+      <p className="text-xs text-red-700 font-medium mt-2.5 flex items-center gap-1">
+        🚫 Submission blocked. Please update the existing candidate's record instead.
+      </p>
     </div>
   )
 }
