@@ -179,7 +179,7 @@ function JobForm({ job, onClose }: { job?: any; onClose: () => void }) {
           </div>
           <label className="flex items-center gap-2 cursor-pointer">
             <span className="text-xs text-gray-500">All agencies</span>
-            <div onClick={() => { setShowToAllAgencies(o => !o); if (!showToAllAgencies) setAgencyIds([]) }}
+            <div onClick={e => { e.preventDefault(); e.stopPropagation(); setShowToAllAgencies(o => !o); if (!showToAllAgencies) setAgencyIds([]) }}
               className={`w-10 h-5 rounded-full transition-colors relative cursor-pointer ${showToAllAgencies ? 'bg-purple-500' : 'bg-gray-200'}`}>
               <span className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${showToAllAgencies ? 'translate-x-5' : 'translate-x-0.5'}`}/>
             </div>
@@ -188,28 +188,31 @@ function JobForm({ job, onClose }: { job?: any; onClose: () => void }) {
         {!showToAllAgencies && (
           <div>
             <p className="text-xs text-gray-500 mb-2">Select specific agencies:</p>
-            <div className="space-y-1.5 max-h-40 overflow-y-auto">
+            <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
               {(agencyUsers as any[]).length === 0 ? (
-                <p className="text-xs text-amber-600">No agency users found. Add users with role "Agency" in Settings → Team Members.</p>
-              ) : (
-                (agencyUsers as any[]).map((u: any) => {
-                  const sel = agencyIds.includes(u.id)
-                  return (
-                    <label key={u.id} className={`flex items-center gap-2.5 px-3 py-2 rounded-lg cursor-pointer transition-colors ${sel ? 'bg-purple-100' : 'hover:bg-gray-100'}`}>
-                      <div className={`w-4 h-4 rounded border flex items-center justify-center transition-all ${sel ? 'bg-purple-500 border-purple-500' : 'border-gray-300'}`}>
-                        {sel && <svg className="w-2.5 h-2.5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7"/></svg>}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <span className="text-sm text-gray-800 font-medium">{u.full_name}</span>
-                        <span className="text-xs text-gray-400 ml-2">{u.email}</span>
-                      </div>
-                    </label>
-                  )
-                })
-              )}
+                <p className="text-xs text-amber-600">No agency users found — add users with role "Agency" in Settings → Team Members.</p>
+              ) : (agencyUsers as any[]).map((u: any) => {
+                const sel = agencyIds.includes(u.id)
+                return (
+                  <div key={u.id}
+                    onClick={e => { e.preventDefault(); e.stopPropagation(); setAgencyIds(prev => sel ? prev.filter(id => id !== u.id) : [...prev, u.id]) }}
+                    className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg cursor-pointer transition-colors select-none ${sel ? 'bg-purple-50 border border-purple-200' : 'hover:bg-gray-50 border border-transparent'}`}>
+                    <div className={`w-4 h-4 rounded border-2 flex items-center justify-center flex-shrink-0 transition-all ${sel ? 'bg-purple-500 border-purple-500' : 'border-gray-300'}`}>
+                      {sel && <svg className="w-2.5 h-2.5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7"/></svg>}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-gray-800">{u.full_name}</p>
+                      <p className="text-xs text-gray-400">{u.email}</p>
+                    </div>
+                    {sel && <span className="text-xs text-purple-600 font-medium">Selected</span>}
+                  </div>
+                )
+              })}
             </div>
             {agencyIds.length > 0 && (
-              <p className="mt-2 text-xs text-purple-700 font-medium">{agencyIds.length} agenc{agencyIds.length > 1 ? 'ies' : 'y'} selected</p>
+              <p className="mt-2 text-xs text-purple-700 font-medium bg-purple-50 px-3 py-1.5 rounded-lg">
+                ✓ {agencyIds.length} agenc{agencyIds.length > 1 ? 'ies' : 'y'} selected
+              </p>
             )}
           </div>
         )}
