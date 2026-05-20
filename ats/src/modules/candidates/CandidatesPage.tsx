@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback, useMemo, memo } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   Search, Upload, UserPlus, Loader2, ExternalLink, FileText,
   Eye, X, Archive, Trash2, Filter, ChevronDown, Check,
@@ -339,6 +339,7 @@ function ActionBtn({ onClick, title, children, danger }: { onClick:()=>void; tit
 // ── Main page ─────────────────────────────────────────────────
 export function CandidatesPage() {
   const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
   const { hasRole, user } = useAuthStore()
   const qc = useQueryClient()
 
@@ -365,12 +366,30 @@ export function CandidatesPage() {
     return { stageConfigs: configs, STAGES: names }
   })()
 
-  const [serverFilters, setServerFilters] = useState<CandidateFilters>({})
-  const [search, setSearch]         = useState('')
+  // ── Filters persisted in URL so back button restores them ─────
+  const [serverFilters, setServerFilters] = useState<CandidateFilters>(() => ({
+    job_id: searchParams.get('job') || undefined,
+  }))
+  const [search, setSearch]         = useState(() => searchParams.get('q') ?? '')
+  const [activeFilters, setActiveFilters] = useState<ActiveFilter[]>(() => {
+    try { return JSON.parse(decodeURIComponent(searchParams.get('f') ?? '[]')) } catch { return [] }
+  })
+  const [filterMode, setFilterMode] = useState<'and'|'or'>(() =>
+    (searchParams.get('fm') as 'and'|'or') ?? 'and'
+  )
+
+  // Sync state → URL whenever filters change
+  useEffect(() => {
+    const p: Record<string,string> = {}
+    if (search) p.q = search
+    if (serverFilters.job_id) p.job = serverFilters.job_id
+    if (activeFilters.length) p.f = encodeURIComponent(JSON.stringify(activeFilters))
+    if (filterMode !== 'and') p.fm = filterMode
+    setSearchParams(p, { replace: true })
+  }, [search, serverFilters, activeFilters, filterMode])
+
   const [showArchived, setShowArchived] = useState(false)
   const [selectedIds, setSelectedIds]   = useState<Set<string>>(new Set())
-  const [activeFilters, setActiveFilters] = useState<ActiveFilter[]>([])
-  const [filterMode, setFilterMode]       = useState<'and'|'or'>('and')
   const [showFilterBar, setShowFilterBar] = useState(false)
   const [showColPicker, setShowColPicker] = useState(false)
   const [showBulkMenu, setShowBulkMenu]   = useState(false)
