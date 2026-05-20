@@ -14,6 +14,7 @@ import { useAuthStore } from '../auth/authStore'
 import { formatDateTime, formatDate, formatRelative, labelOf } from '../../shared/utils/helpers'
 import { supabase } from '../../lib/supabaseClient'
 import { INTERVIEW_STAGES } from '../../types/database.types'
+import { useStages as useStagesHook } from '../../shared/hooks/useStages'
 import { useAgencies } from '../../shared/hooks/useAgencies'
 
 // Unified pill design
@@ -77,16 +78,9 @@ export function CandidateProfilePage() {
 
   // Agencies list — used by SubSourceField internally via useAgencies hook
 
-  // Stage config from DB — must be before early returns (Rules of Hooks)
-  const { data: stageConfigsRaw = [] } = useQuery({
-    queryKey: ['app-settings', 'pipeline_stages'],
-    queryFn: async () => {
-      const { data } = await supabase.from('app_settings').select('value').eq('key','pipeline_stages').maybeSingle()
-      if (!data?.value) return []
-      try { const p = JSON.parse(data.value); return Array.isArray(p) ? p : [] } catch { return [] }
-    },
-    staleTime: 0,  // Always fresh — ensures stage changes from Settings are reflected immediately
-  })
+  // Stage config — shared hook (same queryKey as OrgSettingsTab + CandidatesPage)
+  // staleTime:0 ensures immediate reflection of Settings changes
+  const { stageConfigs: stageConfigsRaw } = useStagesHook()
 
   // Custom fields — filtered by role visibility
   const { data: customFields = [] } = useQuery({
