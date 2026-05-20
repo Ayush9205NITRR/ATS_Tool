@@ -1,973 +1,908 @@
-import { useState, useRef, useEffect, useCallback, useMemo, memo } from 'react'
-import { useNavigate, useSearchParams } from 'react-router-dom'
+// ============================================================
+// CANDIDATE PROFILE PAGE — Clean sidebar layout, unified pills
+// ============================================================
+import { useParams, useNavigate } from 'react-router-dom'
+import { useState, useCallback, useEffect } from 'react'
 import {
-  Search, Upload, UserPlus, Loader2, ExternalLink, FileText,
-  Eye, X, Archive, Trash2, Filter, ChevronDown, Check,
-  Layers, GripVertical, Calendar
+  ArrowLeft, ExternalLink, Phone, Mail, Linkedin, FileText,
+  Loader2, Send, Pencil, Check, X, ChevronDown, CheckCircle
 } from 'lucide-react'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import {
-  DndContext, closestCenter,
-  KeyboardSensor, PointerSensor, useSensor, useSensors,
-  type DragEndEvent
-} from '@dnd-kit/core'
-import {
-  SortableContext, sortableKeyboardCoordinates,
-  horizontalListSortingStrategy, useSortable, arrayMove
-} from '@dnd-kit/sortable'
-import { CSS } from '@dnd-kit/utilities'
-import { useCandidates } from './useCandidates'
-import { PageHeader } from '../../shared/components/PageHeader'
+import { useCandidate, useUpdateStage } from './useCandidates'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Button } from '../../shared/components/Button'
-import { EmptyState } from '../../shared/components/EmptyState'
-import { Modal } from '../../shared/components/Modal'
-import { FilterBar, applyFilters } from '../../shared/components/FilterBar'
-import type { ActiveFilter } from '../../shared/components/FilterBar'
 import { useAuthStore } from '../auth/authStore'
+import { formatDateTime, formatDate, formatRelative, labelOf } from '../../shared/utils/helpers'
 import { supabase } from '../../lib/supabaseClient'
-import type { CandidateFilters } from './candidateService'
 import { INTERVIEW_STAGES } from '../../types/database.types'
 import { useStages as useStagesHook } from '../../shared/hooks/useStages'
-import { formatDate, formatDateTime } from '../../shared/utils/helpers'
-import { ScheduleInterviewModal } from './ScheduleInterviewModal'
-import { SendEmailModal } from './SendEmailModal'
-// ── Stage colours ─────────────────────────────────────────────
-const STAGE_PILL: Record<string,string> = {
-  Applied:'bg-gray-100 text-gray-600', Screening:'bg-blue-50 text-blue-700',
-  R1:'bg-indigo-50 text-indigo-700', 'Case Study':'bg-amber-50 text-amber-700',
-  R2:'bg-orange-50 text-orange-700', R3:'bg-orange-100 text-orange-800',
-  'CF (Virtual)':'bg-purple-50 text-purple-700', 'CF (In-Person)':'bg-purple-100 text-purple-800',
-  Offer:'bg-violet-50 text-violet-700', Hired:'bg-green-50 text-green-700',
-  Rejected:'bg-red-50 text-red-600',
-}
-const STAGE_BAR: Record<string,string> = {
-  Applied:'bg-gray-300', Screening:'bg-blue-400', R1:'bg-indigo-400',
-  'Case Study':'bg-amber-400', R2:'bg-orange-400', R3:'bg-orange-500',
-  'CF (Virtual)':'bg-purple-400', 'CF (In-Person)':'bg-purple-500',
-  Offer:'bg-violet-500', Hired:'bg-green-500', Rejected:'bg-red-400',
-}
+import { useAgencies } from '../../shared/hooks/useAgencies'
 
-// ── Column config ─────────────────────────────────────────────
-interface ColDef { key: string; label: string; width: number; alwaysVisible?: boolean }
-const COLS: ColDef[] = [
-  { key:'stage',          label:'Stage',          width:150 },
-  { key:'job',            label:'Job',            width:160 },
-  { key:'source',         label:'Source',         width:100 },
-  { key:'subsource',      label:'Sub-Source',     width:140 },
-  { key:'hr_owner',       label:'HR Owner',       width:130 },
-  { key:'interviewer',    label:'Interviewer',    width:160 },
-  { key:'interview_date', label:'Interview Date', width:170 },
-  { key:'updated_at',     label:'Updated',        width:110 },
-  { key:'email',          label:'Email',          width:190 },
-  { key:'phone',          label:'Phone',          width:120 },
-  { key:'linkedin',       label:'LinkedIn',       width:80  },
-  { key:'resume',         label:'Resume',         width:80  },
-  { key:'notes',          label:'Notes',          width:150 },
-]
-const DEFAULT_VISIBLE  = new Set(['stage','job','hr_owner','interviewer','interview_date'])
-const DEFAULT_ORDER    = COLS.map(c=>c.key)
+// Unified pill design
+const PILL_BASE     = 'px-2.5 py-1 rounded-full text-xs font-medium border transition-all cursor-pointer select-none'
+const PILL_OFF     = 'bg-white border-gray-200 text-gray-600 hover:border-gray-400 hover:text-gray-800'
+const PILL_ON      = 'bg-slate-800 text-white border-slate-800'
+const PILL_DISABLED = 'bg-gray-50 border-gray-100 text-gray-400 cursor-default'
 
-// ── Tiny popup (no-lag dropdown) ──────────────────────────────
-function Popup({ trigger, children }: { trigger:React.ReactNode; children:React.ReactNode }) {
-  const [open, setOpen] = useState(false)
-  const ref = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    if (!open) return
-    const fn = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false) }
-    document.addEventListener('mousedown', fn)
-    return () => document.removeEventListener('mousedown', fn)
-  }, [open])
-  return (
-    <div ref={ref} className="relative">
-      <div onClick={() => setOpen(o=>!o)}>{trigger}</div>
-      {open && (
-        <div onClick={() => setOpen(false)}
-          className="absolute top-full left-0 mt-1 bg-white border border-gray-100 rounded-xl shadow-lg z-50 py-1 min-w-[160px] max-h-60 overflow-y-auto">
-          {children}
-        </div>
-      )}
-    </div>
-  )
+interface NoteEntry { text: string; author: string; authorId: string; timestamp: string }
+
+function toDatetimeLocal(v: string | null | undefined): string {
+  if (!v) return ''
+  return v.replace(' ', 'T').slice(0, 16)
+}
+function toISO(v: string): string | null {
+  if (!v) return null
+  return new Date(v).toISOString()
 }
 
-// ── Source cell — shows category only, click to change ────────
-const PLATFORM_SRC_LIST = ['LinkedIn','Naukri','Indeed','Internshala','Shine','Monster','Foundit','Apna','Referral','Website','Other']
-
-const SourceCell = memo(({ cid, category, canEdit, onUpdate }: {
-  cid:string; category:string; canEdit:boolean
-  onUpdate:(id:string,f:string,v:any)=>void
-}) => {
-  const badgeCls =
-    category==='agency'   ? 'bg-violet-50 text-violet-700 border-violet-100' :
-    category==='platform' ? 'bg-sky-50 text-sky-700 border-sky-100' :
-    category==='college'  ? 'bg-amber-50 text-amber-700 border-amber-100' :
-    'bg-gray-50 text-gray-400 border-gray-100'
-  const label = category ? category.charAt(0).toUpperCase()+category.slice(1) : '—'
-  const badge = (
-    <span className={`inline-flex items-center gap-0.5 text-xs px-2 py-0.5 rounded border font-medium ${canEdit?'cursor-pointer hover:opacity-75':''} ${badgeCls}`}>
-      {label}{canEdit && <ChevronDown className="w-2.5 h-2.5 opacity-40"/>}
-    </span>
-  )
-  if (!canEdit) return badge
-  return (
-    <Popup trigger={badge}>
-      <div className="px-1 py-1 min-w-[130px]">
-        <p className="text-xs text-gray-400 font-medium px-2 pt-1 pb-0.5">Source Type</p>
-        {[['platform','Platform'],['agency','Agency'],['college','College']].map(([cat,lbl])=>(
-          <button key={cat}
-            onClick={()=>{ onUpdate(cid,'source_category',cat); onUpdate(cid,'source_name','') }}
-            className={`w-full text-left text-xs px-2.5 py-2 rounded flex items-center justify-between gap-3 transition-colors ${
-              category===cat?'bg-blue-50 text-blue-700 font-medium':'text-gray-600 hover:bg-gray-50'
-            }`}>
-            {lbl}{category===cat&&<Check className="w-3 h-3"/>}
-          </button>
-        ))}
-      </div>
-    </Popup>
-  )
-})
-
-// ── Sub-Source cell — shows source_name, dropdown by category ──
-const SubSourceCell = memo(({ cid, category, name, canEdit, onUpdate }: {
-  cid:string; category:string; name:string; canEdit:boolean
-  onUpdate:(id:string,f:string,v:any)=>void
-}) => {
-  const [agencyUsers, setAgencyUsers] = useState<{id:string;full_name:string}[]>([])
-  const [colleges, setColleges]       = useState<string[]>([])
-  const [loaded, setLoaded] = useState(false)
-  const [collegeInput, setCollegeInput] = useState(name)
-
-  const display = name || <span className="text-gray-300">—</span>
-  if (!canEdit || !category) return <span className="text-xs text-gray-600">{display}</span>
-
-  const trigger = (
-    <span className="inline-flex items-center gap-0.5 text-xs text-gray-700 cursor-pointer hover:text-blue-600 max-w-[130px] truncate">
-      <span className="truncate">{name || <span className="text-gray-400 italic">select…</span>}</span>
-      <ChevronDown className="w-2.5 h-2.5 opacity-50 flex-shrink-0"/>
-    </span>
-  )
-
-  const loadData = () => {
-    if (loaded) return; setLoaded(true)
-    if (category === 'agency') {
-      supabase.from('users').select('id,full_name').eq('role','agency').eq('is_active',true).order('full_name')
-        .then(({data}) => setAgencyUsers(data ?? []))
-    } else if (category === 'college') {
-      supabase.from('candidates').select('source_name').eq('source_category','college').not('source_name','is',null)
-        .then(({data}) => {
-          const unique = [...new Set((data ?? []).map((d:any) => d.source_name).filter(Boolean))].sort()
-          setColleges(unique)
-        })
-    }
-  }
-
-  if (category === 'agency') return (
-    <Popup trigger={<span onClick={loadData}>{trigger}</span>}>
-      <div className="px-1 py-1 max-h-52 overflow-y-auto">
-        {agencyUsers.length === 0
-          ? <p className="text-xs text-gray-400 px-2 py-2 italic">Loading…</p>
-          : agencyUsers.map(u => (
-            <button key={u.id} onClick={() => onUpdate(cid, 'source_name', u.full_name)}
-              className={`w-full text-left text-xs px-2.5 py-2 rounded hover:bg-purple-50 flex items-center justify-between gap-3 ${name===u.full_name?'text-purple-700 font-semibold bg-purple-50':''}`}>
-              {u.full_name}{name===u.full_name&&<Check className="w-3 h-3 text-purple-500"/>}
-            </button>
-          ))
-        }
-      </div>
-    </Popup>
-  )
-
-  if (category === 'platform') return (
-    <Popup trigger={trigger}>
-      <div className="px-1 py-1">
-        {PLATFORM_SRC_LIST.map(p => (
-          <button key={p} onClick={() => onUpdate(cid, 'source_name', p)}
-            className={`w-full text-left text-xs px-2.5 py-2 rounded hover:bg-blue-50 flex items-center justify-between gap-3 ${name===p?'text-blue-700 font-semibold bg-blue-50':''}`}>
-            {p}{name===p&&<Check className="w-3 h-3 text-blue-500"/>}
-          </button>
-        ))}
-      </div>
-    </Popup>
-  )
-
-  // College — dropdown of existing + free text
-  return (
-    <Popup trigger={<span onClick={loadData}>{trigger}</span>}>
-      <div className="px-2 py-2 w-52">
-        <input type="text" value={collegeInput}
-          onChange={e => setCollegeInput(e.target.value)}
-          onBlur={e => { if(e.target.value && e.target.value !== name) onUpdate(cid, 'source_name', e.target.value) }}
-          onKeyDown={e => { if(e.key==='Enter') { if(collegeInput) onUpdate(cid,'source_name',collegeInput); (e.target as any).blur() }}}
-          placeholder="Type or select college…"
-          className="w-full px-2.5 py-1.5 text-xs border border-gray-200 rounded mb-1.5 focus:outline-none focus:ring-1 focus:ring-blue-400"/>
-        {colleges.length > 0 && (
-          <div className="max-h-36 overflow-y-auto border-t border-gray-100 pt-1">
-            {colleges.map(c => (
-              <button key={c} onClick={() => { setCollegeInput(c); onUpdate(cid, 'source_name', c) }}
-                className={`w-full text-left text-xs px-2 py-1.5 rounded hover:bg-amber-50 ${name===c?'text-amber-700 font-semibold':''}`}>
-                {c}
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
-    </Popup>
-  )
-})
-
-// ── Stage cell ────────────────────────────────────────────────
-const StageCell = memo(({ cid, value, canEdit, onUpdate, stages, stageConfigs }: {
-  cid:string; value:string; canEdit:boolean; onUpdate:(id:string,f:string,v:any)=>void
-  stages:string[]; stageConfigs:{name:string;color:string;textColor:string}[]
-}) => {
-  const cfg = stageConfigs.find(s=>s.name===value)
-  const pillCls = cfg ? `${cfg.color} ${cfg.textColor}` : (STAGE_PILL[value] ?? 'bg-gray-100 text-gray-600')
-  const dotCls  = cfg ? cfg.color.replace('bg-','bg-').replace('-100','-400').replace('-50','-400') : (STAGE_BAR[value] ?? 'bg-gray-300')
-  const pill = (
-    <span className={`inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-md font-medium ${canEdit?'cursor-pointer hover:opacity-80':''} ${pillCls}`}>
-      <span className={`w-2 h-2 rounded-full flex-shrink-0 ${dotCls}`}/>
-      {value}{canEdit&&<ChevronDown className="w-3 h-3 opacity-40 ml-0.5"/>}
-    </span>
-  )
-  if (!canEdit) return pill
-  return (
-    <Popup trigger={pill}>
-      {stages.map(s=>{
-        const c = stageConfigs.find(x=>x.name===s)
-        return (
-          <button key={s} onClick={()=>onUpdate(cid,'current_stage',s)}
-            className="w-full text-left px-3 py-1.5 text-xs hover:bg-gray-50 flex items-center gap-2.5">
-            <span className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${c?.color??'bg-gray-200'}`}/>
-            <span className={`flex-1 ${s===value?'font-semibold text-gray-900':'text-gray-600'}`}>{s}</span>
-            {s===value&&<Check className="w-3 h-3 text-blue-500"/>}
-          </button>
-        )
-      })}
-    </Popup>
-  )
-})
-
-// ── Select cell ───────────────────────────────────────────────
-const SelectCell = memo(({ cid, field, display, options, canEdit, onUpdate }: {
-  cid:string; field:string; display?:string|null
-  options:{label:string;value:string}[]
-  canEdit:boolean; onUpdate:(id:string,f:string,v:any)=>void
-}) => {
-  if (!canEdit) return <span className="text-xs text-gray-500">{display??<span className="text-gray-300">—</span>}</span>
-  return (
-    <Popup trigger={
-      <button className="text-xs text-gray-600 hover:text-gray-900 flex items-center gap-1 group">
-        <span className="max-w-[120px] truncate">{display??<span className="text-gray-300">—</span>}</span>
-        <ChevronDown className="w-3 h-3 text-gray-300 group-hover:text-gray-500 flex-shrink-0"/>
-      </button>
-    }>
-      <button onClick={()=>onUpdate(cid,field,null)} className="w-full text-left px-3 py-1.5 text-xs text-gray-400 hover:bg-gray-50">Clear</button>
-      {options.map(o=>(
-        <button key={o.value} onClick={()=>onUpdate(cid,field,o.value)}
-          className="w-full text-left px-3 py-1.5 text-xs text-gray-700 hover:bg-gray-50 truncate">{o.label}</button>
-      ))}
-    </Popup>
-  )
-})
-
-// ── Multi-select cell ─────────────────────────────────────────
-const MultiCell = memo(({ cid, field, ids, options, canEdit, onUpdate }: {
-  cid:string; field:string; ids:string[]
-  options:{label:string;value:string}[]
-  canEdit:boolean; onUpdate:(id:string,f:string,v:string[])=>void
-}) => {
-  const names = options.filter(o=>ids.includes(o.value)).map(o=>o.label)
-  if (!canEdit) return <span className="text-xs text-gray-500">{names.join(', ')||<span className="text-gray-300">—</span>}</span>
-  return (
-    <Popup trigger={
-      <button className="text-xs text-gray-600 hover:text-gray-900 flex items-center gap-1 group max-w-[150px]">
-        <span className="truncate">{names.length?names.join(', '):<span className="text-gray-300">—</span>}</span>
-        <ChevronDown className="w-3 h-3 text-gray-300 group-hover:text-gray-500 flex-shrink-0"/>
-      </button>
-    }>
-      {options.map(o=>{
-        const sel = ids.includes(o.value)
-        return (
-          <button key={o.value}
-            onClick={e=>{e.stopPropagation();const next=sel?ids.filter(i=>i!==o.value):[...ids,o.value];onUpdate(cid,field,next)}}
-            className="w-full text-left px-3 py-1.5 text-xs hover:bg-gray-50 flex items-center gap-2.5">
-            <span className={`w-3.5 h-3.5 rounded flex-shrink-0 border ${sel?'bg-blue-500 border-blue-500':'border-gray-300'} flex items-center justify-center`}>
-              {sel&&<Check className="w-2.5 h-2.5 text-white"/>}
-            </span>
-            <span className={`truncate ${sel?'text-gray-900 font-medium':'text-gray-600'}`}>{o.label}</span>
-          </button>
-        )
-      })}
-      {ids.length>0&&<button onClick={()=>onUpdate(cid,field,[])} className="w-full text-left px-3 py-1.5 text-xs text-red-400 hover:bg-red-50 border-t border-gray-50 mt-1">Clear all</button>}
-    </Popup>
-  )
-})
-
-// ── Date cell ─────────────────────────────────────────────────
-const DateCell = memo(({ cid, value, canEdit, onUpdate }: {
-  cid:string; value:string|null; canEdit:boolean; onUpdate:(id:string,f:string,v:any)=>void
-}) => {
-  const [editing, setEditing] = useState(false)
-  if (!canEdit) return <span className="text-xs text-gray-500">{value?formatDateTime(value):'—'}</span>
-  if (editing) return (
-    <input type="datetime-local" defaultValue={value?value.replace(' ','T').slice(0,16):''} autoFocus
-      onBlur={e=>{onUpdate(cid,'interview_date',e.target.value?new Date(e.target.value).toISOString():null);setEditing(false)}}
-      className="w-44 px-2 py-0.5 border border-blue-400 rounded text-xs bg-white focus:outline-none"/>
-  )
-  return (
-    <button onClick={()=>setEditing(true)} className="text-xs text-gray-500 hover:text-blue-600 transition-colors">
-      {value?formatDateTime(value):<span className="text-gray-300">Set time</span>}
-    </button>
-  )
-})
-
-// ── Sortable header cell ──────────────────────────────────────
-function SortableHeader({ id, label }: { id:string; label:string }) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id })
-  return (
-    <th ref={setNodeRef}
-      style={{ transform:CSS.Transform.toString(transform), transition, opacity:isDragging?0.4:1 }}
-      className="text-left px-3 py-2.5 text-xs font-medium text-gray-400 uppercase tracking-wide whitespace-nowrap select-none">
-      <div className="flex items-center gap-1.5">
-        <span {...attributes} {...listeners} className="cursor-grab active:cursor-grabbing text-gray-200 hover:text-gray-400 transition-colors">
-          <GripVertical className="w-3.5 h-3.5"/>
-        </span>
-        {label}
-      </div>
-    </th>
-  )
-}
-
-// ── Group section header ──────────────────────────────────────
-function GroupRow({ label, count }: { label:string; count:number }) {
-  return (
-    <tr>
-      <td colSpan={99} className="px-4 py-2 bg-gray-50/80 border-y border-gray-100 first:border-t-0">
-        <span className="text-xs font-semibold text-gray-500">{label}</span>
-        <span className="ml-2 text-xs text-gray-400 font-normal">{count} candidate{count!==1?'s':''}</span>
-      </td>
-    </tr>
-  )
-}
-
-// ── Row action button ─────────────────────────────────────────
-function ActionBtn({ onClick, title, children, danger }: { onClick:()=>void; title:string; children:React.ReactNode; danger?:boolean }) {
-  return (
-    <button onClick={onClick} title={title}
-      className={`p-1.5 rounded-lg transition-all opacity-0 group-hover/row:opacity-100 ${danger?'hover:bg-red-50 hover:text-red-500 text-gray-300':'hover:bg-gray-100 text-gray-300 hover:text-gray-600'}`}>
-      {children}
-    </button>
-  )
-}
-
-// ── Main page ─────────────────────────────────────────────────
-export function CandidatesPage() {
+export function CandidateProfilePage() {
+  const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
-  const [searchParams, setSearchParams] = useSearchParams()
-  const { hasRole, user } = useAuthStore()
+  const { user, hasRole } = useAuthStore()
   const qc = useQueryClient()
 
-  const canEdit     = hasRole(['admin','super_admin','hr_team'])
-  const canAssign   = hasRole(['admin','super_admin'])
-  const canAssignHR = hasRole(['admin','super_admin'])
-  const isSuperAdmin = hasRole(['super_admin'])
-  const isAgency    = hasRole(['agency'])
+  const isInterviewer = hasRole(['interviewer'])
+  const isAgency      = hasRole(['agency'])
+  const canEdit       = hasRole(['admin', 'super_admin', 'hr_team'])
+  const canAssignHR   = hasRole(['admin', 'super_admin'])
+  const canAddNotes   = hasRole(['admin', 'super_admin', 'hr_team', 'interviewer'])
 
-  // Stages — shared hook (synced with OrgSettingsTab, CandidateProfilePage, FilterBar)
-  const { stageConfigs } = useStagesHook()
-  // stageConfigs always has data (defaults to DEFAULT_STAGE_CONFIGS if DB empty)
-  const STAGES: string[] = stageConfigs.map(s => s.name)
+  const [editMode, setEditMode]     = useState(false)
+  const [stageOpen, setStageOpen]   = useState(false)
+  const [draftNotes, setDraftNotes] = useState<Record<string, string>>({})
+  const [savingNote, setSavingNote] = useState<string | null>(null)
+  const [feedbackErr, setFeedbackErr] = useState<string | null>(null)
+  // Note editing: key = `${sectionKey}:${entryIndex}`, value = draft text
+  const [editingNote, setEditingNote] = useState<{ section: string; index: number; text: string } | null>(null)
+  const [savingEditNote, setSavingEditNote] = useState(false)
 
-  // ── Filters persisted in URL so back button restores them ─────
-  const [serverFilters, setServerFilters] = useState<CandidateFilters>(() => ({
-    job_id: searchParams.get('job') || undefined,
-  }))
-  const [search, setSearch]         = useState(() => searchParams.get('q') ?? '')
-  const [activeFilters, setActiveFilters] = useState<ActiveFilter[]>(() => {
-    try { return JSON.parse(decodeURIComponent(searchParams.get('f') ?? '[]')) } catch { return [] }
+  // Edit mode drafts
+  const [contactDraft, setContactDraft] = useState({
+    full_name: '', email: '', phone: '', linkedin_url: '', resume_url: '',
+    source_category: '', source_name: '',
   })
-  const [filterMode, setFilterMode] = useState<'and'|'or'>(() =>
-    (searchParams.get('fm') as 'and'|'or') ?? 'and'
-  )
+  const [generalNotesDraft, setGeneralNotesDraft] = useState('')
+  const [interviewDateDraft, setInterviewDateDraft] = useState('')
+  const [customDataDraft, setCustomDataDraft] = useState<Record<string, string>>({})
 
-  // Sync state → URL whenever filters change
-  useEffect(() => {
-    const p: Record<string,string> = {}
-    if (search) p.q = search
-    if (serverFilters.job_id) p.job = serverFilters.job_id
-    if (activeFilters.length) p.f = encodeURIComponent(JSON.stringify(activeFilters))
-    if (filterMode !== 'and') p.fm = filterMode
-    setSearchParams(p, { replace: true })
-  }, [search, serverFilters, activeFilters, filterMode])
+  const { data: candidate, isLoading } = useCandidate(id!)
+  const updateStage = useUpdateStage()
 
-  const [showArchived, setShowArchived] = useState(false)
-  const [selectedIds, setSelectedIds]   = useState<Set<string>>(new Set())
-  const [showFilterBar, setShowFilterBar] = useState(false)
-  const [showColPicker, setShowColPicker] = useState(false)
-  const [showBulkMenu, setShowBulkMenu]   = useState(false)
-  const [bulkField, setBulkField]         = useState<string|null>(null)
-  const [confirmDelete, setConfirmDelete] = useState<string|null>(null)
-  const [groupBy, setGroupBy] = useState('')
-  // ── Column layout — persisted in localStorage ─────────────────
-  const LS_KEY = 'ats_col_layout_v1'
-  const savedLayout = (() => {
-    try { return JSON.parse(localStorage.getItem(LS_KEY) ?? '{}') } catch { return {} }
-  })()
-
-  const [colOrder, setColOrder]       = useState<string[]>(savedLayout.colOrder ?? DEFAULT_ORDER)
-  const [visibleCols, setVisibleCols] = useState<Set<string>>(new Set(savedLayout.visibleCols ?? [...DEFAULT_VISIBLE]))
-  const [pinnedCols, setPinnedCols]   = useState<Set<string>>(new Set(savedLayout.pinnedCols ?? []))
-
-  // Save layout whenever it changes
-  useEffect(() => {
-    localStorage.setItem(LS_KEY, JSON.stringify({
-      colOrder,
-      visibleCols: [...visibleCols],
-      pinnedCols: [...pinnedCols],
-    }))
-  }, [colOrder, visibleCols, pinnedCols])
-  const [scheduleCandidate, setScheduleCandidate] = useState<any | null>(null)
-  const [sendEmailCandidates, setSendEmailCandidates] = useState<any[]>([])
-  const [bulkSelectValue, setBulkSelectValue] = useState('')
-  const filterRef = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    const fn = (e:MouseEvent) => { if (filterRef.current && !filterRef.current.contains(e.target as Node)) setShowFilterBar(false) }
-    document.addEventListener('mousedown', fn)
-    return () => document.removeEventListener('mousedown', fn)
-  }, [])
-
-  const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
-  )
-
-  const { data: jobs=[] } = useQuery({
-    queryKey: ['jobs','filter', isAgency ? 'agency' : 'all'],
+  const { data: allUsers = [] } = useQuery({
+    queryKey: ['users', 'all-active'],
     queryFn: async () => {
-      let q = supabase.from('jobs').select('id,title').order('title')
-      if (isAgency) q = (q as any).eq('show_to_agency', true)
-      const { data } = await q
-      return data ?? []
-    }
+      const { data } = await supabase.from('users').select('id,full_name,role').eq('is_active', true)
+      return (data ?? []) as { id: string; full_name: string; role: string }[]
+    },
+    staleTime: 60_000,
   })
-  const { data: hrUsers=[] }     = useQuery({ queryKey:['users','hr'],           queryFn:async()=>{const{data}=await supabase.from('users').select('id,full_name').in('role',['hr_team','admin','super_admin']).eq('is_active',true);return data??[]} })
-  const { data: interviewers=[] }= useQuery({ queryKey:['users','interviewers'], queryFn:async()=>{const{data}=await supabase.from('users').select('id,full_name').eq('role','interviewer').eq('is_active',true);return data??[]} })
-  const { data: customFields=[] }= useQuery({ queryKey:['custom-fields'],        queryFn:async()=>{const{data}=await supabase.from('custom_fields').select('*').eq('is_active',true).order('sort_order');return data??[]} })
 
-  const { data: candidates=[], isLoading } = useCandidates({ ...serverFilters, search:search||undefined })
+  // Agencies list — used by SubSourceField internally via useAgencies hook
 
-  // Agency sees only specific columns — no HR/Interviewer
-  // Agency visible: all columns EXCEPT hr_owner and interviewer
-  const AGENCY_HIDDEN = new Set(['hr_owner','interviewer'])
-  const effectiveVisible = isAgency
-    ? new Set([...DEFAULT_VISIBLE, 'subsource','email','phone','resume','notes','updated_at','source'].filter(k => !AGENCY_HIDDEN.has(k)))
-    : visibleCols
+  // Stage config — shared hook (same queryKey as OrgSettingsTab + CandidatesPage)
+  // staleTime:0 ensures immediate reflection of Settings changes
+  const { stageConfigs: stageConfigsRaw } = useStagesHook()
 
-  const orderedVisible = useMemo(() => {
-    // Custom fields — only show those with show_in_columns !== false (and show_to_agency for agency)
-    const cf = (customFields as any[])
-      .filter((f:any) => f.show_in_columns !== false && (!isAgency || f.show_to_agency !== false))
-      .map(f => `cf_${f.field_name}`)
-    const all = [...colOrder, ...cf].filter(k => effectiveVisible.has(k))
-    const pinned   = all.filter(k => pinnedCols.has(k))
-    const unpinned = all.filter(k => !pinnedCols.has(k))
-    return [...pinned, ...unpinned]
-  }, [colOrder, effectiveVisible, customFields, pinnedCols, isAgency])
+  // Custom fields — filtered by role visibility
+  const { data: customFields = [] } = useQuery({
+    queryKey: ['custom-fields'],
+    queryFn: async () => {
+      const { data } = await supabase
+        .from('custom_fields')
+        .select('*')
+        .eq('is_active', true)
+        .order('sort_order')
+      return (data ?? []) as any[]
+    },
+    staleTime: 60_000,
+  })
 
-  const displayed = useMemo(() => {
-    let list = candidates.filter((c:any) => showArchived ? !!c.archived_at : !c.archived_at)
-    if (activeFilters.length) list = applyFilters(list, activeFilters, jobs as any[], interviewers as any[], filterMode, customFields as any[])
-    return list
-  }, [candidates, showArchived, activeFilters, jobs, interviewers, filterMode, customFields])
+  const { data: myFeedback, refetch: refetchFeedback } = useQuery({
+    queryKey: ['my-feedback', id, user?.id],
+    queryFn: async () => {
+      if (!isInterviewer || !user) return null
+      const { data, error } = await supabase
+        .from('interview_feedback')
+        .select('id, submitted_at')
+        .eq('candidate_id', id!)
+        .eq('interviewer_id', user.id)
+        .maybeSingle()
+      if (error) console.error('[feedback query]', error)
+      return data
+    },
+    enabled: !!user && isInterviewer,
+    staleTime: 0,
+  })
 
-  const grouped = useMemo(() => {
-    if (!groupBy) return [{ key:'', label:'', items:displayed }]
-    const map = new Map<string,any[]>()
-    displayed.forEach((c:any) => {
-      let key = ''
-      if (groupBy==='current_stage') key = c.current_stage??'Unknown'
-      else if (groupBy==='job_id') key = c.job?.title??'No Job'
-      else if (groupBy==='source_category') key = c.source_category??'Unknown'
-      else if (groupBy==='hr_owner') key = (hrUsers as any[]).find(u=>u.id===c.hr_owner)?.full_name??'Unassigned'
-      if (!map.has(key)) map.set(key,[])
-      map.get(key)!.push(c)
+  const hrUsers          = allUsers.filter(u => ['hr_team','admin','super_admin'].includes(u.role))
+  const interviewerUsers = allUsers.filter(u => u.role === 'interviewer')
+
+  // Enter edit mode — snapshot current values
+  const enterEditMode = () => {
+    if (!candidate) return
+    setContactDraft({
+      full_name: candidate.full_name ?? '',
+      email: candidate.email ?? '',
+      phone: candidate.phone ?? '',
+      linkedin_url: candidate.linkedin_url ?? '',
+      resume_url: candidate.resume_url ?? '',
+      source_category: (candidate as any).source_category ?? '',
+      source_name: (candidate as any).source_name ?? '',
     })
-    return Array.from(map.entries()).sort(([a],[b])=>a.localeCompare(b)).map(([key,items])=>({key,label:key,items}))
-  }, [displayed, groupBy, hrUsers])
+    setGeneralNotesDraft((candidate as any).notes ?? '')
+    setInterviewDateDraft(toDatetimeLocal((candidate as any).interview_date))
+    setCustomDataDraft((candidate as any).custom_data ?? {})
+    setEditMode(true)
+  }
 
-  // Mutations
+  // updateField — always invalidates both lists
   const updateField = useMutation({
-    mutationFn: async({id,field,value}:{id:string;field:string;value:any})=>{
-      const{error}=await supabase.from('candidates').update({[field]:value}).eq('id',id)
-      if(error){console.error('[upd]',error);throw error}
-    },
-    onSuccess:()=>qc.invalidateQueries({queryKey:['candidates']}),
-  })
-
-  const archiveOne = useMutation({
-    mutationFn: async({id,archive}:{id:string;archive:boolean})=>{
-      const{error}=await supabase.from('candidates').update({archived_at:archive?new Date().toISOString():null,archived_by:archive?user!.id:null}).eq('id',id)
-      if(error)throw error
-    },
-    onSuccess:()=>{qc.invalidateQueries({queryKey:['candidates']});setSelectedIds(new Set())},
-  })
-
-  const deleteOne = useMutation({
-    mutationFn: async(id:string)=>{const{error}=await supabase.from('candidates').delete().eq('id',id);if(error)throw error},
-    onSuccess:()=>{qc.invalidateQueries({queryKey:['candidates']});setConfirmDelete(null)},
-  })
-
-  const bulkUpdate = useMutation({
-    mutationFn: async ({ field, value }: { field: string; value: any }) => {
-      const ids = Array.from(selectedIds)
-      let payload: Record<string, any>
-
-      if (field === 'hr_owner') {
-        payload = { hr_owner: value || null }
-      } else if (field === 'assigned_interviewers') {
-        payload = { assigned_interviewers: Array.isArray(value) ? value : [value] }
-      } else {
-        // current_stage, job_id, source_category, source_name, interview_date — direct set
-        payload = { [field]: value }
-      }
-
-      const { error } = await supabase.from('candidates').update(payload).in('id', ids)
-      if (error) { console.error('[bulkUpdate]', field, error); throw error }
+    mutationFn: async ({ field, value }: { field: string; value: unknown }) => {
+      const { error } = await supabase.from('candidates').update({ [field]: value }).eq('id', id!)
+      if (error) { console.error('[updateField]', field, error); throw error }
     },
     onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['candidate', id] })
       qc.invalidateQueries({ queryKey: ['candidates'] })
-      setSelectedIds(new Set())
-      setBulkField(null)
-      setBulkSelectValue('')
-      setShowBulkMenu(false)
     },
   })
 
-  const bulkArchive = useMutation({
-    mutationFn: async(archive:boolean)=>{
-      const{error}=await supabase.from('candidates').update({archived_at:archive?new Date().toISOString():null,archived_by:archive?user!.id:null}).in('id',Array.from(selectedIds))
-      if(error)throw error
+  const saveAll = useMutation({
+    mutationFn: async () => {
+      const { error } = await supabase.from('candidates').update({
+        full_name: contactDraft.full_name || undefined,
+        email: contactDraft.email,
+        phone: contactDraft.phone || null,
+        linkedin_url: contactDraft.linkedin_url || null,
+        resume_url: contactDraft.resume_url || null,
+        source_category: contactDraft.source_category || null,
+        source_name: contactDraft.source_name || null,
+        notes: generalNotesDraft || null,
+        interview_date: toISO(interviewDateDraft),
+        custom_data: customDataDraft,
+      }).eq('id', id!)
+      if (error) { console.error('[saveAll]', error); throw error }
     },
-    onSuccess:()=>{qc.invalidateQueries({queryKey:['candidates']});setSelectedIds(new Set())},
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['candidate', id] })
+      qc.invalidateQueries({ queryKey: ['candidates'] })
+      setEditMode(false)
+    },
   })
 
-  const onUpdate  = useCallback((id:string,field:string,value:any)=>updateField.mutate({id,field,value}),[updateField])
-  const toggleSel = useCallback((id:string)=>setSelectedIds(p=>{const n=new Set(p);n.has(id)?n.delete(id):n.add(id);return n}),[])
-  const toggleAll = useCallback(()=>setSelectedIds(s=>s.size===displayed.length?new Set():new Set(displayed.map((c:any)=>c.id))),[displayed])
-  const getName   = useCallback((list:any[], id:string|null) => {
-    if (!id) return null
-    const item = list.find(u => u.id === id)
-    return item?.full_name ?? item?.title ?? null
-  }, [])
+  // Submit feedback — simple: just marks that interviewer submitted feedback
+  // Notes are already saved via interview_notes on candidates table
+  const submitFeedback = useMutation({
+    mutationFn: async () => {
+      setFeedbackErr(null)
 
-  const onDragEnd = useCallback((event:DragEndEvent)=>{
-    const{active,over}=event
-    if(over&&active.id!==over.id){
-      setColOrder(prev=>{
-        const ai=prev.indexOf(active.id as string),oi=prev.indexOf(over.id as string)
-        return arrayMove(prev,ai,oi)
-      })
+      const { data: existing } = await supabase
+        .from('interview_feedback')
+        .select('id')
+        .eq('candidate_id', id!)
+        .eq('interviewer_id', user!.id)
+        .maybeSingle()
+
+      let error
+      if (existing?.id) {
+        const result = await supabase.from('interview_feedback')
+          .update({ submitted_at: new Date().toISOString() })
+          .eq('id', existing.id)
+        error = result.error
+      } else {
+        const result = await supabase.from('interview_feedback')
+          .insert({ candidate_id: id!, interviewer_id: user!.id })
+        error = result.error
+      }
+
+      if (error) { console.error('[feedback submit]', error); throw error }
+    },
+    onSuccess: async () => {
+      await refetchFeedback()
+      qc.invalidateQueries({ queryKey: ['my-feedback', id, user?.id] })
+      qc.invalidateQueries({ queryKey: ['my-interviews'] })
+    },
+    onError: (err: any) => {
+      setFeedbackErr(err?.message ?? 'Failed. Check browser console.')
+    },
+  })
+
+  const saveNote = async (sectionKey: string) => {
+    const draft = draftNotes[sectionKey]?.trim()
+    if (!draft) return
+    setSavingNote(sectionKey)
+    const existing = (candidate as any)?.interview_notes ?? {}
+    const entries: NoteEntry[] = existing[sectionKey] ?? []
+    const { error } = await supabase.from('candidates').update({
+      interview_notes: { ...existing, [sectionKey]: [...entries, {
+        text: draft, author: user!.full_name,
+        authorId: user!.id, timestamp: new Date().toISOString(),
+      }]}
+    }).eq('id', id!)
+    if (error) console.error('[saveNote]', error)
+    else {
+      qc.invalidateQueries({ queryKey: ['candidate', id] })
+      setDraftNotes(p => ({ ...p, [sectionKey]: '' }))
     }
-  },[])
+    setSavingNote(null)
+  }
 
-  const allColDefs = useMemo(()=>[
-    ...COLS.filter(c => !isAgency || !['hr_owner','interviewer'].includes(c.key)),
-    ...(customFields as any[])
-      .filter((f:any) => f.show_in_columns !== false && (!isAgency || f.show_to_agency !== false))
-      .map(f=>({key:`cf_${f.field_name}`,label:f.field_label,width:130}))
-  ],[customFields, isAgency])
+  // Edit an existing note — only the original author can edit
+  const saveEditedNote = async () => {
+    if (!editingNote) return
+    const { section, index, text } = editingNote
+    const trimmed = text.trim()
+    if (!trimmed) return
+    setSavingEditNote(true)
+    const existing = (candidate as any)?.interview_notes ?? {}
+    const entries: NoteEntry[] = [...(existing[section] ?? [])]
+    entries[index] = { ...entries[index], text: trimmed, timestamp: new Date().toISOString() }
+    const { error } = await supabase.from('candidates').update({
+      interview_notes: { ...existing, [section]: entries }
+    }).eq('id', id!)
+    if (error) console.error('[saveEditedNote]', error)
+    else {
+      qc.invalidateQueries({ queryKey: ['candidate', id] })
+      setEditingNote(null)
+    }
+    setSavingEditNote(false)
+  }
 
-  const GROUPS = [
-    {value:'',label:'No grouping'},
-    {value:'current_stage',label:'Stage'},
-    {value:'job_id',label:'Job'},
-    {value:'source_category',label:'Source'},
-    {value:'hr_owner',label:'HR Owner'},
-  ]
+  const toggleInterviewer = useCallback((uid: string) => {
+    const curr: string[] = (candidate as any)?.assigned_interviewers ?? []
+    const next = curr.includes(uid) ? curr.filter(i => i !== uid) : [...curr, uid]
+    updateField.mutate({ field: 'assigned_interviewers', value: next })
+  }, [candidate, updateField])
 
-  const colPickerCols = useMemo(()=>allColDefs,[allColDefs])
+  const toggleHROwner = useCallback((uid: string) => {
+    const curr: string[] = (candidate as any)?.assigned_hr_owners?.length > 0
+      ? (candidate as any).assigned_hr_owners
+      : ((candidate as any).hr_owner ? [(candidate as any).hr_owner] : [])
+    const next = curr.includes(uid) ? curr.filter(i => i !== uid) : [...curr, uid]
+    updateField.mutate({ field: 'assigned_hr_owners', value: next })
+    updateField.mutate({ field: 'hr_owner', value: next[0] ?? null })
+  }, [candidate, updateField])
+
+  if (isLoading) return <div className="flex justify-center py-24"><Loader2 className="w-6 h-6 animate-spin text-blue-500"/></div>
+  if (!candidate) return <p className="text-gray-500 py-8 text-center">Candidate not found.</p>
+
+  // Stage names — always from hook (hook returns defaults if DB empty)
+  const stages: string[] = (() => {
+    const jobStages = (candidate as any)?.job?.pipeline_stages
+    if (jobStages?.length) return jobStages
+    return stageConfigsRaw.map((s: any) => s.name)
+  })()
+
+  // Notes sections — DB config if available, else sensible defaults
+  const NOTES_SECTIONS: { key: string; label: string }[] = (() => {
+    const richConfigs = stageConfigsRaw.filter((s: any) => s.hasNotes)
+    if (richConfigs.length) {
+      return richConfigs.map((s: any) => ({
+        key: s.name.toLowerCase().replace(/[^a-z0-9]/g, '_'),
+        label: s.name,
+      }))
+    }
+    return [
+      { key: 'screening',   label: 'Screening'     },
+      { key: 'r1',          label: 'R1'             },
+      { key: 'case_study',  label: 'Case Study'     },
+      { key: 'r2',          label: 'R2'             },
+      { key: 'r3',          label: 'R3'             },
+      { key: 'cf_virtual',  label: 'CF (Virtual)'   },
+      { key: 'cf_inperson', label: 'CF (In-Person)' },
+    ]
+  })()
+
+  // Stage pill color — DB config → hardcoded map → gray fallback
+  const STAGE_COLOURS: Record<string, string> = {
+    Applied:'bg-gray-100 text-gray-600',      Screening:'bg-blue-50 text-blue-700',
+    R1:'bg-indigo-50 text-indigo-700',        'Case Study':'bg-amber-50 text-amber-700',
+    R2:'bg-orange-50 text-orange-700',        R3:'bg-orange-100 text-orange-800',
+    'CF (Virtual)':'bg-purple-50 text-purple-700', 'CF (In-Person)':'bg-purple-100 text-purple-800',
+    Offer:'bg-violet-50 text-violet-700',     Hired:'bg-green-50 text-green-700',
+    Rejected:'bg-red-50 text-red-600',
+  }
+  const stageColor = (name: string): string => {
+    const cfg = stageConfigsRaw.find((s: any) => s.name === name)
+    if (cfg?.color) return `${cfg.color} ${cfg.textColor}`
+    return STAGE_COLOURS[name] ?? 'bg-gray-100 text-gray-600'
+  }
+  const interviewNotes = (candidate as any).interview_notes ?? {}
+  const assignedInterviewers: string[] = (candidate as any).assigned_interviewers ?? []
+  const assignedHROwners: string[] = (candidate as any)?.assigned_hr_owners?.length > 0
+    ? (candidate as any).assigned_hr_owners
+    : ((candidate as any).hr_owner ? [(candidate as any).hr_owner] : [])
+
+  const feedbackSubmitted = !!myFeedback?.submitted_at
+
+  // Google Drive preview: convert share URL to embedded preview
+  // Share URL: https://drive.google.com/file/d/FILE_ID/view?usp=sharing
+  // Preview URL: https://drive.google.com/file/d/FILE_ID/preview
+  const drivePreviewUrl = candidate.resume_url
+    ? candidate.resume_url.includes('drive.google.com')
+      ? candidate.resume_url
+          .replace(/\/view.*$/, '/preview')      // replace /view?... with /preview
+          .replace(/\/edit.*$/, '/preview')       // replace /edit?... with /preview
+      : null  // non-Drive URLs: open in new tab only, don't iframe
+    : null
 
   return (
-    <div className="space-y-4">
-      <PageHeader
-        title={showArchived?'Archived':'Candidates'}
-        subtitle={`${displayed.length} candidate${displayed.length!==1?'s':''}${selectedIds.size>0?` · ${selectedIds.size} selected`:''}`}
-        action={
-          <div className="flex items-center gap-2">
-            {/* Archive toggle */}
-            <button onClick={()=>{setShowArchived(a=>!a);setSelectedIds(new Set())}}
-              className={`flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg border transition-all ${showArchived?'bg-amber-50 border-amber-200 text-amber-700':'border-gray-200 text-gray-600 hover:border-gray-300 hover:bg-gray-50'}`}>
-              <Archive className="w-3.5 h-3.5"/>
-              {showArchived?'Active view':'Archived'}
-            </button>
+    <div>
+      {/* Top bar */}
+      <div className="flex items-center justify-between mb-5">
+        <button onClick={() => navigate(-1)} className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700 transition-colors">
+          <ArrowLeft className="w-4 h-4"/> Back
+        </button>
+        <div className="flex items-center gap-2">
+          {canEdit && (
+            editMode ? (
+              <div className="flex gap-2">
+                <Button variant="secondary" size="sm" icon={<X className="w-3.5 h-3.5"/>} onClick={() => setEditMode(false)}>Cancel</Button>
+                <Button size="sm" loading={saveAll.isPending} icon={<Check className="w-3.5 h-3.5"/>} onClick={() => saveAll.mutate()}>Save</Button>
+              </div>
+            ) : (
+              <Button variant="secondary" size="sm" icon={<Pencil className="w-3.5 h-3.5"/>} onClick={enterEditMode}>Edit</Button>
+            )
+          )}
+        </div>
+      </div>
 
-            {/* Column picker */}
-            <div className="relative">
-              <button onClick={()=>setShowColPicker(o=>!o)}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-gray-200 rounded-lg text-gray-600 hover:border-gray-300 hover:bg-gray-50 transition-all">
-                <Eye className="w-3.5 h-3.5"/>Columns
+      {/* Name + Stage row */}
+      <div className="flex items-start justify-between gap-4 mb-5 flex-wrap">
+        <div>
+          <h1 className="text-xl font-semibold text-gray-900">{candidate.full_name}</h1>
+          <p className="text-sm text-gray-400 mt-0.5">
+            {(candidate as any).agency?.name
+              ? <span>🏢 {(candidate as any).agency.name}</span>
+              : `${candidate.source_name} · ${labelOf(candidate.source_category)}`
+            }
+          </p>
+        </div>
+        <div className="relative">
+          {canEdit && !isAgency ? (
+            <>
+              <button onClick={() => setStageOpen(o => !o)}
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium border ${stageColor(candidate.current_stage)} border-transparent`}>
+                {candidate.current_stage}<ChevronDown className="w-3.5 h-3.5 opacity-60"/>
               </button>
-              {showColPicker&&(
+              {stageOpen && (
                 <>
-                  <div className="fixed inset-0 z-40" onClick={()=>setShowColPicker(false)}/>
-                  <div className="absolute right-0 top-full mt-1.5 bg-white border border-gray-100 rounded-xl shadow-lg z-50 p-4 w-56">
-                    <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2.5">Show & pin columns</p>
-                    {colPickerCols.map(col=>(
-                      <div key={col.key} className="flex items-center gap-2 py-1 group">
-                        {/* Visible toggle */}
-                        <button onClick={()=>setVisibleCols(p=>{const n=new Set(p);n.has(col.key)?n.delete(col.key):n.add(col.key);return n})}
-                          className={`w-4 h-4 rounded border flex items-center justify-center transition-all flex-shrink-0 ${visibleCols.has(col.key)?'bg-blue-500 border-blue-500':'border-gray-300 hover:border-gray-400'}`}>
-                          {visibleCols.has(col.key)&&<Check className="w-2.5 h-2.5 text-white"/>}
-                        </button>
-                        <span className="text-sm text-gray-700 flex-1">{col.label}</span>
-                        {/* Pin toggle — only when visible, clear state */}
-                        {visibleCols.has(col.key) && (
-                          <button
-                            onClick={e => {
-                              e.stopPropagation()
-                              setPinnedCols(p => {
-                                const n = new Set(p)
-                                n.has(col.key) ? n.delete(col.key) : n.add(col.key)
-                                return n
-                              })
-                            }}
-                            title={pinnedCols.has(col.key) ? 'Click to unpin' : 'Click to pin left'}
-                            className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-xs transition-all ${
-                              pinnedCols.has(col.key)
-                                ? 'bg-blue-100 text-blue-700 font-medium'
-                                : 'text-gray-300 hover:text-gray-500 hover:bg-gray-100 opacity-0 group-hover:opacity-100'
-                            }`}>
-                            {pinnedCols.has(col.key) ? '📌 Pinned' : '📌 Pin'}
-                          </button>
-                        )}
-                      </div>
+                  <div className="fixed inset-0 z-40" onClick={() => setStageOpen(false)}/>
+                  <div className="absolute right-0 top-full mt-1 bg-white border border-gray-200 rounded-xl shadow-xl z-50 py-1 w-52 max-h-80 overflow-y-auto">
+                    {stages.map((s: string) => (
+                      <button key={s} onClick={() => { updateStage.mutate({ id: candidate.id, stage: s }); setStageOpen(false) }}
+                        className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50 flex items-center justify-between gap-2">
+                        <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${stageColor(s)}`}>{s}</span>
+                        {s === candidate.current_stage && <Check className="w-3.5 h-3.5 text-slate-600"/>}
+                      </button>
                     ))}
-                    {pinnedCols.size > 0 && (
-                      <button onClick={() => setPinnedCols(new Set())}
-                        className="mt-2 text-xs text-gray-400 hover:text-gray-600">Unpin all</button>
-                    )}
                   </div>
                 </>
               )}
-            </div>
+            </>
+          ) : (
+            /* Agency or non-editor — read-only stage pill */
+            <span className={`px-3 py-1.5 rounded-lg text-sm font-medium ${stageColor(candidate.current_stage)}`}>
+              {candidate.current_stage}
+              {isAgency && <span className="ml-1.5 text-xs opacity-60">(view only)</span>}
+            </span>
+          )}
+        </div>
+      </div>
 
-            {/* Group By */}
-            <div className="flex items-center gap-1.5 border border-gray-200 rounded-lg px-3 py-1.5">
-              <Layers className="w-3.5 h-3.5 text-gray-400"/>
-              <select value={groupBy} onChange={e=>setGroupBy(e.target.value)}
-                className="text-sm bg-transparent border-none outline-none text-gray-600 cursor-pointer">
-                {GROUPS.map(o=><option key={o.value} value={o.value}>{o.label}</option>)}
-              </select>
-            </div>
+      {/* Main layout */}
+      <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
 
-            {/* Bulk — disabled for agency */}
-            {selectedIds.size>0 && !isAgency &&(
-              <div className="relative">
-                <button onClick={()=>setShowBulkMenu(o=>!o)}
-                  className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">
-                  {selectedIds.size} selected
-                  <ChevronDown className="w-3.5 h-3.5"/>
-                </button>
-                {showBulkMenu&&(
-                  <>
-                    <div className="fixed inset-0 z-40" onClick={()=>{setShowBulkMenu(false);setBulkField(null)}}/>
-                    <div className="absolute right-0 top-full mt-1.5 bg-white border border-gray-100 rounded-xl shadow-lg z-50 p-2 w-52">
-                      {[
-                        ['current_stage',       'Change Stage'],
-                        ['job_id',              'Assign Job'],
-                        ['source_category',     'Change Source'],
-                        ['source_name',         'Change Sub-Source'],
-                        ['interview_date',      'Set Interview Date'],
-                        ...(canAssignHR ? [['hr_owner','Assign HR Owner']] : [] as any),
-                        ['assigned_interviewers','Assign Interviewer'],
-                      ].map(([f,lbl])=>(
-                        <button key={f} onClick={()=>{setBulkField(f);setBulkSelectValue('')}}
-                          className={`w-full text-left text-sm px-3 py-2 rounded-lg transition-colors ${bulkField===f?'bg-blue-50 text-blue-700':'text-gray-700 hover:bg-gray-50'}`}>
-                          {lbl}
-                        </button>
-                      ))}
-                      <div className="border-t border-gray-100 mt-1 pt-1">
-                        <button onClick={()=>bulkArchive.mutate(!showArchived)}
-                          className="w-full text-left text-sm px-3 py-2 rounded-lg text-amber-700 hover:bg-amber-50 transition-colors">
-                          {showArchived?'Unarchive':'Archive'} selected
-                        </button>
-                        {isSuperAdmin&&(
-                          <button onClick={()=>setBulkField('__delete__')}
-                            className="w-full text-left text-sm px-3 py-2 rounded-lg text-red-600 hover:bg-red-50 transition-colors">
-                            Delete permanently
-                          </button>
-                        )}
-                      </div>
-                      {bulkField && bulkField !== '__delete__' && (
-                        <div className="border-t border-gray-100 mt-1 pt-2 px-1 space-y-2" onClick={e=>e.stopPropagation()}>
+        {/* ── Left sidebar — seamless, no stacked cards ── */}
+        <aside className="lg:col-span-2 bg-gray-50/60 rounded-xl border border-gray-200 divide-y divide-gray-100 overflow-hidden">
 
-                          {/* Date input for interview_date */}
-                          {bulkField === 'interview_date' ? (
-                            <input type="datetime-local"
-                              value={bulkSelectValue}
-                              onChange={e => setBulkSelectValue(e.target.value)}
-                              className="w-full px-2.5 py-1.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white"/>
-                          ) : bulkField === 'source_name' ? (
-                            /* Free-text for sub-source */
-                            <input type="text"
-                              value={bulkSelectValue}
-                              onChange={e => setBulkSelectValue(e.target.value)}
-                              placeholder="e.g. IIT Delhi, Naukri, LinkedIn…"
-                              className="w-full px-2.5 py-1.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white"/>
-                          ) : (
-                            /* Select for all other fields */
-                            <select
-                              value={bulkSelectValue}
-                              onChange={e => setBulkSelectValue(e.target.value)}
-                              className="w-full px-2.5 py-1.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white">
-                              <option value="" disabled>Choose…</option>
-                              {bulkField === 'current_stage'
-                                ? STAGES.map(s => <option key={s} value={s}>{s}</option>)
-                                : bulkField === 'job_id'
-                                ? (jobs as any[]).map(j => <option key={j.id} value={j.id}>{j.title}</option>)
-                                : bulkField === 'source_category'
-                                ? ['platform','agency','college'].map(s => <option key={s} value={s}>{s.charAt(0).toUpperCase()+s.slice(1)}</option>)
-                                : bulkField === 'assigned_interviewers'
-                                ? (interviewers as any[]).map(u => <option key={u.id} value={u.id}>{u.full_name}</option>)
-                                : bulkField === 'hr_owner'
-                                ? (hrUsers as any[]).map(u => <option key={u.id} value={u.id}>{u.full_name}</option>)
-                                : null
-                              }
-                            </select>
-                          )}
-
-                          <button
-                            disabled={bulkUpdate.isPending || !bulkSelectValue}
-                            onClick={e => {
-                              e.stopPropagation()
-                              if (!bulkSelectValue) return
-                              // interview_date needs ISO string
-                              const val = bulkField === 'interview_date'
-                                ? new Date(bulkSelectValue).toISOString()
-                                : bulkSelectValue
-                              bulkUpdate.mutate({ field: bulkField!, value: val })
-                            }}
-                            className="w-full py-1.5 bg-gray-900 text-white rounded-lg text-xs font-medium hover:bg-gray-800 disabled:opacity-40 transition-colors flex items-center justify-center gap-1.5">
-                            {bulkUpdate.isPending
-                              ? <><Loader2 className="w-3 h-3 animate-spin"/>Updating…</>
-                              : `Apply to ${selectedIds.size} candidate${selectedIds.size !== 1 ? 's' : ''}`
-                            }
-                          </button>
-                        </div>
-                      )}
-                      {bulkField==='__delete__'&&(
-                        <div className="border-t border-gray-100 mt-1 pt-2 px-1 space-y-2">
-                          <p className="text-xs text-red-600">Delete {selectedIds.size} permanently?</p>
-                          <div className="flex gap-2">
-                            <button onClick={()=>setBulkField(null)} className="flex-1 py-1.5 border border-gray-200 rounded-lg text-xs text-gray-600 hover:bg-gray-50">Cancel</button>
-                            <button onClick={async()=>{await supabase.from('candidates').delete().in('id',Array.from(selectedIds));qc.invalidateQueries({queryKey:['candidates']});setSelectedIds(new Set());setBulkField(null);setShowBulkMenu(false)}}
-                              className="flex-1 py-1.5 bg-red-600 rounded-lg text-xs text-white hover:bg-red-700">Delete</button>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  </>
+          {/* Contact */}
+          <div className="px-5 py-4">
+            <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Contact</p>
+            {editMode ? (
+              <div className="space-y-2.5">
+                {/* Name */}
+                <div>
+                  <label className="block text-xs text-gray-400 mb-0.5">Full Name</label>
+                  <input value={contactDraft.full_name}
+                    onChange={e => setContactDraft(p => ({ ...p, full_name: e.target.value }))}
+                    className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-slate-400"/>
+                </div>
+                {/* Contact fields */}
+                {([
+                  ['email','Email','email'],
+                  ['phone','Phone','tel'],
+                  ['linkedin_url','LinkedIn','url'],
+                  ['resume_url','Resume URL','url'],
+                ] as const).map(([k,label,type]) => (
+                  <div key={k}>
+                    <label className="block text-xs text-gray-400 mb-0.5">{label}</label>
+                    <input type={type} value={contactDraft[k]}
+                      onChange={e => setContactDraft(p => ({ ...p, [k]: e.target.value }))}
+                      placeholder={k === 'resume_url' ? 'https://drive.google.com/...' : ''}
+                      className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-slate-400"/>
+                  </div>
+                ))}
+                {/* Source — separate dropdowns */}
+                <div>
+                  <label className="block text-xs text-gray-400 mb-0.5">Source</label>
+                  <select value={contactDraft.source_category}
+                    onChange={e => setContactDraft(p => ({ ...p, source_category: e.target.value, source_name: '' }))}
+                    className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-slate-400">
+                    <option value="">Select source…</option>
+                    <option value="platform">🔗 Platform</option>
+                    <option value="agency">🏢 Agency</option>
+                    <option value="college">🎓 College</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-400 mb-0.5">Sub-Source</label>
+                  <ProfileSubSource
+                    sourceCategory={contactDraft.source_category}
+                    value={contactDraft.source_name}
+                    onChange={v => setContactDraft(p => ({ ...p, source_name: v }))}
+                  />
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <a href={`mailto:${candidate.email}`} className="flex items-center gap-2.5 text-sm text-gray-700 hover:text-blue-600 transition-colors">
+                  <Mail className="w-3.5 h-3.5 text-gray-400 flex-shrink-0"/>{candidate.email}
+                </a>
+                {candidate.phone && (
+                  <a href={`tel:${candidate.phone}`} className="flex items-center gap-2.5 text-sm text-gray-700 hover:text-blue-600">
+                    <Phone className="w-3.5 h-3.5 text-gray-400 flex-shrink-0"/>{candidate.phone}
+                  </a>
+                )}
+                {candidate.linkedin_url && (
+                  <a href={candidate.linkedin_url} target="_blank" rel="noreferrer" className="flex items-center gap-2.5 text-sm text-blue-600 hover:underline">
+                    <Linkedin className="w-3.5 h-3.5 flex-shrink-0"/>LinkedIn Profile
+                  </a>
+                )}
+                {!candidate.phone && !candidate.linkedin_url && (
+                  <p className="text-xs text-gray-400 italic">Click Edit to add phone / LinkedIn</p>
                 )}
               </div>
             )}
+          </div>
 
-            {canEdit&&!showArchived&&(
-              <>
-                <button onClick={()=>navigate('/upload')}
-                  className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-gray-200 rounded-lg text-gray-600 hover:border-gray-300 hover:bg-gray-50 transition-all">
-                  <Upload className="w-3.5 h-3.5"/>Upload
-                </button>
-                <button onClick={()=>navigate('/upload?mode=single')}
-                  className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-gray-900 text-white rounded-lg hover:bg-gray-800 transition-colors">
-                  <UserPlus className="w-3.5 h-3.5"/>Add candidate
-                </button>
-              </>
+          {/* Meta */}
+          <div className="px-5 py-4">
+            <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Details</p>
+            <div className="space-y-2">
+              {[
+                ['Source', `${labelOf(candidate.source_category)} — ${candidate.source_name}`],
+                ['Job', (candidate as any).job?.title ?? '—'],
+                ['Added', formatDate(candidate.created_at)],
+              ].map(([label, val]) => (
+                <div key={label} className="flex gap-2 text-sm">
+                  <span className="text-gray-400 w-14 flex-shrink-0 text-xs pt-0.5">{label}</span>
+                  <span className="text-gray-700">{val}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Assignment — hidden from interviewer AND agency */}
+          {!isInterviewer && !isAgency && (
+            <div className="px-5 py-4 space-y-4">
+              <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Assignment</p>
+
+              {/* HR Owner */}
+              <div>
+                <p className="text-xs text-gray-500 mb-2">HR Owner <span className="text-gray-300">(single)</span></p>
+                {hrUsers.length === 0 ? (
+                  <p className="text-xs text-gray-400 italic">No HR members</p>
+                ) : (
+                  <div className="flex flex-wrap gap-1.5">
+                    {hrUsers.map(u => {
+                      const sel = (candidate as any).hr_owner === u.id
+                      return (
+                        <button key={u.id}
+                          onClick={() => {
+                            if (!canAssignHR) return
+                            // Single select: toggle off if same, else assign
+                            const next = sel ? null : u.id
+                            updateField.mutate({ field: 'hr_owner', value: next })
+                            // Also update assigned_hr_owners for consistency
+                            updateField.mutate({ field: 'assigned_hr_owners', value: next ? [next] : [] })
+                          }}
+                          disabled={!canAssignHR}
+                          className={`${PILL_BASE} ${!canAssignHR ? PILL_DISABLED : sel ? PILL_ON : PILL_OFF}`}>
+                          {sel && <Check className="w-2.5 h-2.5 inline mr-1 opacity-80"/>}
+                          {u.full_name}
+                        </button>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+
+              {/* Interviewers — MULTI select pills, same design as HR Owner */}
+              <div>
+                <p className="text-xs text-gray-500 mb-2">Interviewers <span className="text-gray-300">(multi)</span></p>
+                {interviewerUsers.length === 0 ? (
+                  <p className="text-xs text-gray-400 italic">No interviewers in Settings</p>
+                ) : (
+                  <div className="flex flex-wrap gap-1.5">
+                    {interviewerUsers.map(u => {
+                      const sel = assignedInterviewers.includes(u.id)
+                      return (
+                        <button key={u.id}
+                          onClick={() => canEdit && toggleInterviewer(u.id)}
+                          disabled={!canEdit}
+                          className={`${PILL_BASE} ${!canEdit ? PILL_DISABLED : sel ? PILL_ON : PILL_OFF}`}>
+                          {sel && <Check className="w-2.5 h-2.5 inline mr-1 opacity-80"/>}
+                          {u.full_name}
+                        </button>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+
+              {/* Interview Date — only editable in edit mode */}
+              <div>
+                <p className="text-xs text-gray-500 mb-2">Interview Date & Time</p>
+                {editMode && canEdit ? (
+                  <input type="datetime-local" value={interviewDateDraft}
+                    onChange={e => setInterviewDateDraft(e.target.value)}
+                    className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-slate-400"/>
+                ) : (
+                  <p className="text-sm text-gray-700">
+                    {(candidate as any).interview_date ? formatDateTime((candidate as any).interview_date) : <span className="text-gray-400 italic text-xs">Not set</span>}
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Interview Date — visible to agency as read-only */}
+          {isAgency && (candidate as any).interview_date && (
+            <div className="px-5 py-4">
+              <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">Interview</p>
+              <div className="flex items-center gap-2 text-sm text-gray-700">
+                <span className="text-blue-500">📅</span>
+                {formatDateTime((candidate as any).interview_date)}
+              </div>
+            </div>
+          )}
+          {(() => {
+            const visibleFields = (customFields as any[]).filter((f: any) =>
+              !isInterviewer || f.show_to_interviewer !== false
+            )
+            if (visibleFields.length === 0) return null
+            const customData = (candidate as any).custom_data ?? {}
+            return (
+              <div className="px-5 py-4 space-y-3">
+                <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Additional Details</p>
+                {editMode ? (
+                  <div className="space-y-3">
+                    {visibleFields.map((f: any) => (
+                      <div key={f.id}>
+                        <label className="block text-xs text-gray-400 mb-0.5">
+                          {f.field_label}
+                          {f.is_required && <span className="text-red-400 ml-1">*</span>}
+                          {!isInterviewer && f.show_to_interviewer === false && (
+                            <span className="ml-1 text-xs text-gray-300">(hidden from interviewers)</span>
+                          )}
+                        </label>
+                        {f.field_type === 'boolean' ? (
+                          <div className="flex items-center gap-2">
+                            <input type="checkbox"
+                              checked={customDataDraft[f.field_name] === 'true'}
+                              onChange={e => setCustomDataDraft(p => ({ ...p, [f.field_name]: e.target.checked ? 'true' : 'false' }))}
+                              className="rounded border-gray-300 text-blue-600"/>
+                            <span className="text-sm text-gray-600">{customDataDraft[f.field_name] === 'true' ? 'Yes' : 'No'}</span>
+                          </div>
+                        ) : (
+                          <input
+                            type={f.field_type === 'number' ? 'number' : f.field_type === 'date' ? 'date' : f.field_type === 'url' ? 'url' : 'text'}
+                            value={customDataDraft[f.field_name] ?? ''}
+                            onChange={e => setCustomDataDraft(p => ({ ...p, [f.field_name]: e.target.value }))}
+                            placeholder={f.field_label}
+                            className="w-full px-2.5 py-1.5 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-slate-400"/>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <dl className="space-y-2">
+                    {visibleFields.map((f: any) => {
+                      const val = customData[f.field_name]
+                      return (
+                        <div key={f.id} className="flex gap-2">
+                          <dt className="text-gray-400 text-xs w-28 flex-shrink-0 pt-0.5">{f.field_label}</dt>
+                          <dd className="text-sm text-gray-700 font-medium">
+                            {val === undefined || val === null || val === ''
+                              ? <span className="text-gray-300 italic text-xs">—</span>
+                              : f.field_type === 'boolean'
+                              ? (val === 'true' || val === true ? 'Yes' : 'No')
+                              : f.field_type === 'url'
+                              ? <a href={val} target="_blank" rel="noreferrer" className="text-blue-600 hover:underline text-xs break-all">{val}</a>
+                              : String(val)
+                            }
+                          </dd>
+                        </div>
+                      )
+                    })}
+                  </dl>
+                )}
+              </div>
+            )
+          })()}
+        </aside>
+
+        {/* ── Right column ── */}
+        <div className="lg:col-span-3 space-y-5">
+
+          {/* Resume */}
+          <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+            <div className="flex items-center justify-between px-5 py-3 border-b border-gray-100">
+              <p className="text-sm font-semibold text-gray-700">Resume</p>
+              {candidate.resume_url && (
+                <a href={candidate.resume_url} target="_blank" rel="noreferrer">
+                  <Button variant="ghost" size="sm" icon={<ExternalLink className="w-3.5 h-3.5"/>}>Open</Button>
+                </a>
+              )}
+            </div>
+            {drivePreviewUrl ? (
+              <iframe src={drivePreviewUrl} className="w-full border-0" style={{ height: '300px' }} title="Resume"/>
+            ) : (
+              /* Minimal empty state — no giant box */
+              <div className="flex items-center gap-2.5 px-5 py-4 text-gray-400">
+                <FileText className="w-4 h-4 flex-shrink-0"/>
+                <p className="text-sm">No resume attached</p>
+                {canEdit && <span className="text-xs text-gray-300">· Add URL via Edit</span>}
+              </div>
             )}
           </div>
-        }
-      />
 
-      {/* Filter bar */}
-      <div className="flex items-center gap-2">
-        <div className="relative flex-1 max-w-xs">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400"/>
-          <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search name or email…"
-            className="w-full pl-9 pr-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"/>
-        </div>
+          {/* General Notes — hidden from agency */}
+          {!isAgency && (
+          <div>
+            <div className="flex items-center justify-between mb-2 px-1">
+              <p className="text-sm font-semibold text-gray-700">General Notes</p>
+            </div>
+            {editMode ? (
+              <textarea value={generalNotesDraft}
+                onChange={e => setGeneralNotesDraft(e.target.value)}
+                rows={4} placeholder="General notes about this candidate…"
+                className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-slate-400 resize-y bg-white"/>
+            ) : (
+              (candidate as any).notes ? (
+                <div className="bg-white rounded-xl border border-gray-100 px-4 py-3">
+                  <p className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">{(candidate as any).notes}</p>
+                </div>
+              ) : (
+                <p className="text-xs text-gray-400 italic px-1">{canEdit ? 'Click Edit to add notes.' : 'No notes.'}</p>
+              )
+            )}
+          </div>
+          )}
 
-        <div ref={filterRef} className="relative">
-          <button onClick={()=>setShowFilterBar(o=>!o)}
-            className={`flex items-center gap-1.5 px-3 py-2 text-sm rounded-lg border transition-all ${activeFilters.length>0?'bg-blue-600 text-white border-blue-600 hover:bg-blue-700':'border-gray-200 text-gray-600 hover:border-gray-300 hover:bg-gray-50'}`}>
-            <Filter className="w-3.5 h-3.5"/>
-            {activeFilters.length>0?`${activeFilters.length} filter${activeFilters.length>1?'s':''}` : 'Filter'}
-          </button>
-          {showFilterBar&&(
-            <div className="absolute left-0 top-full mt-1.5 z-50">
-              <FilterBar filters={activeFilters} onChange={setActiveFilters}
-                jobs={jobs as any[]}
-                interviewers={isAgency ? [] : interviewers as any[]}
-                hrUsers={isAgency ? [] : hrUsers as any[]}
-                mode={filterMode} onModeChange={setFilterMode}
-                hideHrFields={isAgency}
-                stages={STAGES}
-                customFieldDefs={(customFields as any[])
-                  .filter((f:any) => !isAgency || f.show_to_agency !== false)
-                  .map(f=>({field_name:f.field_name,field_label:f.field_label,field_type:f.field_type}))}/>
+          {/* Interview Notes — hidden from agency */}
+          {!isAgency && (
+          <div>
+            <p className="text-sm font-semibold text-gray-700 mb-3 px-1">Interview Notes</p>
+            <div className="space-y-0">
+              {NOTES_SECTIONS.map(({ key, label }, sectionIdx) => {
+                const entries: NoteEntry[] = interviewNotes[key] ?? []
+                const draft = draftNotes[key] ?? ''
+                return (
+                  <div key={key} className={`${sectionIdx > 0 ? 'border-t border-gray-100' : ''}`}>
+                    {/* Section header */}
+                    <div className="flex items-center gap-2 px-1 py-2.5">
+                      <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${entries.length > 0 ? 'bg-slate-600' : 'bg-gray-200'}`}/>
+                      <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide flex-1">{label}</p>
+                      {entries.length > 0 && <span className="text-xs text-gray-400">{entries.length}</span>}
+                    </div>
+
+                    {/* Existing entries */}
+                    {entries.length > 0 && (
+                      <div className="space-y-2 mb-2 pl-3.5">
+                        {entries.map((e, i) => {
+                          const isMyNote = e.authorId === user?.id
+                          const isEditing = editingNote?.section === key && editingNote?.index === i
+                          return (
+                            <div key={i} className="bg-gray-50 rounded-lg px-3 py-2.5 group/note">
+                              {isEditing ? (
+                                <div className="space-y-2">
+                                  <textarea autoFocus rows={4} value={editingNote.text}
+                                    onChange={ev => setEditingNote(p => p ? { ...p, text: ev.target.value } : null)}
+                                    className="w-full px-2.5 py-2 border border-slate-400 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-slate-400 resize-y"/>
+                                  <div className="flex items-center gap-2">
+                                    <button onClick={saveEditedNote} disabled={savingEditNote || !editingNote.text.trim()}
+                                      className="px-3 py-1 bg-slate-800 hover:bg-slate-700 disabled:bg-gray-300 text-white text-xs rounded-lg flex items-center gap-1 transition-colors">
+                                      {savingEditNote ? <Loader2 className="w-3 h-3 animate-spin"/> : <Check className="w-3 h-3"/>}
+                                      Save
+                                    </button>
+                                    <button onClick={() => setEditingNote(null)}
+                                      className="px-3 py-1 border border-gray-200 text-gray-500 text-xs rounded-lg hover:bg-gray-100 transition-colors">
+                                      Cancel
+                                    </button>
+                                  </div>
+                                </div>
+                              ) : (
+                                <>
+                                  <p className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">{e.text}</p>
+                                  <div className="flex items-center justify-between mt-1.5">
+                                    <p className="text-xs text-gray-400">
+                                      <span className="font-medium text-gray-500">{e.author}</span> · {formatRelative(e.timestamp)}
+                                    </p>
+                                    {isMyNote && (
+                                      <button onClick={() => setEditingNote({ section: key, index: i, text: e.text })}
+                                        className="opacity-0 group-hover/note:opacity-100 transition-opacity text-xs text-gray-400 hover:text-slate-600 flex items-center gap-0.5">
+                                        <Pencil className="w-3 h-3"/> Edit
+                                      </button>
+                                    )}
+                                  </div>
+                                </>
+                              )}
+                            </div>
+                          )
+                        })}
+                      </div>
+                    )}
+
+                    {/* Input — resizable so user can expand for long paragraphs */}
+                    {canAddNotes && (
+                      <div className="flex gap-2 items-end pb-3 pl-3.5">
+                        <textarea rows={3} value={draft}
+                          onChange={e => setDraftNotes(p => ({ ...p, [key]: e.target.value }))}
+                          placeholder={`Add ${label} note…`}
+                          onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) saveNote(key) }}
+                          className="flex-1 px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-slate-400 resize-y min-h-[72px]"/>
+                        <button onClick={() => saveNote(key)} disabled={!draft.trim() || savingNote === key}
+                          className="flex-shrink-0 w-8 h-8 rounded-lg bg-slate-800 hover:bg-slate-700 disabled:bg-gray-200 flex items-center justify-center transition-colors self-end">
+                          {savingNote === key ? <Loader2 className="w-3.5 h-3.5 text-white animate-spin"/> : <Send className="w-3.5 h-3.5 text-white"/>}
+                        </button>
+                      </div>
+                    )}
+                    {entries.length === 0 && !canAddNotes && (
+                      <p className="text-xs text-gray-400 pl-3.5 pb-3 italic">No notes yet.</p>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+          )} {/* end !isAgency — Interview Notes hidden from agency */}
+
+          {/* Agency Feedback — only shown when source_category = 'agency'
+              HR/Admin: Read+Write | Agency: Read-only | Interviewer: Hidden */}
+          {!isInterviewer && (candidate as any).source_category === 'agency' && (
+            <>
+              {isAgency && (
+                <div className="bg-blue-50/60 rounded-xl border border-blue-100 px-5 py-4">
+                  <p className="text-sm font-semibold text-gray-700 mb-2 flex items-center gap-2">
+                    <span className="w-2 h-2 rounded-full bg-blue-400 flex-shrink-0"/>
+                    HR Feedback
+                  </p>
+                  {(candidate as any).agency_notes ? (
+                    <p className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">
+                      {(candidate as any).agency_notes}
+                    </p>
+                  ) : (
+                    <p className="text-xs text-gray-400 italic">No feedback shared yet.</p>
+                  )}
+                </div>
+              )}
+              {!isAgency && (
+                <AgencyFeedbackEditor
+                  candidateId={candidate.id}
+                  currentFeedback={(candidate as any).agency_notes ?? ''}
+                  canEdit={canEdit}
+                />
+              )}
+            </>
+          )}
+
+          {/* ── Submit Feedback — Interviewers only, simple button at bottom ── */}
+          {isInterviewer && (
+            <div className={`rounded-xl border-2 px-5 py-4 flex items-center gap-4 ${feedbackSubmitted ? 'border-green-200 bg-green-50/40' : 'border-slate-200 bg-slate-50/40'}`}>
+              {feedbackSubmitted ? (
+                <div className="flex items-center gap-2.5">
+                  <CheckCircle className="w-5 h-5 text-green-600 flex-shrink-0"/>
+                  <div>
+                    <p className="text-sm font-semibold text-green-800">Feedback Submitted</p>
+                    <p className="text-xs text-green-600 mt-0.5">Your notes have been recorded.</p>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <div>
+                    <p className="text-sm font-semibold text-gray-800">Ready to submit?</p>
+                    <p className="text-xs text-gray-500 mt-0.5">Add your interview notes above, then submit feedback.</p>
+                  </div>
+                  {feedbackErr && <p className="text-xs text-red-600">{feedbackErr}</p>}
+                  <button onClick={() => submitFeedback.mutate()} disabled={submitFeedback.isPending}
+                    className="flex-shrink-0 px-4 py-2 bg-slate-800 hover:bg-slate-700 disabled:bg-gray-300 text-white text-sm font-medium rounded-lg transition-colors flex items-center gap-2">
+                    {submitFeedback.isPending
+                      ? <><Loader2 className="w-4 h-4 animate-spin"/>Submitting…</>
+                      : <><CheckCircle className="w-4 h-4"/>Submit Feedback</>
+                    }
+                  </button>
+                </>
+              )}
             </div>
           )}
         </div>
-
-        <select value={serverFilters.job_id??''} onChange={e=>setServerFilters(p=>({...p,job_id:e.target.value||undefined}))}
-          className="px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-600">
-          <option value="">All jobs</option>
-          {(jobs as any[]).map(j=><option key={j.id} value={j.id}>{j.title}</option>)}
-        </select>
-
-        {(activeFilters.length>0||search||serverFilters.job_id)&&(
-          <button onClick={()=>{setServerFilters({});setSearch('');setActiveFilters([])}}
-            className="flex items-center gap-1 text-sm text-gray-400 hover:text-gray-600 px-2 py-2 rounded-lg hover:bg-gray-50 transition-colors">
-            <X className="w-3.5 h-3.5"/>Clear
-          </button>
-        )}
       </div>
+    </div>
+  )
+}
 
-      {/* Table */}
-      {isLoading ? (
-        <div className="flex justify-center py-16"><Loader2 className="w-5 h-5 animate-spin text-gray-400"/></div>
-      ) : displayed.length===0 ? (
-        <EmptyState title={showArchived?'No archived candidates':activeFilters.length?'No matches':'No candidates'}
-          description={activeFilters.length?'Try adjusting your filters.':'Add your first candidate.'}
-          action={canEdit&&!showArchived&&!activeFilters.length?<Button size="sm" onClick={()=>navigate('/upload')}>Upload candidates</Button>:undefined}/>
+function Row({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-start gap-2">
+      <span className="text-gray-400 w-16 flex-shrink-0 text-xs">{label}</span>
+      <span className="text-gray-700 font-medium text-sm">{value}</span>
+    </div>
+  )
+}
+
+// ── Agency Feedback Editor (HR/Admin fills, Agency reads) ─────
+function AgencyFeedbackEditor({ candidateId, currentFeedback, canEdit }: {
+  candidateId: string; currentFeedback: string; canEdit: boolean
+}) {
+  const [text, setText] = useState(currentFeedback)
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved]   = useState(false)
+  const qc = useQueryClient()
+
+  const save = async () => {
+    setSaving(true)
+    await supabase.from('candidates').update({ agency_notes: text }).eq('id', candidateId)
+    qc.invalidateQueries({ queryKey: ['candidate', candidateId] })
+    setSaving(false); setSaved(true); setTimeout(() => setSaved(false), 2000)
+  }
+
+  return (
+    <div className="bg-amber-50/40 rounded-xl border border-amber-100 px-5 py-4 space-y-2">
+      <p className="text-sm font-semibold text-gray-700">Agency Feedback
+        <span className="ml-1.5 text-xs font-normal text-gray-400">— visible to the agency</span>
+      </p>
+      {canEdit ? (
+        <>
+          <textarea rows={3} value={text} onChange={e=>setText(e.target.value)}
+            placeholder="Add remarks for the agency about this candidate…"
+            className="w-full px-3 py-2 border border-amber-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-amber-300 resize-y"/>
+          <button onClick={save} disabled={saving || text === currentFeedback}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-600 text-white text-xs rounded-lg hover:bg-amber-700 disabled:opacity-40 transition-colors">
+            {saving ? <Loader2 className="w-3 h-3 animate-spin"/> : saved ? <Check className="w-3 h-3"/> : null}
+            {saved ? 'Saved!' : 'Save feedback'}
+          </button>
+        </>
       ) : (
-        <div className="bg-white border border-gray-100 rounded-xl overflow-hidden shadow-sm">
-          <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm border-collapse">
-                <thead>
-                  <tr className="border-b border-gray-100">
-                    {/* Checkbox + Name — always frozen left */}
-                    <th className="px-4 py-3 w-10 bg-white sticky left-0 z-20 after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-gray-100">
-                      <input type="checkbox" checked={selectedIds.size===displayed.length&&displayed.length>0}
-                        onChange={toggleAll} className="rounded border-gray-300 text-blue-600 cursor-pointer w-4 h-4"/>
-                    </th>
-                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wide bg-white sticky left-10 z-20 min-w-[180px] after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-gray-100">
-                      Name
-                    </th>
-                    <SortableContext items={orderedVisible} strategy={horizontalListSortingStrategy}>
-                      {orderedVisible.map(key=>{
-                        const col = allColDefs.find(c=>c.key===key)
-                        return col ? <SortableHeader key={key} id={key} label={col.label}/> : null
-                      })}
-                    </SortableContext>
-                    <th className="px-4 py-3 text-right text-xs font-medium text-gray-400 uppercase tracking-wide w-20">
-                      Actions
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {grouped.map(({key:gk,label:gl,items})=>(
-                    <>
-                      {groupBy&&<GroupRow key={`g_${gk}`} label={gl||'Unknown'} count={items.length}/>}
-                      {items.map((c:any)=>{
-                        const isSel = selectedIds.has(c.id)
-                        return (
-                          <tr key={c.id}
-                            className={`group/row border-b border-gray-50 last:border-0 transition-colors ${isSel?'bg-blue-50/40':'hover:bg-gray-50/60'} ${c.archived_at?'opacity-40':''}`}>
-                            {/* Checkbox — sticky */}
-                            <td className={`px-4 py-2.5 sticky left-0 z-10 ${isSel?'bg-blue-50':'bg-white group-hover/row:bg-gray-50/60'} after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-gray-100`}>
-                              <input type="checkbox" checked={isSel} onChange={()=>toggleSel(c.id)}
-                                className="rounded border-gray-300 text-blue-600 cursor-pointer w-4 h-4"/>
-                            </td>
-                            {/* Name — sticky */}
-                            <td className={`px-4 py-2.5 sticky left-10 z-10 min-w-[180px] ${isSel?'bg-blue-50':'bg-white group-hover/row:bg-gray-50/60'} after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-gray-100`}>
-                              <button onClick={()=>navigate(`/candidates/${c.id}`)}
-                                className="font-medium text-gray-900 hover:text-blue-600 transition-colors text-left text-sm">{c.full_name}</button>
-                            </td>
-                            {/* Dynamic columns */}
-                            {orderedVisible.map(key=>{
-                              if (key==='stage') return <td key="stage" className="px-3 py-2.5"><StageCell cid={c.id} value={c.current_stage} canEdit={canEdit} onUpdate={onUpdate} stages={STAGES} stageConfigs={stageConfigs}/></td>
-                              if (key==='job') return <td key="job" className="px-3 py-2.5"><SelectCell cid={c.id} field="job_id" display={c.job?.title ?? getName(jobs as any[],c.job_id)} canEdit={canAssign} onUpdate={onUpdate} options={(jobs as any[]).map(j=>({label:j.title,value:j.id}))}/></td>
-                              if (key==='source') return <td key="source" className="px-3 py-2.5">
-                                <SourceCell cid={c.id} category={c.source_category} canEdit={canEdit} onUpdate={onUpdate}/>
-                              </td>
-                              if (key==='subsource') return <td key="subsource" className="px-3 py-2.5">
-                                <SubSourceCell cid={c.id} category={c.source_category} name={c.source_name??''} canEdit={canEdit} onUpdate={onUpdate}/>
-                              </td>
-                              if (key==='hr_owner') return <td key="hr_owner" className="px-3 py-2.5"><SelectCell cid={c.id} field="hr_owner" display={getName(hrUsers as any[],c.hr_owner)} canEdit={canAssignHR} onUpdate={onUpdate} options={(hrUsers as any[]).map(u=>({label:u.full_name,value:u.id}))}/></td>
-                              if (key==='interviewer') return <td key="interviewer" className="px-3 py-2.5"><MultiCell cid={c.id} field="assigned_interviewers" ids={c.assigned_interviewers??[]} canEdit={canEdit} onUpdate={(id,_,arr)=>onUpdate(id,'assigned_interviewers',arr)} options={(interviewers as any[]).map(u=>({label:u.full_name,value:u.id}))}/></td>
-                              if (key==='interview_date') return <td key="interview_date" className="px-3 py-2.5"><DateCell cid={c.id} value={c.interview_date} canEdit={canEdit} onUpdate={onUpdate}/></td>
-                              if (key==='updated_at') return <td key="updated_at" className="px-3 py-2.5 text-xs text-gray-400">{c.updated_at?formatDate(c.updated_at):'—'}</td>
-                              if (key==='email') return <td key="email" className="px-3 py-2.5"><a href={`mailto:${c.email}`} className="text-xs text-gray-500 hover:text-blue-600">{c.email}</a></td>
-                              if (key==='phone') return <td key="phone" className="px-3 py-2.5 text-xs text-gray-500">{c.phone??'—'}</td>
-                              if (key==='linkedin') return <td key="linkedin" className="px-3 py-2.5">{c.linkedin_url?<a href={c.linkedin_url} target="_blank" rel="noreferrer" className="text-xs text-blue-500 flex items-center gap-1"><ExternalLink className="w-3 h-3"/>Link</a>:<span className="text-gray-200 text-xs">—</span>}</td>
-                              if (key==='resume') return <td key="resume" className="px-3 py-2.5">{c.resume_url?<a href={c.resume_url} target="_blank" rel="noreferrer" className="text-xs text-blue-500 flex items-center gap-1"><FileText className="w-3 h-3"/>Link</a>:<span className="text-gray-200 text-xs">—</span>}</td>
-                              if (key==='notes') return <td key="notes" className="px-3 py-2.5 max-w-[150px]"><p className="text-xs text-gray-400 truncate">{c.notes||'—'}</p></td>
-                              if (key.startsWith('cf_')) return <td key={key} className="px-3 py-2.5 text-xs text-gray-500">{c.custom_data?.[key.slice(3)]??'—'}</td>
-                              return null
-                            })}
-                            {/* Actions */}
-                            <td className="px-3 py-2.5">
-                              <div className="flex items-center gap-0.5 justify-end">
-                                {canEdit && (
-                                  <ActionBtn onClick={() => setScheduleCandidate(c)} title="Schedule interview">
-                                    <Calendar className="w-3.5 h-3.5"/>
-                                  </ActionBtn>
-                                )}
-                                {canEdit && !isAgency && (
-                                  <ActionBtn onClick={()=>archiveOne.mutate({id:c.id,archive:!c.archived_at})} title={c.archived_at?'Unarchive':'Archive'}>
-                                    <Archive className="w-3.5 h-3.5"/>
-                                  </ActionBtn>
-                                )}
-                                {isSuperAdmin&&(
-                                  <ActionBtn onClick={()=>setConfirmDelete(c.id)} title="Delete permanently" danger>
-                                    <Trash2 className="w-3.5 h-3.5"/>
-                                  </ActionBtn>
-                                )}
-                              </div>
-                            </td>
-                          </tr>
-                        )
-                      })}
-                    </>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </DndContext>
-          <div className="px-4 py-2.5 border-t border-gray-50 flex items-center justify-between bg-gray-50/40">
-            <p className="text-xs text-gray-400">
-              Drag <GripVertical className="w-3 h-3 inline"/> to reorder · Click name to open profile
-            </p>
-            {selectedIds.size>0&&(
-              <button onClick={()=>setSelectedIds(new Set())} className="text-xs text-gray-400 hover:text-gray-600 flex items-center gap-1">
-                <X className="w-3 h-3"/>Clear selection
-              </button>
-            )}
-          </div>
-        </div>
-      )}
-
-      <Modal open={!!confirmDelete} onClose={()=>setConfirmDelete(null)} title="Delete candidate" size="sm">
-        <p className="text-sm text-gray-600 mb-4">Permanently delete this candidate? This cannot be undone. Consider archiving instead.</p>
-        <div className="flex justify-end gap-2">
-          <Button variant="secondary" onClick={()=>setConfirmDelete(null)}>Cancel</Button>
-          <Button variant="danger" loading={deleteOne.isPending} onClick={()=>confirmDelete&&deleteOne.mutate(confirmDelete)}>Delete</Button>
-        </div>
-      </Modal>
-
-      {/* Schedule Interview Modal — isolated, no parent re-renders */}
-      {scheduleCandidate && (
-        <ScheduleInterviewModal
-          candidateId={scheduleCandidate.id}
-          candidateName={scheduleCandidate.full_name}
-          candidateEmail={scheduleCandidate.email}
-          resumeUrl={scheduleCandidate.resume_url}
-          jobTitle={scheduleCandidate.job?.title}
-          jdLink={scheduleCandidate.job?.jd_link}
-          onClose={() => setScheduleCandidate(null)}
-        />
+        <p className="text-sm text-gray-700 whitespace-pre-wrap">{text || <span className="text-gray-400 italic text-xs">No feedback added yet.</span>}</p>
       )}
     </div>
   )
+}
+
+const _PLATFORM_SOURCES = ['LinkedIn','Naukri','Indeed','Internshala','Shine','Monster','Foundit','Apna','Referral','Website','Other']
+
+function ProfileSubSource({ sourceCategory, value, onChange }: {
+  sourceCategory: string; value: string; onChange: (v: string) => void
+}) {
+  const { data: agencyUsers = [] } = useAgencies()
+  const cls = 'w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-slate-400'
+
+  if (sourceCategory === 'agency') return (
+    <select value={value} onChange={e => onChange(e.target.value)} className={cls}>
+      <option value="">Select agency…</option>
+      {agencyUsers.map((u:any) => <option key={u.id} value={u.name}>{u.name}</option>)}
+    </select>
+  )
+  if (sourceCategory === 'platform') return (
+    <select value={value} onChange={e => onChange(e.target.value)} className={cls}>
+      <option value="">Select platform…</option>
+      {_PLATFORM_SOURCES.map(p => <option key={p} value={p}>{p}</option>)}
+    </select>
+  )
+  if (sourceCategory === 'college') return (
+    <input type="text" value={value} onChange={e => onChange(e.target.value)}
+      placeholder="e.g. IIT Delhi…" className={cls}/>
+  )
+  return <input disabled placeholder="Select source first…" className={`${cls} bg-gray-50 text-gray-400`}/>
 }
