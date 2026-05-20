@@ -80,10 +80,15 @@ export function SettingsPage() {
 
   const createUser = useMutation({
     mutationFn: async (d: UserFormData) => {
-      const { data: authData, error: authErr } = await supabase.auth.signUp({ email: d.email, password: d.password })
-      if (authErr) throw authErr
-      const { error } = await supabase.from('users').insert({ id: authData.user!.id, email: d.email, full_name: d.full_name, role: d.role, is_active: true })
-      if (error) throw error
+      // Use SECURITY DEFINER function to create auth + profile user
+      const { data, error } = await supabase.rpc('create_user_with_auth', {
+        p_email: d.email,
+        p_password: d.password,
+        p_full_name: d.full_name,
+        p_role: d.role,
+      })
+      if (error) throw new Error(error.message)
+      return data
     },
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['users'] }); resetU(); setShowUserModal(false) },
   })
