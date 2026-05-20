@@ -130,29 +130,39 @@ const SubSourceCell = memo(({ cid, category, name, canEdit, onUpdate }: {
   onUpdate:(id:string,f:string,v:any)=>void
 }) => {
   const [agencyUsers, setAgencyUsers] = useState<{id:string;full_name:string}[]>([])
+  const [colleges, setColleges]       = useState<string[]>([])
   const [loaded, setLoaded] = useState(false)
+  const [collegeInput, setCollegeInput] = useState(name)
 
   const display = name || <span className="text-gray-300">—</span>
   if (!canEdit || !category) return <span className="text-xs text-gray-600">{display}</span>
 
   const trigger = (
-    <span className="inline-flex items-center gap-0.5 text-xs text-gray-700 cursor-pointer hover:text-blue-600 max-w-[120px] truncate">
-      {name || <span className="text-gray-400 italic">select…</span>}
+    <span className="inline-flex items-center gap-0.5 text-xs text-gray-700 cursor-pointer hover:text-blue-600 max-w-[130px] truncate">
+      <span className="truncate">{name || <span className="text-gray-400 italic">select…</span>}</span>
       <ChevronDown className="w-2.5 h-2.5 opacity-50 flex-shrink-0"/>
     </span>
   )
 
-  const loadAgencies = () => {
+  const loadData = () => {
     if (loaded) return; setLoaded(true)
-    supabase.from('users').select('id,full_name').eq('role','agency').eq('is_active',true).order('full_name')
-      .then(({data}) => setAgencyUsers(data ?? []))
+    if (category === 'agency') {
+      supabase.from('users').select('id,full_name').eq('role','agency').eq('is_active',true).order('full_name')
+        .then(({data}) => setAgencyUsers(data ?? []))
+    } else if (category === 'college') {
+      supabase.from('candidates').select('source_name').eq('source_category','college').not('source_name','is',null)
+        .then(({data}) => {
+          const unique = [...new Set((data ?? []).map((d:any) => d.source_name).filter(Boolean))].sort()
+          setColleges(unique)
+        })
+    }
   }
 
   if (category === 'agency') return (
-    <Popup trigger={<span onClick={loadAgencies}>{trigger}</span>}>
+    <Popup trigger={<span onClick={loadData}>{trigger}</span>}>
       <div className="px-1 py-1 max-h-52 overflow-y-auto">
         {agencyUsers.length === 0
-          ? <p className="text-xs text-gray-400 px-2 py-2 italic">No agency users found</p>
+          ? <p className="text-xs text-gray-400 px-2 py-2 italic">Loading…</p>
           : agencyUsers.map(u => (
             <button key={u.id} onClick={() => onUpdate(cid, 'source_name', u.full_name)}
               className={`w-full text-left text-xs px-2.5 py-2 rounded hover:bg-purple-50 flex items-center justify-between gap-3 ${name===u.full_name?'text-purple-700 font-semibold bg-purple-50':''}`}>
@@ -177,15 +187,26 @@ const SubSourceCell = memo(({ cid, category, name, canEdit, onUpdate }: {
     </Popup>
   )
 
-  // College — inline text edit
+  // College — dropdown of existing + free text
   return (
-    <Popup trigger={trigger}>
-      <div className="px-2 py-2">
-        <input type="text" defaultValue={name} autoFocus
-          onBlur={e => { if(e.target.value !== name) onUpdate(cid, 'source_name', e.target.value) }}
-          onKeyDown={e => { if(e.key==='Enter') (e.target as HTMLInputElement).blur() }}
-          placeholder="College name…"
-          className="w-full px-2.5 py-1.5 text-xs border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-blue-400"/>
+    <Popup trigger={<span onClick={loadData}>{trigger}</span>}>
+      <div className="px-2 py-2 w-52">
+        <input type="text" value={collegeInput}
+          onChange={e => setCollegeInput(e.target.value)}
+          onBlur={e => { if(e.target.value && e.target.value !== name) onUpdate(cid, 'source_name', e.target.value) }}
+          onKeyDown={e => { if(e.key==='Enter') { if(collegeInput) onUpdate(cid,'source_name',collegeInput); (e.target as any).blur() }}}
+          placeholder="Type or select college…"
+          className="w-full px-2.5 py-1.5 text-xs border border-gray-200 rounded mb-1.5 focus:outline-none focus:ring-1 focus:ring-blue-400"/>
+        {colleges.length > 0 && (
+          <div className="max-h-36 overflow-y-auto border-t border-gray-100 pt-1">
+            {colleges.map(c => (
+              <button key={c} onClick={() => { setCollegeInput(c); onUpdate(cid, 'source_name', c) }}
+                className={`w-full text-left text-xs px-2 py-1.5 rounded hover:bg-amber-50 ${name===c?'text-amber-700 font-semibold':''}`}>
+                {c}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
     </Popup>
   )
@@ -783,6 +804,7 @@ export function CandidatesPage() {
                 hrUsers={isAgency ? [] : hrUsers as any[]}
                 mode={filterMode} onModeChange={setFilterMode}
                 hideHrFields={isAgency}
+                stages={STAGES}
                 customFieldDefs={(customFields as any[])
                   .filter((f:any) => !isAgency || f.show_to_agency !== false)
                   .map(f=>({field_name:f.field_name,field_label:f.field_label,field_type:f.field_type}))}/>
