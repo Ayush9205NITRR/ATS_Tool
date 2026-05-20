@@ -42,28 +42,39 @@ export const COLOR_OPTIONS = [
 
 // useStages — returns rich stage configs
 export function useStages() {
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, error } = useQuery({
     queryKey: ['app-settings', 'pipeline_stages'],
     queryFn: async () => {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from('app_settings').select('value').eq('key','pipeline_stages').maybeSingle()
-      if (!data?.value) return DEFAULT_STAGE_CONFIGS
+      if (error) {
+        console.error('[useStages] DB error:', error.message)
+        return DEFAULT_STAGE_CONFIGS
+      }
+      if (!data?.value) {
+        console.warn('[useStages] No pipeline_stages in DB, using defaults')
+        return DEFAULT_STAGE_CONFIGS
+      }
       try {
         const parsed = JSON.parse(data.value)
         if (!Array.isArray(parsed) || !parsed.length) return DEFAULT_STAGE_CONFIGS
-        // Support both old string[] and new StageConfig[]
         if (typeof parsed[0] === 'string') {
           return parsed.map((name: string) => {
             const def = DEFAULT_STAGE_CONFIGS.find(s => s.name === name)
             return def ?? { name, color:'bg-gray-100', textColor:'text-gray-700', hasNotes:false }
           }) as StageConfig[]
         }
+        console.log('[useStages] Loaded', parsed.length, 'stages from DB:', parsed.map((s:any)=>s.name).join(', '))
         return parsed as StageConfig[]
-      } catch { return DEFAULT_STAGE_CONFIGS }
+      } catch (e) {
+        console.error('[useStages] Parse error:', e)
+        return DEFAULT_STAGE_CONFIGS
+      }
     },
-    staleTime: 0,   // Always fresh — OrgSettingsTab changes reflect immediately everywhere
+    staleTime: 0,
+    retry: 2,
   })
-  return { stageConfigs: data ?? DEFAULT_STAGE_CONFIGS, isLoading }
+  return { stageConfigs: data ?? DEFAULT_STAGE_CONFIGS, isLoading, error }
 }
 
 // Convenience — just names (backwards compat)
