@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Plus, Loader2, Users, Columns, Trash2, GripVertical, Pencil, Check, X, Mail } from 'lucide-react'
-import { useState } from 'react'
+import { Plus, Loader2, Users, Columns, Trash2, GripVertical, Pencil, Check, X, Mail, Search } from 'lucide-react'
+import { useState, useEffect } from 'react'
 import { supabase } from '../../lib/supabaseClient'
 import { useAuthStore } from '../auth/authStore'
 import { PageHeader } from '../../shared/components/PageHeader'
@@ -57,6 +57,16 @@ export function SettingsPage() {
   const [showFieldModal, setShowFieldModal] = useState(false)
   const [editingField, setEditingField]     = useState<any | null>(null)
   const [editingFieldType, setEditingFieldType] = useState('')
+  const [editingFieldLabel, setEditingFieldLabel] = useState<{id:string;label:string}|null>(null)
+  const [filteredUsers, setFilteredUsers]   = useState<any[] | null>(null)
+
+  const updateFieldLabel = useMutation({
+    mutationFn: async ({id,label}:{id:string;label:string}) => {
+      const {error} = await supabase.from('custom_fields').update({field_label:label}).eq('id',id)
+      if (error) throw error
+    },
+    onSuccess: () => { qc.invalidateQueries({queryKey:['custom-fields']}); setEditingFieldLabel(null) },
+  })
 
   // ── Users ─────────────────────────────────────────────────
   const { data: users = [], isLoading: usersLoading } = useQuery({
@@ -93,16 +103,14 @@ export function SettingsPage() {
       // Update profile in users table
       const { error: profileErr } = await supabase.from('users').update({ full_name, email }).eq('id', id)
       if (profileErr) throw profileErr
-      // Update auth email if changed
-      const original = users.find((u:any) => u.id === id)
-      if (original?.email !== email) {
-        const { error: authErr } = await supabase.auth.admin.updateUserById(id, { email })
-        if (authErr) console.warn('[updateUser email]', authErr) // non-fatal
-      }
-      // Update password if provided
+      // Password update via Supabase Admin (requires service role — run SQL instead)
       if (password?.trim()) {
-        const { error: pwErr } = await supabase.auth.admin.updateUserById(id, { password })
-        if (pwErr) throw pwErr
+        // Update password via auth.users directly (service role function)
+        const { error: pwErr } = await supabase.rpc('update_user_password', { user_id: id, new_password: password })
+        if (pwErr) {
+          // Fallback: if RPC doesn't exist, show SQL to run manually
+          throw new Error(`Password update requires Admin API. Run this SQL in Supabase:\nUPDATE auth.users SET encrypted_password = crypt('${password}', gen_salt('bf')) WHERE id = '${id}';`)
+        }
       }
     },
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['users'] }); setEditingUser(null) },
@@ -187,8 +195,11 @@ export function SettingsPage() {
           {usersLoading ? <div className="flex justify-center py-16"><Loader2 className="w-6 h-6 animate-spin text-blue-500"/></div>
           : users.length === 0 ? <EmptyState icon={<Users className="w-5 h-5"/>} title="No users yet"/>
           : (
-            <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-              {users.map((u, i) => (
+            <div className="space-y-3">
+              {/* Search + filter bar */}
+              <UserSearchBar users={users as any[]} onFiltered={setFilteredUsers}/>
+              <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+              {(filteredUsers ?? users).map((u:any, i:number) => (
                 <div key={u.id} className={`flex items-center gap-4 px-5 py-4 ${i > 0 ? 'border-t border-gray-100' : ''}`}>
                   <div className="w-9 h-9 rounded-full bg-blue-100 flex items-center justify-center flex-shrink-0">
                     <span className="text-sm font-semibold text-blue-700">{initialsOf(u.full_name)}</span>
@@ -212,6 +223,7 @@ export function SettingsPage() {
                   </Button>
                 </div>
               ))}
+              </div>
             </div>
           )}
 
@@ -276,76 +288,87 @@ export function SettingsPage() {
           ) : (
             <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
               <div className="grid grid-cols-12 px-5 py-2.5 bg-gray-50 border-b border-gray-100 text-xs font-semibold text-gray-400 uppercase tracking-wide">
-                <div className="col-span-1"/>
-                <div className="col-span-3">Field</div>
-                <div className="col-span-1">Type</div>
+                <div className="col-span-4">Field</div>
+                <div className="col-span-2">Type</div>
                 <div className="col-span-2">Required</div>
-                <div className="col-span-1">Columns</div>
                 <div className="col-span-2">Interviewer</div>
                 <div className="col-span-1">Agency</div>
-                <div className="col-span-1">Status</div>
+                <div className="col-span-1">Actions</div>
               </div>
               {(fields as any[]).map((field, i) => (
                 <div key={field.id} className={`grid grid-cols-12 items-center px-5 py-3 ${i > 0 ? 'border-t border-gray-100' : ''} hover:bg-gray-50/30 transition-colors`}>
-                  <div className="col-span-1 text-gray-300"><GripVertical className="w-4 h-4"/></div>
                   {/* Field name + key */}
-                  <div className="col-span-3">
-                    <p className="text-sm font-medium text-gray-900">{field.field_label}</p>
-                    <p className="text-xs text-blue-500 font-mono mt-0.5 bg-blue-50 px-1.5 py-0.5 rounded inline-block">{field.field_name}</p>
+                  <div className="col-span-4">
+                    {editingFieldLabel?.id === field.id ? (
+                      <div className="flex items-center gap-1.5">
+                        <input autoFocus value={editingFieldLabel!.label}
+                          onChange={e => setEditingFieldLabel(p => p ? {...p, label: e.target.value} : p)}
+                          onKeyDown={e => { if(e.key==='Enter') updateFieldLabel.mutate({id:field.id, label:editingFieldLabel!.label}) }}
+                          className="flex-1 px-2 py-1 border border-blue-400 rounded text-sm focus:outline-none"/>
+                        <button onClick={() => updateFieldLabel.mutate({id:field.id, label:editingFieldLabel!.label})}
+                          className="p-1 rounded bg-blue-600 text-white"><Check className="w-3 h-3"/></button>
+                        <button onClick={() => setEditingFieldLabel(null)}
+                          className="p-1 rounded text-gray-400 hover:text-gray-600"><X className="w-3 h-3"/></button>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-2 group">
+                        <div>
+                          <p className="text-sm font-medium text-gray-900">{field.field_label}</p>
+                          <p className="text-xs text-blue-500 font-mono mt-0.5 bg-blue-50 px-1.5 py-0.5 rounded inline-block">{field.field_name}</p>
+                        </div>
+                        <button onClick={() => setEditingFieldLabel({id:field.id, label:field.field_label})}
+                          className="opacity-0 group-hover:opacity-100 p-1 rounded text-gray-400 hover:text-blue-600 transition-all">
+                          <Pencil className="w-3 h-3"/>
+                        </button>
+                      </div>
+                    )}
                   </div>
                   {/* Type */}
-                  <div className="col-span-1">
+                  <div className="col-span-2">
                     {editingField?.id === field.id ? (
                       <div className="flex items-center gap-1">
                         <select value={editingFieldType} onChange={e => setEditingFieldType(e.target.value)}
-                          className="px-1.5 py-1 border border-blue-400 rounded text-xs bg-white focus:outline-none w-20">
+                          className="px-1.5 py-1 border border-blue-400 rounded text-xs bg-white focus:outline-none w-24">
                           {Object.entries(FIELD_TYPE_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
                         </select>
                         <button onClick={() => updateFieldType.mutate({ id: field.id, field_type: editingFieldType })}
-                          className="p-1 rounded bg-blue-600 text-white hover:bg-blue-700"><Check className="w-3 h-3"/></button>
+                          className="p-1 rounded bg-blue-600 text-white"><Check className="w-3 h-3"/></button>
                       </div>
                     ) : (
                       <button onClick={() => { setEditingField(field); setEditingFieldType(field.field_type) }}
-                        className="flex items-center gap-1 text-xs text-gray-500 hover:text-blue-600 transition-colors">
-                        <Pencil className="w-3 h-3 opacity-0 group-hover:opacity-100"/>
+                        className="text-xs text-gray-500 hover:text-blue-600 border border-gray-200 px-2 py-0.5 rounded hover:border-blue-300 transition-colors">
                         {FIELD_TYPE_LABELS[field.field_type] ?? field.field_type}
                       </button>
                     )}
                   </div>
                   {/* Required */}
                   <div className="col-span-2">
-                    <span className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-medium ${field.is_required ? 'bg-red-50 text-red-600 border border-red-200' : 'bg-gray-50 text-gray-400 border border-gray-200'}`}>
+                    <span className={`inline-flex items-center text-xs px-2 py-0.5 rounded-full font-medium ${field.is_required ? 'bg-red-50 text-red-600 border border-red-200' : 'bg-gray-50 text-gray-400 border border-gray-200'}`}>
                       {field.is_required ? '* Mandatory' : 'Optional'}
                     </span>
-                  </div>
-                  {/* In Columns toggle — controls eye-button visibility */}
-                  <div className="col-span-1">
-                    <button onClick={() => toggleField.mutate({ id: field.id, is_active: field.is_active, show_in_columns: field.show_in_columns === false ? true : false })}
-                      title={field.show_in_columns !== false ? 'Visible in columns — click to hide' : 'Hidden from columns — click to show'}
-                      className={`text-xs px-2 py-0.5 rounded-full border transition-colors ${field.show_in_columns !== false ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-gray-50 text-gray-400 border-gray-200'}`}>
-                      {field.show_in_columns !== false ? '👁 On' : '👁 Off'}
-                    </button>
                   </div>
                   {/* Interviewer sees */}
                   <div className="col-span-2">
                     <button onClick={() => toggleField.mutate({ id: field.id, is_active: field.is_active, show_to_interviewer: !field.show_to_interviewer })}
                       className={`text-xs px-2 py-0.5 rounded-full border transition-colors ${field.show_to_interviewer !== false ? 'bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100' : 'bg-gray-50 text-gray-400 border-gray-200 hover:bg-gray-100'}`}>
-                      {field.show_to_interviewer !== false ? '✓ Visible' : '✗ Hidden'}
+                      {field.show_to_interviewer !== false ? '✓ Yes' : '✗ No'}
                     </button>
                   </div>
                   {/* Agency sees */}
                   <div className="col-span-1">
                     <button onClick={() => toggleField.mutate({ id: field.id, is_active: field.is_active, show_to_agency: field.show_to_agency === false ? true : false })}
-                      title={field.show_to_agency !== false ? 'Agency can see — click to hide' : 'Hidden from agency'}
                       className={`text-xs px-2 py-0.5 rounded-full border transition-colors ${field.show_to_agency !== false ? 'bg-purple-50 text-purple-700 border-purple-200 hover:bg-purple-100' : 'bg-gray-50 text-gray-400 border-gray-200 hover:bg-gray-100'}`}>
-                      {field.show_to_agency !== false ? '✓ Yes' : '✗ No'}
+                      {field.show_to_agency !== false ? '✓' : '✗'}
                     </button>
                   </div>
-                  {/* Status */}
-                  <div className="col-span-1">
+                  {/* Actions */}
+                  <div className="col-span-1 flex items-center gap-1">
                     <button onClick={() => toggleField.mutate({ id: field.id, is_active: !field.is_active })}
-                      className={`text-xs px-2 py-0.5 rounded-full border transition-colors ${field.is_active ? 'bg-green-50 text-green-600 border-green-200 hover:bg-green-100' : 'bg-gray-50 text-gray-400 border-gray-200 hover:bg-gray-100'}`}>
-                      {field.is_active ? 'Active' : 'Off'}
+                      className={`text-xs px-1.5 py-0.5 rounded border transition-colors ${field.is_active ? 'bg-green-50 text-green-600 border-green-200' : 'bg-gray-50 text-gray-400 border-gray-200'}`}>
+                      {field.is_active ? 'On' : 'Off'}
+                    </button>
+                    <button onClick={() => deleteField.mutate(field.id)} className="text-gray-200 hover:text-red-500 transition-colors p-1">
+                      <Trash2 className="w-3.5 h-3.5"/>
                     </button>
                   </div>
                 </div>
@@ -353,7 +376,7 @@ export function SettingsPage() {
             </div>
           )}
 
-          <Modal open={showFieldModal} onClose={() => setShowFieldModal(false)} title="Add Custom Field" size="sm">
+          <Modal open={showFieldModal} onClose={() => setShowFieldModal(false)} title="Add Field" size="sm">
             <form onSubmit={hf(d => createField.mutate(d))} className="space-y-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Field Label *</label>
@@ -392,6 +415,48 @@ export function SettingsPage() {
 }
 
 export default SettingsPage
+
+// ── User Search + Filter bar ──────────────────────────────────
+function UserSearchBar({ users, onFiltered }: { users: any[]; onFiltered: (u: any[]) => void }) {
+  const [q, setQ] = useState('')
+  const [status, setStatus] = useState<'all'|'active'|'inactive'>('all')
+  const [role, setRole] = useState('')
+
+  useEffect(() => {
+    let filtered = users
+    if (q) filtered = filtered.filter(u => u.full_name?.toLowerCase().includes(q.toLowerCase()) || u.email?.toLowerCase().includes(q.toLowerCase()))
+    if (status === 'active') filtered = filtered.filter(u => u.is_active)
+    if (status === 'inactive') filtered = filtered.filter(u => !u.is_active)
+    if (role) filtered = filtered.filter(u => u.role === role)
+    onFiltered(filtered)
+  }, [q, status, role, users])
+
+  return (
+    <div className="flex gap-2 items-center">
+      <div className="relative flex-1">
+        <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"/>
+        <input value={q} onChange={e => setQ(e.target.value)}
+          placeholder="Search by name or email…"
+          className="w-full pl-8 pr-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"/>
+      </div>
+      <select value={status} onChange={e => setStatus(e.target.value as any)}
+        className="px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none">
+        <option value="all">All</option>
+        <option value="active">Active</option>
+        <option value="inactive">Inactive</option>
+      </select>
+      <select value={role} onChange={e => setRole(e.target.value)}
+        className="px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none">
+        <option value="">All Roles</option>
+        <option value="super_admin">Super Admin</option>
+        <option value="admin">Admin</option>
+        <option value="hr_team">HR Team</option>
+        <option value="interviewer">Interviewer</option>
+        <option value="agency">Agency</option>
+      </select>
+    </div>
+  )
+}
 function EditUserModal({ user, onSave, onClose, saving, error }: {
   user: any
   onSave: (data: { full_name:string; email:string; password?:string }) => void
