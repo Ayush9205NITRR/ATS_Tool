@@ -61,7 +61,7 @@ export function useStages() {
         return parsed as StageConfig[]
       } catch { return DEFAULT_STAGE_CONFIGS }
     },
-    staleTime: 30_000,
+    staleTime: 0,   // Always fresh — OrgSettingsTab changes reflect immediately everywhere
   })
   return { stageConfigs: data ?? DEFAULT_STAGE_CONFIGS, isLoading }
 }
