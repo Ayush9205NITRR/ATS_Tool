@@ -37,17 +37,20 @@ export function AgencyDashboardWidget() {
   const { user } = useAuthStore()
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ['agency-dashboard', user?.id],
+    queryKey: ['agency-dashboard', user?.agency_id],
     queryFn: async () => {
+      // Filter by the user's linked agency_id, NOT user.id.
+      // agency_id is the FK to public.agencies(id); user.id is auth UUID.
+      if (!user?.agency_id) return []
       const { data } = await supabase
         .from('candidates')
         .select('current_stage, status')
-        .eq('agency_id', user!.id)
+        .eq('agency_id', user.agency_id)
         .eq('status', 'active')
       return data ?? []
     },
     staleTime: 30_000,
-    enabled: !!user,
+    enabled: !!user?.agency_id,
   })
 
   const candidates = data ?? []
