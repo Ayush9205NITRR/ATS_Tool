@@ -31,6 +31,7 @@ import { useStages as useStagesHook } from '../../shared/hooks/useStages'
 import { formatDate, formatDateTime } from '../../shared/utils/helpers'
 import { ScheduleInterviewModal } from './ScheduleInterviewModal'
 import { SendEmailModal } from './SendEmailModal'
+
 // ── Stage colours ─────────────────────────────────────────────
 const STAGE_PILL: Record<string,string> = {
   Applied:'bg-gray-100 text-gray-600', Screening:'bg-blue-50 text-blue-700',
@@ -150,8 +151,11 @@ const SubSourceCell = memo(({ cid, category, name, canEdit, onUpdate }: {
   const loadData = () => {
     if (loaded) return; setLoaded(true)
     if (category === 'agency') {
-      supabase.from('users').select('id,full_name').eq('role','agency').eq('is_active',true).order('full_name')
-        .then(({data}) => setAgencyUsers(data ?? []))
+      supabase.from('agencies').select('id,name').order('name')
+        .then(({data}) => {
+          const formatted = (data ?? []).map((d: any) => ({ id: d.id, full_name: d.name }))
+          setAgencyUsers(formatted)
+        })
     } else if (category === 'college') {
       supabase.from('candidates').select('source_name').eq('source_category','college').not('source_name','is',null)
         .then(({data}) => {
@@ -190,7 +194,6 @@ const SubSourceCell = memo(({ cid, category, name, canEdit, onUpdate }: {
     </Popup>
   )
 
-  // College — dropdown of existing + free text
   return (
     <Popup trigger={<span onClick={loadData}>{trigger}</span>}>
       <div className="px-2 py-2 w-52">
@@ -373,12 +376,9 @@ export function CandidatesPage() {
   const isSuperAdmin = hasRole(['super_admin'])
   const isAgency    = hasRole(['agency'])
 
-  // Stages — shared hook (synced with OrgSettingsTab, CandidateProfilePage, FilterBar)
   const { stageConfigs } = useStagesHook()
-  // stageConfigs always has data (defaults to DEFAULT_STAGE_CONFIGS if DB empty)
   const STAGES: string[] = stageConfigs.map(s => s.name)
 
-  // ── Filters persisted in URL so back button restores them ─────
   const [serverFilters, setServerFilters] = useState<CandidateFilters>(() => ({
     job_id: searchParams.get('job') || undefined,
   }))
@@ -390,7 +390,6 @@ export function CandidatesPage() {
     (searchParams.get('fm') as 'and'|'or') ?? 'and'
   )
 
-  // Sync state → URL whenever filters change
   useEffect(() => {
     const p: Record<string,string> = {}
     if (search) p.q = search
@@ -408,7 +407,6 @@ export function CandidatesPage() {
   const [bulkField, setBulkField]         = useState<string|null>(null)
   const [confirmDelete, setConfirmDelete] = useState<string|null>(null)
   const [groupBy, setGroupBy] = useState('')
-  // ── Column layout — persisted in localStorage ─────────────────
   const LS_KEY = 'ats_col_layout_v1'
   const savedLayout = (() => {
     try { return JSON.parse(localStorage.getItem(LS_KEY) ?? '{}') } catch { return {} }
@@ -418,7 +416,6 @@ export function CandidatesPage() {
   const [visibleCols, setVisibleCols] = useState<Set<string>>(new Set(savedLayout.visibleCols ?? [...DEFAULT_VISIBLE]))
   const [pinnedCols, setPinnedCols]   = useState<Set<string>>(new Set(savedLayout.pinnedCols ?? []))
 
-  // Save layout whenever it changes
   useEffect(() => {
     localStorage.setItem(LS_KEY, JSON.stringify({
       colOrder,
@@ -426,6 +423,7 @@ export function CandidatesPage() {
       pinnedCols: [...pinnedCols],
     }))
   }, [colOrder, visibleCols, pinnedCols])
+
   const [scheduleCandidate, setScheduleCandidate] = useState<any | null>(null)
   const [sendEmailCandidates, setSendEmailCandidates] = useState<any[]>([])
   const [bulkSelectValue, setBulkSelectValue] = useState('')
@@ -445,7 +443,7 @@ export function CandidatesPage() {
   const { data: jobs=[] } = useQuery({
     queryKey: ['jobs','filter', isAgency ? 'agency' : 'all'],
     queryFn: async () => {
-      let q = supabase.from('jobs').select('id,title').order('title')
+      let q = supabase.from('jobs').select('id,title,show_to_agency').order('title')
       if (isAgency) q = (q as any).eq('show_to_agency', true)
       const { data } = await q
       return data ?? []
@@ -455,17 +453,15 @@ export function CandidatesPage() {
   const { data: interviewers=[] }= useQuery({ queryKey:['users','interviewers'], queryFn:async()=>{const{data}=await supabase.from('users').select('id,full_name').eq('role','interviewer').eq('is_active',true);return data??[]} })
   const { data: customFields=[] }= useQuery({ queryKey:['custom-fields'],        queryFn:async()=>{const{data}=await supabase.from('custom_fields').select('*').eq('is_active',true).order('sort_order');return data??[]} })
 
+  // Core useCandidates hook query injection context handling
   const { data: candidates=[], isLoading } = useCandidates({ ...serverFilters, search:search||undefined })
 
-  // Agency sees only specific columns — no HR/Interviewer
-  // Agency visible: all columns EXCEPT hr_owner and interviewer
   const AGENCY_HIDDEN = new Set(['hr_owner','interviewer'])
   const effectiveVisible = isAgency
     ? new Set([...DEFAULT_VISIBLE, 'subsource','email','phone','resume','notes','updated_at','source'].filter(k => !AGENCY_HIDDEN.has(k)))
     : visibleCols
 
   const orderedVisible = useMemo(() => {
-    // Custom fields — only show those with show_in_columns !== false (and show_to_agency for agency)
     const cf = (customFields as any[])
       .filter((f:any) => f.show_in_columns !== false && (!isAgency || f.show_to_agency !== false))
       .map(f => `cf_${f.field_name}`)
@@ -476,10 +472,14 @@ export function CandidatesPage() {
   }, [colOrder, effectiveVisible, customFields, pinnedCols, isAgency])
 
   const displayed = useMemo(() => {
+    // Exact structural visibility layer boundary check for agency clients
     let list = candidates.filter((c:any) => showArchived ? !!c.archived_at : !c.archived_at)
+    if (isAgency && user?.agency_id) {
+      list = list.filter((c:any) => c.agency_id === user.agency_id)
+    }
     if (activeFilters.length) list = applyFilters(list, activeFilters, jobs as any[], interviewers as any[], filterMode, customFields as any[])
     return list
-  }, [candidates, showArchived, activeFilters, jobs, interviewers, filterMode, customFields])
+  }, [candidates, showArchived, activeFilters, jobs, interviewers, filterMode, customFields, isAgency, user])
 
   const grouped = useMemo(() => {
     if (!groupBy) return [{ key:'', label:'', items:displayed }]
@@ -496,7 +496,6 @@ export function CandidatesPage() {
     return Array.from(map.entries()).sort(([a],[b])=>a.localeCompare(b)).map(([key,items])=>({key,label:key,items}))
   }, [displayed, groupBy, hrUsers])
 
-  // Mutations
   const updateField = useMutation({
     mutationFn: async({id,field,value}:{id:string;field:string;value:any})=>{
       const{error}=await supabase.from('candidates').update({[field]:value}).eq('id',id)
@@ -528,7 +527,6 @@ export function CandidatesPage() {
       } else if (field === 'assigned_interviewers') {
         payload = { assigned_interviewers: Array.isArray(value) ? value : [value] }
       } else {
-        // current_stage, job_id, source_category, source_name, interview_date — direct set
         payload = { [field]: value }
       }
 
@@ -595,14 +593,12 @@ export function CandidatesPage() {
         subtitle={`${displayed.length} candidate${displayed.length!==1?'s':''}${selectedIds.size>0?` · ${selectedIds.size} selected`:''}`}
         action={
           <div className="flex items-center gap-2">
-            {/* Archive toggle */}
             <button onClick={()=>{setShowArchived(a=>!a);setSelectedIds(new Set())}}
               className={`flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg border transition-all ${showArchived?'bg-amber-50 border-amber-200 text-amber-700':'border-gray-200 text-gray-600 hover:border-gray-300 hover:bg-gray-50'}`}>
               <Archive className="w-3.5 h-3.5"/>
               {showArchived?'Active view':'Archived'}
             </button>
 
-            {/* Column picker */}
             <div className="relative">
               <button onClick={()=>setShowColPicker(o=>!o)}
                 className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-gray-200 rounded-lg text-gray-600 hover:border-gray-300 hover:bg-gray-50 transition-all">
@@ -615,13 +611,11 @@ export function CandidatesPage() {
                     <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2.5">Show & pin columns</p>
                     {colPickerCols.map(col=>(
                       <div key={col.key} className="flex items-center gap-2 py-1 group">
-                        {/* Visible toggle */}
                         <button onClick={()=>setVisibleCols(p=>{const n=new Set(p);n.has(col.key)?n.delete(col.key):n.add(col.key);return n})}
                           className={`w-4 h-4 rounded border flex items-center justify-center transition-all flex-shrink-0 ${visibleCols.has(col.key)?'bg-blue-500 border-blue-500':'border-gray-300 hover:border-gray-400'}`}>
                           {visibleCols.has(col.key)&&<Check className="w-2.5 h-2.5 text-white"/>}
                         </button>
                         <span className="text-sm text-gray-700 flex-1">{col.label}</span>
-                        {/* Pin toggle — only when visible, clear state */}
                         {visibleCols.has(col.key) && (
                           <button
                             onClick={e => {
@@ -652,7 +646,6 @@ export function CandidatesPage() {
               )}
             </div>
 
-            {/* Group By */}
             <div className="flex items-center gap-1.5 border border-gray-200 rounded-lg px-3 py-1.5">
               <Layers className="w-3.5 h-3.5 text-gray-400"/>
               <select value={groupBy} onChange={e=>setGroupBy(e.target.value)}
@@ -661,7 +654,6 @@ export function CandidatesPage() {
               </select>
             </div>
 
-            {/* Bulk — disabled for agency */}
             {selectedIds.size>0 && !isAgency &&(
               <div className="relative">
                 <button onClick={()=>setShowBulkMenu(o=>!o)}
@@ -701,22 +693,18 @@ export function CandidatesPage() {
                       </div>
                       {bulkField && bulkField !== '__delete__' && (
                         <div className="border-t border-gray-100 mt-1 pt-2 px-1 space-y-2" onClick={e=>e.stopPropagation()}>
-
-                          {/* Date input for interview_date */}
                           {bulkField === 'interview_date' ? (
                             <input type="datetime-local"
                               value={bulkSelectValue}
                               onChange={e => setBulkSelectValue(e.target.value)}
                               className="w-full px-2.5 py-1.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white"/>
                           ) : bulkField === 'source_name' ? (
-                            /* Free-text for sub-source */
                             <input type="text"
                               value={bulkSelectValue}
                               onChange={e => setBulkSelectValue(e.target.value)}
                               placeholder="e.g. IIT Delhi, Naukri, LinkedIn…"
                               className="w-full px-2.5 py-1.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white"/>
                           ) : (
-                            /* Select for all other fields */
                             <select
                               value={bulkSelectValue}
                               onChange={e => setBulkSelectValue(e.target.value)}
@@ -736,13 +724,11 @@ export function CandidatesPage() {
                               }
                             </select>
                           )}
-
                           <button
                             disabled={bulkUpdate.isPending || !bulkSelectValue}
                             onClick={e => {
                               e.stopPropagation()
                               if (!bulkSelectValue) return
-                              // interview_date needs ISO string
                               const val = bulkField === 'interview_date'
                                 ? new Date(bulkSelectValue).toISOString()
                                 : bulkSelectValue
@@ -788,7 +774,6 @@ export function CandidatesPage() {
         }
       />
 
-      {/* Filter bar */}
       <div className="flex items-center gap-2">
         <div className="relative flex-1 max-w-xs">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400"/>
@@ -832,7 +817,6 @@ export function CandidatesPage() {
         )}
       </div>
 
-      {/* Table */}
       {isLoading ? (
         <div className="flex justify-center py-16"><Loader2 className="w-5 h-5 animate-spin text-gray-400"/></div>
       ) : displayed.length===0 ? (
@@ -846,7 +830,6 @@ export function CandidatesPage() {
               <table className="w-full text-sm border-collapse">
                 <thead>
                   <tr className="border-b border-gray-100">
-                    {/* Checkbox + Name — always frozen left */}
                     <th className="px-4 py-3 w-10 bg-white sticky left-0 z-20 after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-gray-100">
                       <input type="checkbox" checked={selectedIds.size===displayed.length&&displayed.length>0}
                         onChange={toggleAll} className="rounded border-gray-300 text-blue-600 cursor-pointer w-4 h-4"/>
@@ -874,26 +857,19 @@ export function CandidatesPage() {
                         return (
                           <tr key={c.id}
                             className={`group/row border-b border-gray-50 last:border-0 transition-colors ${isSel?'bg-blue-50/40':'hover:bg-gray-50/60'} ${c.archived_at?'opacity-40':''}`}>
-                            {/* Checkbox — sticky */}
                             <td className={`px-4 py-2.5 sticky left-0 z-10 ${isSel?'bg-blue-50':'bg-white group-hover/row:bg-gray-50/60'} after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-gray-100`}>
                               <input type="checkbox" checked={isSel} onChange={()=>toggleSel(c.id)}
                                 className="rounded border-gray-300 text-blue-600 cursor-pointer w-4 h-4"/>
                             </td>
-                            {/* Name — sticky */}
                             <td className={`px-4 py-2.5 sticky left-10 z-10 min-w-[180px] ${isSel?'bg-blue-50':'bg-white group-hover/row:bg-gray-50/60'} after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-gray-100`}>
                               <button onClick={()=>navigate(`/candidates/${c.id}`)}
                                 className="font-medium text-gray-900 hover:text-blue-600 transition-colors text-left text-sm">{c.full_name}</button>
                             </td>
-                            {/* Dynamic columns */}
                             {orderedVisible.map(key=>{
                               if (key==='stage') return <td key="stage" className="px-3 py-2.5"><StageCell cid={c.id} value={c.current_stage} canEdit={canEdit} onUpdate={onUpdate} stages={STAGES} stageConfigs={stageConfigs}/></td>
                               if (key==='job') return <td key="job" className="px-3 py-2.5"><SelectCell cid={c.id} field="job_id" display={c.job?.title ?? getName(jobs as any[],c.job_id)} canEdit={canAssign} onUpdate={onUpdate} options={(jobs as any[]).map(j=>({label:j.title,value:j.id}))}/></td>
-                              if (key==='source') return <td key="source" className="px-3 py-2.5">
-                                <SourceCell cid={c.id} category={c.source_category} canEdit={canEdit} onUpdate={onUpdate}/>
-                              </td>
-                              if (key==='subsource') return <td key="subsource" className="px-3 py-2.5">
-                                <SubSourceCell cid={c.id} category={c.source_category} name={c.source_name??''} canEdit={canEdit} onUpdate={onUpdate}/>
-                              </td>
+                              if (key==='source') return <td key="source" className="px-3 py-2.5"><SourceCell cid={c.id} category={c.source_category} canEdit={canEdit} onUpdate={onUpdate}/></td>
+                              if (key==='subsource') return <td key="subsource" className="px-3 py-2.5"><SubSourceCell cid={c.id} category={c.source_category} name={c.source_name??''} canEdit={canEdit} onUpdate={onUpdate}/></td>
                               if (key==='hr_owner') return <td key="hr_owner" className="px-3 py-2.5"><SelectCell cid={c.id} field="hr_owner" display={getName(hrUsers as any[],c.hr_owner)} canEdit={canAssignHR} onUpdate={onUpdate} options={(hrUsers as any[]).map(u=>({label:u.full_name,value:u.id}))}/></td>
                               if (key==='interviewer') return <td key="interviewer" className="px-3 py-2.5"><MultiCell cid={c.id} field="assigned_interviewers" ids={c.assigned_interviewers??[]} canEdit={canEdit} onUpdate={(id,_,arr)=>onUpdate(id,'assigned_interviewers',arr)} options={(interviewers as any[]).map(u=>({label:u.full_name,value:u.id}))}/></td>
                               if (key==='interview_date') return <td key="interview_date" className="px-3 py-2.5"><DateCell cid={c.id} value={c.interview_date} canEdit={canEdit} onUpdate={onUpdate}/></td>
@@ -906,7 +882,6 @@ export function CandidatesPage() {
                               if (key.startsWith('cf_')) return <td key={key} className="px-3 py-2.5 text-xs text-gray-500">{c.custom_data?.[key.slice(3)]??'—'}</td>
                               return null
                             })}
-                            {/* Actions */}
                             <td className="px-3 py-2.5">
                               <div className="flex items-center gap-0.5 justify-end">
                                 {canEdit && (
@@ -956,7 +931,6 @@ export function CandidatesPage() {
         </div>
       </Modal>
 
-      {/* Schedule Interview Modal — isolated, no parent re-renders */}
       {scheduleCandidate && (
         <ScheduleInterviewModal
           candidateId={scheduleCandidate.id}
