@@ -98,11 +98,23 @@ export function SettingsPage() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['users'] }),
   })
 
+  const deleteUser = useMutation({
+    mutationFn: async (id: string) => {
+      const { error } = await supabase.from('users').delete().eq('id', id)
+      if (error) throw error
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['users'] })
+    },
+  })
+
   const toggleActive = useMutation({
     mutationFn: async ({ id, is_active }: { id: string; is_active: boolean }) => { const { error } = await supabase.from('users').update({ is_active }).eq('id', id); if (error) throw error },
     onSuccess: () => qc.invalidateQueries({ queryKey: ['users'] }),
   })
 
+
+  
   const updateUser = useMutation({
     mutationFn: async ({ id, full_name, email, password }: { id:string; full_name:string; email:string; password?:string }) => {
       // Update profile in users table
