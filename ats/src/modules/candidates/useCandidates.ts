@@ -27,21 +27,20 @@ export function useCandidates(filters: CandidateFilters & { search?: string } = 
   return useQuery({
     queryKey: ['candidates', filters, user?.id, user?.role],
     queryFn: async () => {
-      // 1. Fetch data from service
+      // 1. Fetch data — RLS enforces agency isolation server-side
       let candidates = await candidateService.list(filters)
 
-      // 2. Strict client enforcement loop for agency constraints
+      // 2. Defence-in-depth client filter for agency users.
+      //    RLS already blocks non-matching rows; this guards against
+      //    misconfigured policies or anon-key edge cases.
       if (user?.role === 'agency') {
-        const currentAgencyId = (user as any).agency_id
-        if (currentAgencyId) {
-          candidates = candidates.filter((c: any) => c.agency_id === currentAgencyId)
-        } else {
-          return []
-        }
+        const agencyId = user.agency_id
+        if (!agencyId) return []
+        candidates = candidates.filter((c: any) => c.agency_id === agencyId)
       }
 
-      // 3. Local fuzzy search logic
-      if (filters?.search) {
+      // 3. Local fuzzy search
+      if (filters.search) {
         const q = filters.search.toLowerCase()
         candidates = candidates.filter(
           (c: any) =>
@@ -50,7 +49,7 @@ export function useCandidates(filters: CandidateFilters & { search?: string } = 
         )
       }
 
-      // 4. Enrich candidates with cached job data
+      // 4. Enrich with cached job data
       return candidates.map((c: any) => ({
         ...c,
         job: c.job_id && jobsMap[c.job_id] ? jobsMap[c.job_id] : null,
