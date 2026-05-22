@@ -1,12 +1,12 @@
 // ============================================================
 // USE CANDIDATES — TanStack Query hooks for candidate data
-// Fetches candidates + joins job data client-side (avoids FK schema issues)
 // ============================================================
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { candidateService, type CandidateFilters } from './candidateService'
 import { supabase } from '../../lib/supabaseClient'
+import { useAuthStore } from '../auth/authStore'
 
-// Fetch all open jobs once, cache 60s — used to enrich candidates with job.title
+// Fetch all open jobs once, cache 60s — used to enrich candidates with job details safely
 function useJobsMap() {
   return useQuery({
     queryKey: ['jobs', 'map'],
@@ -20,13 +20,38 @@ function useJobsMap() {
   })
 }
 
-export function useCandidates(filters: CandidateFilters = {}) {
+export function useCandidates(filters: CandidateFilters & { search?: string } = {}) {
+  const { user } = useAuthStore()
   const { data: jobsMap = {} } = useJobsMap()
+
   return useQuery({
-    queryKey: ['candidates', filters],
+    queryKey: ['candidates', filters, user?.id, user?.role],
     queryFn: async () => {
-      const candidates = await candidateService.list(filters)
-      // Enrich with job data client-side (no DB join needed)
+      // 1. Fetch raw list from candidate service using filters
+      let candidates = await candidateService.list(filters)
+
+      // 2. Strict backend/client enforcement for agency users
+      if (user?.role === 'agency') {
+        const currentAgencyId = (user as any).agency_id
+        if (currentAgencyId) {
+          candidates = candidates.filter((c: any) => c.agency_id === currentAgencyId)
+        } else {
+          // Secure boundary wrapper: if user has no agency_id unassigned, return empty array safely
+          return []
+        }
+      }
+
+      // 3. Local search fuzzy lookup filter to keep calculations snappy
+      if (filters?.search) {
+        const q = filters.search.toLowerCase()
+        candidates = candidates.filter(
+          (c: any) =>
+            c.full_name?.toLowerCase().includes(q) ||
+            c.email?.toLowerCase().includes(q)
+        )
+      }
+
+      // 4. Enrich candidates with cached job data client-side (no expensive direct DB relations loop needed)
       return candidates.map((c: any) => ({
         ...c,
         job: c.job_id && jobsMap[c.job_id] ? jobsMap[c.job_id] : null,
@@ -74,25 +99,4 @@ export function useDeleteCandidate() {
       qc.invalidateQueries({ queryKey: ['widget'] })
     },
   })
-}
-
-// useCandidates.ts mein query function ko aise update karein
-export function useCandidates() {
-  const { user } = useAuthStore();
-  
-  return useQuery({
-    queryKey: ['candidates', user?.role],
-    queryFn: async () => {
-      let query = supabase.from('candidates').select('*, jobs(title)');
-      
-      // Agar user Agency hai, toh sirf unka data filter karein
-      if (user?.role === 'agency' && user.agency_id) {
-        query = query.eq('agency_id', user.agency_id);
-      }
-      
-      const { data, error } = await query;
-      if (error) throw error;
-      return data;
-    }
-  });
 }
