@@ -2,13 +2,13 @@
 // INTERVIEWS PAGE — Table view matching CandidatesPage style
 // Feedback state managed via interview_feedback table
 // ============================================================
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Loader2, CheckCircle, Clock } from 'lucide-react'
+import { Loader2, CheckCircle, Clock, Briefcase, Calendar, X } from 'lucide-react'
 import { supabase } from '../../lib/supabaseClient'
 import { useAuthStore } from '../auth/authStore'
-import { formatDate, formatDateTime } from '../../shared/utils/helpers'
+import { formatDateTime } from '../../shared/utils/helpers'
 import { PageHeader } from '../../shared/components/PageHeader'
 
 type FeedbackFilter = 'pending' | 'submitted'
@@ -33,6 +33,9 @@ export function InterviewsPage() {
   const qc = useQueryClient()
   const [filter, setFilter] = useState<FeedbackFilter>('pending')
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [jobFilter, setJobFilter]     = useState<string>('')
+  const [dateFrom, setDateFrom]       = useState<string>('')
+  const [dateTo,   setDateTo]         = useState<string>('')
 
   const { data, isLoading, refetch } = useQuery({
     queryKey: ['my-interviews', user?.id],
@@ -54,10 +57,10 @@ export function InterviewsPage() {
         ;(jobs ?? []).forEach(j => { jobsMap[j.id] = j.title })
       }
 
-      // Attach job title to each candidate
+      // Attach job title + id to each candidate
       const candidatesWithJob = (candidates ?? []).map(c => ({
         ...c,
-        job: c.job_id ? { title: jobsMap[c.job_id] ?? null } : null,
+        job: c.job_id ? { id: c.job_id, title: jobsMap[c.job_id] ?? null } : null,
       }))
 
       // Fetch my submitted feedback
@@ -70,11 +73,12 @@ export function InterviewsPage() {
 
       const doneMap = new Map((feedback ?? []).map(f => [f.candidate_id, f.submitted_at as string]))
 
+      // Pending/submitted must use the enriched list so the Job column renders
       return {
         all: candidatesWithJob,
         doneMap,
-        pending:   (candidates ?? []).filter(c => !doneMap.has(c.id)),
-        submitted: (candidates ?? []).filter(c =>  doneMap.has(c.id)),
+        pending:   candidatesWithJob.filter(c => !doneMap.has(c.id)),
+        submitted: candidatesWithJob.filter(c =>  doneMap.has(c.id)),
       }
     },
     enabled: !!user,
@@ -137,9 +141,36 @@ export function InterviewsPage() {
     },
   })
 
-  const displayed = filter === 'pending' ? (data?.pending ?? []) : (data?.submitted ?? [])
-  const pendingCount   = data?.pending.length ?? 0
+  const rawList = filter === 'pending' ? (data?.pending ?? []) : (data?.submitted ?? [])
+
+  // Distinct jobs across ALL assigned candidates (so the dropdown stays stable
+  // when toggling between pending / submitted)
+  const jobOptions = useMemo(() => {
+    const map = new Map<string, string>()
+    ;(data?.all ?? []).forEach((c: any) => {
+      if (c.job?.id && c.job?.title) map.set(c.job.id, c.job.title)
+    })
+    return Array.from(map, ([id, title]) => ({ id, title }))
+      .sort((a, b) => a.title.localeCompare(b.title))
+  }, [data?.all])
+
+  // Apply job + interview_date filters
+  const displayed = useMemo(() => {
+    return rawList.filter((c: any) => {
+      if (jobFilter && c.job?.id !== jobFilter) return false
+      if (dateFrom || dateTo) {
+        if (!c.interview_date) return false
+        const d = c.interview_date.slice(0, 10) // YYYY-MM-DD
+        if (dateFrom && d < dateFrom) return false
+        if (dateTo   && d > dateTo)   return false
+      }
+      return true
+    })
+  }, [rawList, jobFilter, dateFrom, dateTo])
+
+  const pendingCount   = data?.pending.length   ?? 0
   const submittedCount = data?.submitted.length ?? 0
+  const hasActiveFilters = !!(jobFilter || dateFrom || dateTo)
 
   const toggleSel = (id: string) =>
     setSelectedIds(p => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n })
@@ -196,6 +227,54 @@ export function InterviewsPage() {
             Submit Feedback ({selectedIds.size})
           </button>
         )}
+      </div>
+
+      {/* Filter bar — Job + Interview Date range */}
+      <div className="flex flex-wrap items-center gap-2 mb-4">
+        <div className="flex items-center gap-1.5 border border-gray-200 rounded-lg bg-white px-3 py-2">
+          <Briefcase className="w-3.5 h-3.5 text-gray-400"/>
+          <select
+            value={jobFilter}
+            onChange={e => { setJobFilter(e.target.value); setSelectedIds(new Set()) }}
+            className="text-sm bg-transparent border-none outline-none text-gray-700 cursor-pointer pr-1 max-w-[200px]"
+          >
+            <option value="">All jobs</option>
+            {jobOptions.map(j => (
+              <option key={j.id} value={j.id}>{j.title}</option>
+            ))}
+          </select>
+        </div>
+
+        <div className="flex items-center gap-1.5 border border-gray-200 rounded-lg bg-white px-3 py-2">
+          <Calendar className="w-3.5 h-3.5 text-gray-400"/>
+          <span className="text-xs text-gray-400">From</span>
+          <input
+            type="date"
+            value={dateFrom}
+            onChange={e => { setDateFrom(e.target.value); setSelectedIds(new Set()) }}
+            className="text-sm bg-transparent border-none outline-none text-gray-700"
+          />
+          <span className="text-xs text-gray-400">To</span>
+          <input
+            type="date"
+            value={dateTo}
+            onChange={e => { setDateTo(e.target.value); setSelectedIds(new Set()) }}
+            className="text-sm bg-transparent border-none outline-none text-gray-700"
+          />
+        </div>
+
+        {hasActiveFilters && (
+          <button
+            onClick={() => { setJobFilter(''); setDateFrom(''); setDateTo(''); setSelectedIds(new Set()) }}
+            className="flex items-center gap-1 text-sm text-gray-500 hover:text-gray-800 px-2 py-1.5 rounded-lg hover:bg-gray-50"
+          >
+            <X className="w-3.5 h-3.5"/> Clear filters
+          </button>
+        )}
+
+        <span className="text-xs text-gray-400 ml-auto">
+          Showing {displayed.length} of {rawList.length}
+        </span>
       </div>
 
       {isLoading ? (
