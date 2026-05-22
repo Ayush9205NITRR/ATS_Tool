@@ -148,7 +148,8 @@ const updateRole = useMutation({
 
   const deleteUser = useMutation({
     mutationFn: async (id: string) => {
-      const { error } = await supabase.from('users').delete().eq('id', id)
+      // delete_user_with_auth removes from auth.users which cascades to public.users
+      const { error } = await supabase.rpc('delete_user_with_auth', { user_id: id })
       if (error) throw error
     },
     onSuccess: () => {
