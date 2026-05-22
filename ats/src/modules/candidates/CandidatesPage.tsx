@@ -471,12 +471,15 @@ export function CandidatesPage() {
     return [...pinned, ...unpinned]
   }, [colOrder, effectiveVisible, customFields, pinnedCols, isAgency])
 
-  const displayed = useMemo(() => {
-    // Exact structural visibility layer boundary check for agency clients
+const displayed = useMemo(() => {
     let list = candidates.filter((c:any) => showArchived ? !!c.archived_at : !c.archived_at)
-    if (isAgency && user?.agency_id) {
-      list = list.filter((c:any) => c.agency_id === user.agency_id)
+    
+    // Explicit type-casting to fix TS2339 error cleanly
+    const agencyId = (user as any)?.agency_id
+    if (isAgency && agencyId) {
+      list = list.filter((c:any) => c.agency_id === agencyId)
     }
+    
     if (activeFilters.length) list = applyFilters(list, activeFilters, jobs as any[], interviewers as any[], filterMode, customFields as any[])
     return list
   }, [candidates, showArchived, activeFilters, jobs, interviewers, filterMode, customFields, isAgency, user])
