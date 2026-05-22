@@ -115,6 +115,18 @@ export function SettingsPage() {
         if (pwErr) {
           // Fallback: if RPC doesn't exist, show SQL to run manually
           throw new Error(`Password update requires Admin API. Run this SQL in Supabase:\nUPDATE auth.users SET encrypted_password = crypt('${password}', gen_salt('bf')) WHERE id = '${id}';`)
+
+
+          const deleteUser = useMutation({
+  mutationFn: async (id: string) => {
+    const { error } = await supabase.from('users').delete().eq('id', id)
+    if (error) throw error
+  },
+  onSuccess: () => {
+    qc.invalidateQueries({ queryKey: ['users'] })
+  },
+})
+        
         }
       }
     },
