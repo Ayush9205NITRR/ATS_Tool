@@ -133,6 +133,16 @@ export function SettingsPage() {
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['users'] }); setEditingUser(null) },
   })
 
+  const deleteUser = useMutation({
+  mutationFn: async (id: string) => {
+    const { error } = await supabase.from('users').delete().eq('id', id)
+    if (error) throw error
+  },
+  onSuccess: () => {
+    qc.invalidateQueries({ queryKey: ['users'] })
+  },
+})
+
   // ── Custom Fields ──────────────────────────────────────────
   const { data: fields = [], isLoading: fieldsLoading } = useQuery({
     queryKey: ['custom-fields'],
