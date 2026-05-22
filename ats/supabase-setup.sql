@@ -188,9 +188,18 @@ begin
     split_part(new.email, '@', 1)
   );
 
+  -- Remove any orphaned public.users row that has the same email but a
+  -- different id (happens when a previous auth user was deleted without
+  -- the cascade cleaning up, leaving a ghost record that blocks the
+  -- unique email constraint on the next signup attempt).
+  delete from public.users where email = new.email and id <> new.id;
+
   insert into public.users (id, email, full_name, role, is_active)
   values (new.id, new.email, v_name, v_role, true)
-  on conflict (id) do nothing;
+  on conflict (id) do update
+    set email     = excluded.email,
+        full_name = excluded.full_name,
+        role      = excluded.role;
 
   return new;
 exception when others then
@@ -266,7 +275,10 @@ begin
     'authenticated',
     'authenticated',
     lower(trim(p_email)),
-    crypt(p_password, gen_salt('bf')),
+    -- Use bcrypt cost 10 to match GoTrue's expected format.
+    -- gen_salt('bf') defaults to cost 8 which produces a valid hash but
+    -- GoTrue rejects it on login because it expects cost >= 10.
+    crypt(p_password, gen_salt('bf', 10)),
     now(),
     '{"provider":"email","providers":["email"]}'::jsonb,
     jsonb_build_object('full_name', p_full_name, 'role', p_role),
@@ -275,13 +287,17 @@ begin
     '', '', '', ''
   );
 
-  -- Trigger handle_new_user fires automatically above; but as a safety net
-  -- ensure the public profile exists with the correct role (covers cases where
-  -- the trigger fires before the INSERT commits in some Supabase versions).
+  -- Safety net: ensure the public profile exists with the correct role.
+  -- Also removes any orphaned record with the same email (different id)
+  -- before inserting, preventing the users_email_partial_key constraint error.
+  delete from public.users where email = lower(trim(p_email)) and id <> new_uid;
+
   insert into public.users (id, email, full_name, role, is_active)
   values (new_uid, lower(trim(p_email)), p_full_name, p_role::user_role, true)
   on conflict (id) do update
-    set role = excluded.role, full_name = excluded.full_name;
+    set role      = excluded.role,
+        full_name = excluded.full_name,
+        email     = excluded.email;
 
   return new_uid;
 exception
@@ -329,7 +345,7 @@ set search_path = public
 as $$
 begin
   update auth.users
-  set encrypted_password = crypt(new_password, gen_salt('bf')),
+  set encrypted_password = crypt(new_password, gen_salt('bf', 10)),
       updated_at = now()
   where id = user_id;
 end;
@@ -516,6 +532,22 @@ create index idx_feedback_interviewer   on public.interview_feedback(interviewer
 -- Dashboard, then run:
 --   UPDATE public.users SET role = 'super_admin' WHERE email = 'your@email.com';
 
+
+-- ============================================================
+-- === HOTFIX: clean up a broken user (e.g. admin12@enout.in) =
+-- Run this in the Supabase SQL Editor to remove the orphaned
+-- record and re-create the user cleanly via the Settings UI.
+-- ============================================================
+
+-- 1. Delete from auth.users (cascades to public.users via FK)
+-- DELETE FROM auth.users WHERE email = 'admin12@enout.in';
+
+-- 2. If the cascade didn't clean it (no FK yet), also delete manually
+-- DELETE FROM public.users WHERE email = 'admin12@enout.in';
+
+-- 3. After running the above, go to Settings → Add User and create
+--    admin12@enout.in again. With the updated SQL functions it will
+--    work correctly and the password will be loginable.
 
 -- ============================================================
 -- === MIGRATION (v1 → v2) ====================================
