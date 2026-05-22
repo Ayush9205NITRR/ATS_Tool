@@ -15,44 +15,12 @@ import { zodResolver } from '@hookform/resolvers/zod'
 
 const inputCls = 'w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500'
 
-const createUser = useMutation({
-    mutationFn: async (d: UserFormData) => {
-      // 1. Create the user authentication and base profile via RPC
-      const { data: userId, error } = await supabase.rpc('create_user_with_auth', {
-        p_email: d.email,
-        p_password: d.password,
-        p_full_name: d.full_name,
-        p_role: d.role,
-      })
-      if (error) throw new Error(error.message)
-
-      // 2. If the user is an agency, provision and link their agency container automatically
-      if (d.role === 'agency') {
-        const { data: newAgency, error: agencyErr } = await supabase
-          .from('agencies')
-          .insert({ name: d.full_name })
-          .select('id')
-          .single()
-
-        if (agencyErr) throw agencyErr
-
-        if (newAgency && userId) {
-          const { error: linkErr } = await supabase
-            .from('users')
-            .update({ agency_id: newAgency.id })
-            .eq('id', userId)
-            if (linkErr) throw linkErr
-        }
-      }
-      return userId
-    },
-    onSuccess: () => { 
-      qc.invalidateQueries({ queryKey: ['users'] }); 
-      qc.invalidateQueries({ queryKey: ['agencies'] }); 
-      resetU(); 
-      setShowUserModal(false);
-    },
-  })
+const userSchema = z.object({
+  full_name: z.string().min(2, 'Required'),
+  email: z.string().email('Valid email required'),
+  password: z.string().min(8, 'Min 8 characters'),
+  role: z.enum(['super_admin','admin','hr_team','interviewer', 'agency']),
+})
 type UserFormData = z.infer<typeof userSchema>
 
 const fieldSchema = z.object({
@@ -112,17 +80,41 @@ export function SettingsPage() {
 
   const createUser = useMutation({
     mutationFn: async (d: UserFormData) => {
-      // Use SECURITY DEFINER function to create auth + profile user
-      const { data, error } = await supabase.rpc('create_user_with_auth', {
+      // 1. Create the user authentication and base profile via RPC
+      const { data: userId, error } = await supabase.rpc('create_user_with_auth', {
         p_email: d.email,
         p_password: d.password,
         p_full_name: d.full_name,
         p_role: d.role,
       })
       if (error) throw new Error(error.message)
-      return data
+
+      // 2. If the user is an agency, provision and link their agency container automatically
+      if (d.role === 'agency') {
+        const { data: newAgency, error: agencyErr } = await supabase
+          .from('agencies')
+          .insert({ name: d.full_name })
+          .select('id')
+          .single()
+
+        if (agencyErr) throw agencyErr
+
+        if (newAgency && userId) {
+          const { error: linkErr } = await supabase
+            .from('users')
+            .update({ agency_id: newAgency.id })
+            .eq('id', userId)
+            if (linkErr) throw linkErr
+        }
+      }
+      return userId
     },
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['users'] }); resetU(); setShowUserModal(false) },
+    onSuccess: () => { 
+      qc.invalidateQueries({ queryKey: ['users'] }); 
+      qc.invalidateQueries({ queryKey: ['agencies'] }); 
+      resetU(); 
+      setShowUserModal(false);
+    },
   })
 
   const updateRole = useMutation({
@@ -305,6 +297,7 @@ export function SettingsPage() {
                   <option value="admin">Admin</option>
                   <option value="super_admin">Super Admin</option>
                 </select>
+                {eu.role && <p className="mt-1 text-xs text-red-600">{eu.role.message}</p>}
                 <p className="mt-1.5 text-xs text-gray-400">
                   💡 <strong>For Agency:</strong> Use the agency company name as "Full Name" — this becomes the agency identifier. Candidates uploaded by them will automatically link to this account.
                 </p>
