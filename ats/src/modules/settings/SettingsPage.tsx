@@ -80,7 +80,9 @@ export function SettingsPage() {
 
   const createUser = useMutation({
     mutationFn: async (d: UserFormData) => {
-      // 1. Create the user authentication and base profile via RPC
+      // 1. Create auth.users entry + public.users profile via RPC.
+      //    The RPC dynamically fetches the correct instance_id so it works
+      //    on both Supabase Cloud and self-hosted deployments.
       const { data: userId, error } = await supabase.rpc('create_user_with_auth', {
         p_email: d.email,
         p_password: d.password,
@@ -88,32 +90,53 @@ export function SettingsPage() {
         p_role: d.role,
       })
       if (error) throw new Error(error.message)
+      if (!userId) throw new Error('User creation returned no ID — check Supabase logs.')
 
-      // 2. If the user is an agency, provision and link their agency container automatically
+      // 2. Agency-specific provisioning
       if (d.role === 'agency') {
-        const { data: newAgency, error: agencyErr } = await supabase
+        // Reuse an existing agency with the same name, or create a new one
+        let { data: existingAgency } = await supabase
           .from('agencies')
-          .insert({ name: d.full_name })
           .select('id')
-          .single()
+          .ilike('name', d.full_name)
+          .maybeSingle()
 
-        if (agencyErr) throw agencyErr
+        let agencyId: string | null = existingAgency?.id ?? null
 
-        if (newAgency && userId) {
-          const { error: linkErr } = await supabase
-            .from('users')
-            .update({ agency_id: newAgency.id })
-            .eq('id', userId)
-            if (linkErr) throw linkErr
+        if (!agencyId) {
+          const { data: newAgency, error: agencyErr } = await supabase
+            .from('agencies')
+            .insert({ name: d.full_name })
+            .select('id')
+            .single()
+          if (agencyErr) throw agencyErr
+          agencyId = newAgency.id
         }
+
+        // Link the new user to the agency
+        const { error: linkErr } = await supabase
+          .from('users')
+          .update({ agency_id: agencyId })
+          .eq('id', userId)
+        if (linkErr) throw linkErr
+
+        // Auto-claim historical candidates whose source_name matches this agency.
+        // Failures here are non-fatal — log and continue.
+        const { error: claimErr } = await supabase.rpc('claim_agency_candidates', {
+          p_agency_id:   agencyId,
+          p_agency_name: d.full_name,
+        })
+        if (claimErr) console.warn('[createUser] claim_agency_candidates failed:', claimErr.message)
       }
+
       return userId
     },
-    onSuccess: () => { 
-      qc.invalidateQueries({ queryKey: ['users'] }); 
-      qc.invalidateQueries({ queryKey: ['agencies'] }); 
-      resetU(); 
-      setShowUserModal(false);
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['users'] })
+      qc.invalidateQueries({ queryKey: ['agencies'] })
+      qc.invalidateQueries({ queryKey: ['candidates'] })
+      resetU()
+      setShowUserModal(false)
     },
   })
 
@@ -138,12 +161,22 @@ const updateRole = useMutation({
 
         // Link the user securely to the agency ID
         await supabase.from('users').update({ agency_id: agencyId }).eq('id', id)
+
+        // Auto-claim historical candidates matching this agency name
+        const { error: claimErr } = await supabase.rpc('claim_agency_candidates', {
+          p_agency_id:   agencyId,
+          p_agency_name: full_name,
+        })
+        if (claimErr) console.warn('[updateRole] claim_agency_candidates failed:', claimErr.message)
       } else {
         // If they are changed AWAY from agency to something else, remove the link
         await supabase.from('users').update({ agency_id: null }).eq('id', id)
       }
     },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['users'] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['users'] })
+      qc.invalidateQueries({ queryKey: ['candidates'] })
+    },
   })
 
   const deleteUser = useMutation({
