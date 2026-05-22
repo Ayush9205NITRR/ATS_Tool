@@ -2,16 +2,67 @@
 // INTERVIEWS PAGE — Table view matching CandidatesPage style
 // Feedback state managed via interview_feedback table
 // ============================================================
-import { useMemo, useState } from 'react'
+import { useMemo, useState, useRef, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Loader2, CheckCircle, Clock, Briefcase, Calendar, X } from 'lucide-react'
+import { Loader2, CheckCircle, Clock, Briefcase, Calendar, X, ChevronDown } from 'lucide-react'
 import { supabase } from '../../lib/supabaseClient'
 import { useAuthStore } from '../auth/authStore'
 import { formatDateTime } from '../../shared/utils/helpers'
 import { PageHeader } from '../../shared/components/PageHeader'
 
 type FeedbackFilter = 'pending' | 'submitted'
+
+// ─── Airtable-style date filter ──────────────────────────────
+type DateOp =
+  | 'any' | 'is' | 'before' | 'after' | 'on_or_before' | 'on_or_after'
+  | 'between' | 'today' | 'tomorrow' | 'yesterday'
+  | 'last_7' | 'next_7' | 'this_month' | 'empty' | 'not_empty'
+
+const DATE_OP_LABEL: Record<DateOp, string> = {
+  any:          'Any date',
+  is:           'Is…',
+  before:       'Is before…',
+  after:        'Is after…',
+  on_or_before: 'Is on or before…',
+  on_or_after:  'Is on or after…',
+  between:      'Is between…',
+  today:        'Today',
+  tomorrow:     'Tomorrow',
+  yesterday:    'Yesterday',
+  last_7:       'In the last 7 days',
+  next_7:       'In the next 7 days',
+  this_month:   'This month',
+  empty:        'Is empty',
+  not_empty:    'Is not empty',
+}
+
+const ymd = (d: Date) => d.toISOString().slice(0, 10)
+const addDays = (d: Date, n: number) => { const x = new Date(d); x.setDate(x.getDate() + n); return x }
+
+function matchesDateFilter(iso: string | null, op: DateOp, a: string, b: string): boolean {
+  if (op === 'any')        return true
+  if (op === 'empty')      return !iso
+  if (op === 'not_empty')  return !!iso
+  if (!iso)                return false
+  const d = iso.slice(0, 10)
+  const today = ymd(new Date())
+  switch (op) {
+    case 'is':            return !!a && d === a
+    case 'before':        return !!a && d <  a
+    case 'after':         return !!a && d >  a
+    case 'on_or_before':  return !!a && d <= a
+    case 'on_or_after':   return !!a && d >= a
+    case 'between':       return !!a && !!b && d >= a && d <= b
+    case 'today':         return d === today
+    case 'tomorrow':      return d === ymd(addDays(new Date(), 1))
+    case 'yesterday':     return d === ymd(addDays(new Date(), -1))
+    case 'last_7':        return d >= ymd(addDays(new Date(), -7)) && d <= today
+    case 'next_7':        return d >= today && d <= ymd(addDays(new Date(), 7))
+    case 'this_month':    return d.slice(0, 7) === today.slice(0, 7)
+    default:              return true
+  }
+}
 
 const STAGE_COLOURS: Record<string, string> = {
   Applied: 'bg-gray-100 text-gray-600',
@@ -34,8 +85,21 @@ export function InterviewsPage() {
   const [filter, setFilter] = useState<FeedbackFilter>('pending')
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [jobFilter, setJobFilter]     = useState<string>('')
-  const [dateFrom, setDateFrom]       = useState<string>('')
-  const [dateTo,   setDateTo]         = useState<string>('')
+  const [dateOp,    setDateOp]        = useState<DateOp>('any')
+  const [dateA,     setDateA]         = useState<string>('')
+  const [dateB,     setDateB]         = useState<string>('')
+  const [dateOpen,  setDateOpen]      = useState(false)
+  const dateRef = useRef<HTMLDivElement>(null)
+
+  // Close the date popover on outside click
+  useEffect(() => {
+    if (!dateOpen) return
+    const onClick = (e: MouseEvent) => {
+      if (dateRef.current && !dateRef.current.contains(e.target as Node)) setDateOpen(false)
+    }
+    document.addEventListener('mousedown', onClick)
+    return () => document.removeEventListener('mousedown', onClick)
+  }, [dateOpen])
 
   const { data, isLoading, refetch } = useQuery({
     queryKey: ['my-interviews', user?.id],
@@ -158,19 +222,26 @@ export function InterviewsPage() {
   const displayed = useMemo(() => {
     return rawList.filter((c: any) => {
       if (jobFilter && c.job?.id !== jobFilter) return false
-      if (dateFrom || dateTo) {
-        if (!c.interview_date) return false
-        const d = c.interview_date.slice(0, 10) // YYYY-MM-DD
-        if (dateFrom && d < dateFrom) return false
-        if (dateTo   && d > dateTo)   return false
-      }
+      if (!matchesDateFilter(c.interview_date ?? null, dateOp, dateA, dateB)) return false
       return true
     })
-  }, [rawList, jobFilter, dateFrom, dateTo])
+  }, [rawList, jobFilter, dateOp, dateA, dateB])
 
   const pendingCount   = data?.pending.length   ?? 0
   const submittedCount = data?.submitted.length ?? 0
-  const hasActiveFilters = !!(jobFilter || dateFrom || dateTo)
+  const hasActiveFilters = !!(jobFilter || dateOp !== 'any')
+
+  // Short chip label that appears on the date button
+  const dateChipLabel = (() => {
+    if (dateOp === 'any')                       return 'Interview date'
+    if (dateOp === 'between' && dateA && dateB) return `${dateA} → ${dateB}`
+    if (['is','before','after','on_or_before','on_or_after'].includes(dateOp) && dateA) {
+      return `${DATE_OP_LABEL[dateOp].replace('…','')} ${dateA}`
+    }
+    return DATE_OP_LABEL[dateOp]
+  })()
+
+  const clearDate = () => { setDateOp('any'); setDateA(''); setDateB('') }
 
   const toggleSel = (id: string) =>
     setSelectedIds(p => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n })
@@ -245,36 +316,115 @@ export function InterviewsPage() {
           </select>
         </div>
 
-        <div className="flex items-center gap-1.5 border border-gray-200 rounded-lg bg-white px-3 py-2">
-          <Calendar className="w-3.5 h-3.5 text-gray-400"/>
-          <span className="text-xs text-gray-400">From</span>
-          <input
-            type="date"
-            value={dateFrom}
-            onChange={e => { setDateFrom(e.target.value); setSelectedIds(new Set()) }}
-            className="text-sm bg-transparent border-none outline-none text-gray-700"
-          />
-          <span className="text-xs text-gray-400">To</span>
-          <input
-            type="date"
-            value={dateTo}
-            onChange={e => { setDateTo(e.target.value); setSelectedIds(new Set()) }}
-            className="text-sm bg-transparent border-none outline-none text-gray-700"
-          />
-        </div>
-
         {hasActiveFilters && (
           <button
-            onClick={() => { setJobFilter(''); setDateFrom(''); setDateTo(''); setSelectedIds(new Set()) }}
+            onClick={() => { setJobFilter(''); clearDate(); setSelectedIds(new Set()) }}
             className="flex items-center gap-1 text-sm text-gray-500 hover:text-gray-800 px-2 py-1.5 rounded-lg hover:bg-gray-50"
           >
             <X className="w-3.5 h-3.5"/> Clear filters
           </button>
         )}
 
-        <span className="text-xs text-gray-400 ml-auto">
+        <span className="text-xs text-gray-400 ml-auto mr-2">
           Showing {displayed.length} of {rawList.length}
         </span>
+
+        {/* ───── Airtable-style Interview Date filter (at the end) ───── */}
+        <div className="relative" ref={dateRef}>
+          <button
+            onClick={() => setDateOpen(o => !o)}
+            className={`flex items-center gap-1.5 border rounded-lg px-3 py-2 text-sm transition-colors ${
+              dateOp !== 'any'
+                ? 'border-blue-300 bg-blue-50 text-blue-700'
+                : 'border-gray-200 bg-white text-gray-700 hover:border-gray-300'
+            }`}
+          >
+            <Calendar className="w-3.5 h-3.5"/>
+            <span className="max-w-[200px] truncate">{dateChipLabel}</span>
+            <ChevronDown className={`w-3.5 h-3.5 text-gray-400 transition-transform ${dateOpen ? 'rotate-180' : ''}`}/>
+          </button>
+
+          {dateOpen && (
+            <div className="absolute right-0 mt-2 w-80 bg-white border border-gray-200 rounded-xl shadow-lg z-30 p-3">
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Interview Date</p>
+                {dateOp !== 'any' && (
+                  <button onClick={clearDate} className="text-xs text-gray-400 hover:text-red-500 flex items-center gap-0.5">
+                    <X className="w-3 h-3"/> Reset
+                  </button>
+                )}
+              </div>
+
+              <select
+                value={dateOp}
+                onChange={e => {
+                  const op = e.target.value as DateOp
+                  setDateOp(op)
+                  if (op !== 'between') setDateB('')
+                  if (['any','today','tomorrow','yesterday','last_7','next_7','this_month','empty','not_empty'].includes(op)) {
+                    setDateA(''); setDateB('')
+                  }
+                  setSelectedIds(new Set())
+                }}
+                className="w-full text-sm border border-gray-200 rounded-lg px-2 py-1.5 mb-2 bg-white"
+              >
+                <optgroup label="Filter">
+                  {(['any','is','before','after','on_or_before','on_or_after','between'] as DateOp[]).map(op => (
+                    <option key={op} value={op}>{DATE_OP_LABEL[op]}</option>
+                  ))}
+                </optgroup>
+                <optgroup label="Quick presets">
+                  {(['today','tomorrow','yesterday','last_7','next_7','this_month'] as DateOp[]).map(op => (
+                    <option key={op} value={op}>{DATE_OP_LABEL[op]}</option>
+                  ))}
+                </optgroup>
+                <optgroup label="State">
+                  {(['empty','not_empty'] as DateOp[]).map(op => (
+                    <option key={op} value={op}>{DATE_OP_LABEL[op]}</option>
+                  ))}
+                </optgroup>
+              </select>
+
+              {['is','before','after','on_or_before','on_or_after','between'].includes(dateOp) && (
+                <div className="flex items-center gap-2">
+                  <input
+                    type="date"
+                    value={dateA}
+                    onChange={e => { setDateA(e.target.value); setSelectedIds(new Set()) }}
+                    className="flex-1 text-sm border border-gray-200 rounded-lg px-2 py-1.5"
+                  />
+                  {dateOp === 'between' && (
+                    <>
+                      <span className="text-xs text-gray-400">to</span>
+                      <input
+                        type="date"
+                        value={dateB}
+                        onChange={e => { setDateB(e.target.value); setSelectedIds(new Set()) }}
+                        className="flex-1 text-sm border border-gray-200 rounded-lg px-2 py-1.5"
+                      />
+                    </>
+                  )}
+                </div>
+              )}
+
+              <div className="flex flex-wrap gap-1 mt-3 pt-3 border-t border-gray-100">
+                {(['today','tomorrow','last_7','next_7','this_month'] as DateOp[]).map(op => (
+                  <button
+                    key={op}
+                    onClick={() => { setDateOp(op); setDateA(''); setDateB(''); setSelectedIds(new Set()) }}
+                    className={`text-xs px-2 py-1 rounded-md border transition-colors ${
+                      dateOp === op
+                        ? 'bg-blue-50 border-blue-300 text-blue-700'
+                        : 'bg-gray-50 border-gray-200 text-gray-600 hover:bg-gray-100'
+                    }`}
+                  >
+                    {DATE_OP_LABEL[op]}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
       </div>
 
       {isLoading ? (
