@@ -117,8 +117,32 @@ export function SettingsPage() {
     },
   })
 
-  const updateRole = useMutation({
-    mutationFn: async ({ id, role }: { id: string; role: Role }) => { const { error } = await supabase.from('users').update({ role }).eq('id', id); if (error) throw error },
+const updateRole = useMutation({
+    mutationFn: async ({ id, role, full_name }: { id: string; role: Role; full_name: string }) => {
+      // 1. Update the basic role in the users table
+      const { error } = await supabase.from('users').update({ role }).eq('id', id)
+      if (error) throw error
+
+      // 2. If they are changed TO an agency, ensure they have a linked agency bucket
+      if (role === 'agency') {
+        // Look for an existing agency with their exact name
+        let { data: existingAgency } = await supabase.from('agencies').select('id').ilike('name', full_name).maybeSingle()
+        let agencyId = existingAgency?.id
+
+        // If it doesn't exist, auto-create it
+        if (!agencyId) {
+          const { data: newAgency, error: agError } = await supabase.from('agencies').insert({ name: full_name }).select('id').single()
+          if (agError) throw agError
+          agencyId = newAgency.id
+        }
+
+        // Link the user securely to the agency ID
+        await supabase.from('users').update({ agency_id: agencyId }).eq('id', id)
+      } else {
+        // If they are changed AWAY from agency to something else, remove the link
+        await supabase.from('users').update({ agency_id: null }).eq('id', id)
+      }
+    },
     onSuccess: () => qc.invalidateQueries({ queryKey: ['users'] }),
   })
 
@@ -250,7 +274,7 @@ export function SettingsPage() {
                     </div>
                     <p className="text-xs text-gray-400">{u.email}</p>
                   </div>
-                  <select value={u.role} onChange={e => updateRole.mutate({ id: u.id, role: e.target.value as Role })}
+                  <select value={u.role} onChange={e => updateRole.mutate({ id: u.id, role: e.target.value as Role, full_name: u.full_name })}
                     className={`text-xs font-medium px-2.5 py-1 rounded-full border-0 cursor-pointer ${ROLE_COLOUR[u.role]}`}>
                     {ROLES.map(r => <option key={r} value={r}>{labelOf(r)}</option>)}
                   </select>
