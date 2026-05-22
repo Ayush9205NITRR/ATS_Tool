@@ -113,8 +113,6 @@ export function SettingsPage() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['users'] }),
   })
 
-
-  
   const updateUser = useMutation({
     mutationFn: async ({ id, full_name, email, password }: { id:string; full_name:string; email:string; password?:string }) => {
       // Update profile in users table
@@ -127,33 +125,11 @@ export function SettingsPage() {
         if (pwErr) {
           // Fallback: if RPC doesn't exist, show SQL to run manually
           throw new Error(`Password update requires Admin API. Run this SQL in Supabase:\nUPDATE auth.users SET encrypted_password = crypt('${password}', gen_salt('bf')) WHERE id = '${id}';`)
-
-
-          const deleteUser = useMutation({
-  mutationFn: async (id: string) => {
-    const { error } = await supabase.from('users').delete().eq('id', id)
-    if (error) throw error
-  },
-  onSuccess: () => {
-    qc.invalidateQueries({ queryKey: ['users'] })
-  },
-})
-        
         }
       }
     },
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['users'] }); setEditingUser(null) },
   })
-
-  const deleteUser = useMutation({
-  mutationFn: async (id: string) => {
-    const { error } = await supabase.from('users').delete().eq('id', id)
-    if (error) throw error
-  },
-  onSuccess: () => {
-    qc.invalidateQueries({ queryKey: ['users'] })
-  },
-})
 
   // ── Custom Fields ──────────────────────────────────────────
   const { data: fields = [], isLoading: fieldsLoading } = useQuery({
@@ -255,21 +231,26 @@ export function SettingsPage() {
                     {ROLES.map(r => <option key={r} value={r}>{labelOf(r)}</option>)}
                   </select>
                   {isSuperAdmin && (
-  <>
-    <Button variant="ghost" size="sm" onClick={() => setEditingUser(u)}>Edit</Button>
-    <button 
-      onClick={() => {
-        if(window.confirm(`Are you sure you want to delete ${u.full_name}?`)) {
-          deleteUser.mutate(u.id);
-        }
-      }} 
-      className="text-gray-300 hover:text-red-500 transition-colors p-1"
-      title="Delete User"
-    >
-      <Trash2 className="w-4 h-4"/>
-    </button>
-  </>
-)}
+                    <div className="flex items-center gap-2">
+                      <Button variant="ghost" size="sm" onClick={() => setEditingUser(u)}>Edit</Button>
+                      <button 
+                        onClick={() => {
+                          if(window.confirm(`Are you sure you want to delete ${u.full_name}?`)) {
+                            deleteUser.mutate(u.id);
+                          }
+                        }} 
+                        className="text-gray-300 hover:text-red-500 transition-colors p-1"
+                        title="Delete User"
+                      >
+                        <Trash2 className="w-4 h-4"/>
+                      </button>
+                    </div>
+                  )}
+                  <Button variant="ghost" size="sm" onClick={() => toggleActive.mutate({ id: u.id, is_active: !u.is_active })}>
+                    {u.is_active ? 'Deactivate' : 'Activate'}
+                  </Button>
+                </div>
+              ))}
               </div>
             </div>
           )}
