@@ -233,13 +233,21 @@ export function SettingsPage() {
                     {ROLES.map(r => <option key={r} value={r}>{labelOf(r)}</option>)}
                   </select>
                   {isSuperAdmin && (
-                    <Button variant="ghost" size="sm" onClick={() => setEditingUser(u)}>Edit</Button>
-                  )}
-                  <Button variant="ghost" size="sm" onClick={() => toggleActive.mutate({ id: u.id, is_active: !u.is_active })}>
-                    {u.is_active ? 'Deactivate' : 'Activate'}
-                  </Button>
-                </div>
-              ))}
+  <>
+    <Button variant="ghost" size="sm" onClick={() => setEditingUser(u)}>Edit</Button>
+    <button 
+      onClick={() => {
+        if(window.confirm(`Are you sure you want to delete ${u.full_name}?`)) {
+          deleteUser.mutate(u.id);
+        }
+      }} 
+      className="text-gray-300 hover:text-red-500 transition-colors p-1"
+      title="Delete User"
+    >
+      <Trash2 className="w-4 h-4"/>
+    </button>
+  </>
+)}
               </div>
             </div>
           )}
