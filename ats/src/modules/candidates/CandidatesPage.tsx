@@ -474,8 +474,7 @@ export function CandidatesPage() {
 const displayed = useMemo(() => {
     let list = candidates.filter((c:any) => showArchived ? !!c.archived_at : !c.archived_at)
 
-    // Explicit type-casting to fix TS2339 error cleanly
-    const agencyId = (user as any)?.agency_id
+    const agencyId = user?.agency_id
     if (isAgency && agencyId) {
       list = list.filter((c:any) => c.agency_id === agencyId)
     }
