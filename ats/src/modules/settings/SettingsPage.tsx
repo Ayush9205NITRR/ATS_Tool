@@ -15,12 +15,44 @@ import { zodResolver } from '@hookform/resolvers/zod'
 
 const inputCls = 'w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500'
 
-const userSchema = z.object({
-  full_name: z.string().min(2, 'Required'),
-  email: z.string().email('Valid email required'),
-  password: z.string().min(8, 'Min 8 characters'),
-  role: z.enum(['super_admin','admin','hr_team','interviewer']),
-})
+const createUser = useMutation({
+    mutationFn: async (d: UserFormData) => {
+      // 1. Create the user authentication and base profile via RPC
+      const { data: userId, error } = await supabase.rpc('create_user_with_auth', {
+        p_email: d.email,
+        p_password: d.password,
+        p_full_name: d.full_name,
+        p_role: d.role,
+      })
+      if (error) throw new Error(error.message)
+
+      // 2. If the user is an agency, provision and link their agency container automatically
+      if (d.role === 'agency') {
+        const { data: newAgency, error: agencyErr } = await supabase
+          .from('agencies')
+          .insert({ name: d.full_name })
+          .select('id')
+          .single()
+
+        if (agencyErr) throw agencyErr
+
+        if (newAgency && userId) {
+          const { error: linkErr } = await supabase
+            .from('users')
+            .update({ agency_id: newAgency.id })
+            .eq('id', userId)
+            if (linkErr) throw linkErr
+        }
+      }
+      return userId
+    },
+    onSuccess: () => { 
+      qc.invalidateQueries({ queryKey: ['users'] }); 
+      qc.invalidateQueries({ queryKey: ['agencies'] }); 
+      resetU(); 
+      setShowUserModal(false);
+    },
+  })
 type UserFormData = z.infer<typeof userSchema>
 
 const fieldSchema = z.object({
