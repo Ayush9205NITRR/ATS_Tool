@@ -181,12 +181,15 @@ const updateRole = useMutation({
 
   const deleteUser = useMutation({
     mutationFn: async (id: string) => {
-      // delete_user_with_auth removes from auth.users which cascades to public.users
+      // delete_user_with_auth deletes from auth.users, which cascades to public.users
       const { error } = await supabase.rpc('delete_user_with_auth', { user_id: id })
-      if (error) throw error
+      if (error) throw new Error(error.message)
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['users'] })
+    },
+    onError: (err: Error) => {
+      alert(`Delete failed: ${err.message}`)
     },
   })
 
@@ -315,16 +318,20 @@ const updateRole = useMutation({
                   {isSuperAdmin && (
                     <div className="flex items-center gap-2">
                       <Button variant="ghost" size="sm" onClick={() => setEditingUser(u)}>Edit</Button>
-                      <button 
+                      <button
                         onClick={() => {
-                          if(window.confirm(`Are you sure you want to delete ${u.full_name}?`)) {
-                            deleteUser.mutate(u.id);
+                          if (window.confirm(`Delete ${u.full_name}? This cannot be undone.`)) {
+                            deleteUser.mutate(u.id)
                           }
-                        }} 
-                        className="text-gray-300 hover:text-red-500 transition-colors p-1"
+                        }}
+                        disabled={deleteUser.isPending}
+                        className="text-gray-300 hover:text-red-500 transition-colors p-1 disabled:opacity-40 disabled:cursor-not-allowed"
                         title="Delete User"
                       >
-                        <Trash2 className="w-4 h-4"/>
+                        {deleteUser.isPending
+                          ? <Loader2 className="w-4 h-4 animate-spin"/>
+                          : <Trash2 className="w-4 h-4"/>
+                        }
                       </button>
                     </div>
                   )}
