@@ -6,7 +6,7 @@ import { candidateService, type CandidateFilters } from './candidateService'
 import { supabase } from '../../lib/supabaseClient'
 import { useAuthStore } from '../auth/authStore'
 
-// Fetch all open jobs once, cache 60s — used to enrich candidates with job details safely
+// Fetch all open jobs once, cache 60s — used to enrich candidates safely
 function useJobsMap() {
   return useQuery({
     queryKey: ['jobs', 'map'],
@@ -27,21 +27,20 @@ export function useCandidates(filters: CandidateFilters & { search?: string } = 
   return useQuery({
     queryKey: ['candidates', filters, user?.id, user?.role],
     queryFn: async () => {
-      // 1. Fetch raw list from candidate service using filters
+      // 1. Fetch data from service
       let candidates = await candidateService.list(filters)
 
-      // 2. Strict backend/client enforcement for agency users
+      // 2. Strict client enforcement loop for agency constraints
       if (user?.role === 'agency') {
         const currentAgencyId = (user as any).agency_id
         if (currentAgencyId) {
           candidates = candidates.filter((c: any) => c.agency_id === currentAgencyId)
         } else {
-          // Secure boundary wrapper: if user has no agency_id unassigned, return empty array safely
           return []
         }
       }
 
-      // 3. Local search fuzzy lookup filter to keep calculations snappy
+      // 3. Local fuzzy search logic
       if (filters?.search) {
         const q = filters.search.toLowerCase()
         candidates = candidates.filter(
@@ -51,7 +50,7 @@ export function useCandidates(filters: CandidateFilters & { search?: string } = 
         )
       }
 
-      // 4. Enrich candidates with cached job data client-side (no expensive direct DB relations loop needed)
+      // 4. Enrich candidates with cached job data
       return candidates.map((c: any) => ({
         ...c,
         job: c.job_id && jobsMap[c.job_id] ? jobsMap[c.job_id] : null,
