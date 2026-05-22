@@ -214,6 +214,10 @@ $$;
 -- Called by SettingsPage to provision a new team member.
 -- Inserts into auth.users (hashing the password); the trigger above
 -- then syncs the profile into public.users automatically.
+--
+-- FIX: instance_id is fetched dynamically from auth.instances so this
+-- works on both Supabase Cloud and self-hosted (hardcoding the all-zeros
+-- UUID breaks Cloud deployments where the instance_id differs).
 create or replace function public.create_user_with_auth(
   p_email     text,
   p_password  text,
@@ -226,11 +230,18 @@ security definer
 set search_path = public
 as $$
 declare
-  new_uid uuid;
+  new_uid    uuid := gen_random_uuid();
+  v_instance uuid;
 begin
   if p_role not in ('super_admin','admin','hr_team','interviewer','agency') then
     raise exception 'Invalid role: %', p_role;
   end if;
+
+  -- Fetch the real instance_id (Supabase Cloud ≠ all-zeros)
+  select coalesce(
+    (select id from auth.instances limit 1),
+    '00000000-0000-0000-0000-000000000000'::uuid
+  ) into v_instance;
 
   insert into auth.users (
     instance_id,
@@ -250,8 +261,8 @@ begin
     email_change
   )
   values (
-    '00000000-0000-0000-0000-000000000000',
-    gen_random_uuid(),
+    v_instance,
+    new_uid,
     'authenticated',
     'authenticated',
     lower(trim(p_email)),
@@ -262,13 +273,47 @@ begin
     now(),
     now(),
     '', '', '', ''
-  )
-  returning id into new_uid;
+  );
+
+  -- Trigger handle_new_user fires automatically above; but as a safety net
+  -- ensure the public profile exists with the correct role (covers cases where
+  -- the trigger fires before the INSERT commits in some Supabase versions).
+  insert into public.users (id, email, full_name, role, is_active)
+  values (new_uid, lower(trim(p_email)), p_full_name, p_role::user_role, true)
+  on conflict (id) do update
+    set role = excluded.role, full_name = excluded.full_name;
 
   return new_uid;
 exception
   when unique_violation then
     raise exception 'A user with email % already exists.', p_email;
+end;
+$$;
+
+-- ─── RPC: claim_agency_candidates ───────────────────────────
+-- After creating an agency, call this to backfill agency_id on any
+-- existing candidates whose source_name matches the agency name
+-- (case-insensitive). Returns the count of records updated.
+create or replace function public.claim_agency_candidates(
+  p_agency_id   uuid,
+  p_agency_name text
+)
+returns integer
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_count integer;
+begin
+  update public.candidates
+  set agency_id = p_agency_id
+  where source_category = 'agency'
+    and lower(source_name) = lower(p_agency_name)
+    and agency_id is null;
+
+  get diagnostics v_count = row_count;
+  return v_count;
 end;
 $$;
 
@@ -541,9 +586,53 @@ create index idx_feedback_interviewer   on public.interview_feedback(interviewer
 -- Step 8: Replace the trigger with the crash-proof version
 -- (paste the CREATE OR REPLACE FUNCTION public.handle_new_user() block from above)
 
--- Step 9: Create new RPCs
+-- Step 9: Create / replace RPCs
 -- (paste each CREATE OR REPLACE FUNCTION block from above:
---  create_user_with_auth, update_user_password, delete_user_with_auth, check_candidate_duplicate)
+--  create_user_with_auth, update_user_password, delete_user_with_auth,
+--  check_candidate_duplicate, claim_agency_candidates)
+
+-- Step 9b: ONE-TIME migration — backfill agency_id on ~70 historical records
+-- This script finds every distinct source_name where source_category = 'agency',
+-- creates an agency row if one does not exist, then links the candidates.
+-- Run it once in the Supabase SQL editor after running Step 2 (agencies table).
+--
+-- DO $$
+-- DECLARE
+--   rec        RECORD;
+--   v_agency_id uuid;
+--   v_count    integer;
+-- BEGIN
+--   FOR rec IN
+--     SELECT DISTINCT lower(source_name) AS sname, source_name AS raw_name
+--     FROM   public.candidates
+--     WHERE  source_category = 'agency'
+--       AND  source_name IS NOT NULL AND source_name <> ''
+--       AND  agency_id IS NULL
+--   LOOP
+--     -- Find an existing agency (case-insensitive)
+--     SELECT id INTO v_agency_id
+--     FROM   public.agencies
+--     WHERE  lower(name) = rec.sname
+--     LIMIT  1;
+--
+--     -- Create one if it doesn't exist yet
+--     IF v_agency_id IS NULL THEN
+--       INSERT INTO public.agencies (name) VALUES (rec.raw_name)
+--       RETURNING id INTO v_agency_id;
+--     END IF;
+--
+--     -- Backfill candidates
+--     UPDATE public.candidates
+--     SET    agency_id = v_agency_id
+--     WHERE  source_category = 'agency'
+--       AND  lower(source_name) = rec.sname
+--       AND  agency_id IS NULL;
+--
+--     GET DIAGNOSTICS v_count = ROW_COUNT;
+--     RAISE NOTICE 'Agency "%": linked % candidate(s) → agency_id=%',
+--       rec.raw_name, v_count, v_agency_id;
+--   END LOOP;
+-- END $$;
 
 -- Step 10: Drop outdated policies and add new ones
 -- DROP POLICY IF EXISTS "candidates_insert_admin"   ON public.candidates;
