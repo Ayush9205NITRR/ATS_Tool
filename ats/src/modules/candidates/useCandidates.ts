@@ -75,3 +75,24 @@ export function useDeleteCandidate() {
     },
   })
 }
+
+// useCandidates.ts mein query function ko aise update karein
+export function useCandidates() {
+  const { user } = useAuthStore();
+  
+  return useQuery({
+    queryKey: ['candidates', user?.role],
+    queryFn: async () => {
+      let query = supabase.from('candidates').select('*, jobs(title)');
+      
+      // Agar user Agency hai, toh sirf unka data filter karein
+      if (user?.role === 'agency' && user.agency_id) {
+        query = query.eq('agency_id', user.agency_id);
+      }
+      
+      const { data, error } = await query;
+      if (error) throw error;
+      return data;
+    }
+  });
+}
