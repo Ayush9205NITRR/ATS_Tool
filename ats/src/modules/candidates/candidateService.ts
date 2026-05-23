@@ -131,10 +131,14 @@ export const candidateService = {
     if (normalized.phone && phoneDups.has(normalized.phone)) {
       throw new Error('Candidate already exists.')
     }
-    const { data, error } = await supabase
-      .from('candidates').insert(normalized).select().single()
+    // Use SECURITY DEFINER RPC to bypass RLS — server enforces uploaded_by + agency_id.
+    const rpcPayload: any = { ...normalized }
+    Object.keys(rpcPayload).forEach(k => { if (rpcPayload[k] === undefined) delete rpcPayload[k] })
+
+    const { data: rows, error } = await supabase.rpc('bulk_insert_candidates', { p_candidates: [rpcPayload] })
+    const data = (rows ?? [])[0] ?? null
     if (error) {
-      if (error.code === '23505') throw new Error('Candidate already exists.')
+      if ((error as any).code === '23505') throw new Error('Candidate already exists.')
       throw error
     }
     return data
