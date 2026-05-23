@@ -28,24 +28,42 @@ export function HRDashboardWidget() {
         : supabase.from('jobs').select('id,title,status').eq('status', 'open')
 
       const { data: jobs } = await jobQuery.order('created_at', { ascending: false })
-      if (!jobs?.length) return { jobs: [], totalCandidates: 0, stageBreakdown: {} }
 
-      const { data: candidates } = await supabase
-        .from('candidates')
-        .select('job_id, current_stage, status')
-        .in('job_id', jobs.map(j => j.id))
-        .eq('status', 'active')
+      // Candidates via job ownership
+      const jobCandidates = jobs?.length
+        ? (await supabase
+            .from('candidates')
+            .select('id, job_id, current_stage, status, hr_owner')
+            .in('job_id', jobs.map(j => j.id))
+            .eq('status', 'active')
+          ).data ?? []
+        : []
+
+      // Candidates directly assigned to this HR (hr_owner = user.id) — not already counted
+      const jobCandidateIds = new Set(jobCandidates.map((c: any) => c.id))
+      let directCandidates: any[] = []
+      if (isHR) {
+        const { data: direct } = await supabase
+          .from('candidates')
+          .select('id, job_id, current_stage, status, hr_owner')
+          .eq('hr_owner', user!.id)
+          .eq('status', 'active')
+        directCandidates = (direct ?? []).filter(c => !jobCandidateIds.has(c.id))
+      }
+
+      const allCandidates = [...jobCandidates, ...directCandidates]
 
       const stageBreakdown: Record<string, number> = {}
       const jobCounts: Record<string, number> = {}
-      candidates?.forEach(c => {
+      allCandidates.forEach((c: any) => {
         stageBreakdown[c.current_stage] = (stageBreakdown[c.current_stage] ?? 0) + 1
-        jobCounts[c.job_id] = (jobCounts[c.job_id] ?? 0) + 1
+        if (c.job_id) jobCounts[c.job_id] = (jobCounts[c.job_id] ?? 0) + 1
       })
 
       return {
-        jobs: jobs.map(j => ({ ...j, count: jobCounts[j.id] ?? 0 })),
-        totalCandidates: candidates?.length ?? 0,
+        jobs: (jobs ?? []).map(j => ({ ...j, count: jobCounts[j.id] ?? 0 })),
+        totalCandidates: allCandidates.length,
+        directCount:     directCandidates.length,
         stageBreakdown,
       }
     },
@@ -57,7 +75,7 @@ export function HRDashboardWidget() {
   return (
     <WidgetBase title={isHR ? 'My Pipeline' : 'Pipeline Overview'} loading={isLoading} error={error?.message}>
       {/* Stats row */}
-      <div className="grid grid-cols-2 gap-3 mb-4">
+      <div className={`grid gap-3 mb-4 ${isHR && (data?.directCount ?? 0) > 0 ? 'grid-cols-3' : 'grid-cols-2'}`}>
         <div className="bg-blue-50 rounded-lg p-3 text-center">
           <Briefcase className="w-4 h-4 text-blue-500 mx-auto mb-1" />
           <p className="text-2xl font-bold text-blue-700">{data?.jobs.length ?? 0}</p>
@@ -68,6 +86,13 @@ export function HRDashboardWidget() {
           <p className="text-2xl font-bold text-green-700">{data?.totalCandidates ?? 0}</p>
           <p className="text-xs text-green-500">Candidates</p>
         </div>
+        {isHR && (data?.directCount ?? 0) > 0 && (
+          <div className="bg-indigo-50 rounded-lg p-3 text-center">
+            <Users className="w-4 h-4 text-indigo-500 mx-auto mb-1" />
+            <p className="text-2xl font-bold text-indigo-700">{data?.directCount ?? 0}</p>
+            <p className="text-xs text-indigo-500">Assigned to me</p>
+          </div>
+        )}
       </div>
 
       {/* Jobs list */}
