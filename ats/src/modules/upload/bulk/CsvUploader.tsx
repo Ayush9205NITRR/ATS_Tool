@@ -242,14 +242,14 @@ export function CsvUploader() {
       setFileErr(''); setStep(2)
     }
     reader.readAsText(file)
-  }, [])
+  }, [customFields])  // customFields must be in deps so auto-detect sees the loaded list
 
   const onDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault()
     const file = e.dataTransfer.files[0]
     if (file?.name.endsWith('.csv') || file?.type === 'text/csv') onFile(file)
     else setFileErr('Please upload a .csv file.')
-  }, [onFile])
+  }, [onFile, customFields])
 
   const preview = async () => {
     const result = rows.map(r => transformRow(r, colMap, customFieldMap, user!.id, selectedJobId || null))
