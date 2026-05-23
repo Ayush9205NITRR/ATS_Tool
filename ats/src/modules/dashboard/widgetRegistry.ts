@@ -14,6 +14,7 @@ import { AnalyticsWidget }             from './widgets/AnalyticsWidget'
 import { JobFunnelWidget }             from './widgets/JobFunnelWidget'
 import { SourceSplitWidget }           from './widgets/SourceSplitWidget'
 import { SubSourcePipelineWidget }     from './widgets/SubSourcePipelineWidget'
+import { JobSourceBreakdownWidget }    from './widgets/JobSourceBreakdownWidget'
 import { AgencyDashboardWidget }       from './widgets/AgencyDashboardWidget'
 
 export interface WidgetConfig {
@@ -29,6 +30,7 @@ export const WIDGET_REGISTRY: WidgetConfig[] = [
   { id:'interviewer-stats',      title:'My Interviews',            component:InterviewerStatsWidget,     size:'md', roles:['interviewer','admin','super_admin'],           description:'Pending, completed, upcoming interviews' },
   { id:'interviewer-schedule',   title:'Interviewer Schedule',     component:InterviewerScheduleWidget,  size:'lg', roles:['super_admin','admin'],                         description:'Date-wise interview split + feedback per interviewer' },
   { id:'subsource-pipeline',     title:'Sub-Source Pipeline',      component:SubSourcePipelineWidget,    size:'lg', roles:['super_admin','admin'],                         description:'Pipeline stage split per sub-source' },
+  { id:'job-source-breakdown',  title:'Job × Source × Stage',     component:JobSourceBreakdownWidget,   size:'lg', roles:['super_admin','admin','hr_team'],               description:'Nested Job → Source → Sub-source → Stage breakdown' },
   { id:'source-funnel',          title:'Source Candidates',        component:SourceFunnelWidget,         size:'md', roles:['super_admin','admin','hr_team'],               description:'Platform, Agency, College breakdown' },
   { id:'job-breakdown',          title:'Candidates by Job',        component:JobBreakdownWidget,         size:'lg', roles:['super_admin','admin','hr_team'],               description:'Per-job candidate count and stages' },
   { id:'job-funnel',             title:'Job-wise Pipeline',        component:JobFunnelWidget,            size:'md', roles:['super_admin','admin'],                         description:'Stage funnel per job with filter' },
