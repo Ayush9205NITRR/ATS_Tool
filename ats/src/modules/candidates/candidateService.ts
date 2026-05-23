@@ -189,8 +189,15 @@ export const candidateService = {
 
     if (!clean.length) return []
 
-    const { data, error } = await supabase
-      .from('candidates').insert(clean).select()
+    // Use SECURITY DEFINER RPC — bypasses RLS, server enforces uploaded_by + agency_id.
+    // Strip nullish JSON fields so jsonb cast doesn't choke.
+    const payload = clean.map(c => {
+      const obj: any = { ...c }
+      Object.keys(obj).forEach(k => { if (obj[k] === undefined) delete obj[k] })
+      return obj
+    })
+
+    const { data, error } = await supabase.rpc('bulk_insert_candidates', { p_candidates: payload })
     if (error) {
       if (error.code === '23505') throw new Error('Candidate already exists.')
       throw error
