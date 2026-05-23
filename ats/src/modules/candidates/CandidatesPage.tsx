@@ -449,8 +449,9 @@ export function CandidatesPage() {
       return data ?? []
     }
   })
-  const { data: hrUsers=[] }     = useQuery({ queryKey:['users','hr'],           queryFn:async()=>{const{data}=await supabase.from('users').select('id,full_name').in('role',['hr_team','admin','super_admin']).eq('is_active',true);return data??[]} })
-  const { data: interviewers=[] }= useQuery({ queryKey:['users','interviewers'], queryFn:async()=>{const{data}=await supabase.from('users').select('id,full_name').eq('role','interviewer').eq('is_active',true);return data??[]} })
+  // Only show HR Team + Admin in HR Owner dropdown (not super_admin — they're system users)
+  const { data: hrUsers=[] }     = useQuery({ queryKey:['users','hr'],           queryFn:async()=>{const{data}=await supabase.from('users').select('id,full_name').in('role',['hr_team','admin']).eq('is_active',true).order('full_name');return data??[]} })
+  const { data: interviewers=[] }= useQuery({ queryKey:['users','interviewers'], queryFn:async()=>{const{data}=await supabase.from('users').select('id,full_name').eq('role','interviewer').eq('is_active',true).order('full_name');return data??[]} })
   const { data: customFields=[] }= useQuery({ queryKey:['custom-fields'],        queryFn:async()=>{const{data}=await supabase.from('custom_fields').select('*').eq('is_active',true).order('sort_order');return data??[]} })
 
   // Core useCandidates hook query injection context handling
