@@ -10,10 +10,10 @@ const STORAGE_KEY = 'ats_db_v4'
 
 // Role-specific default widgets — clean and minimal
 const ROLE_DEFAULTS: Record<string, string[]> = {
-  super_admin: ['total-candidates','open-jobs','analytics','source-funnel','recent-activity','job-breakdown','funnel-stages','hr-team'],
-  admin:       ['total-candidates','open-jobs','analytics','hr-dashboard','source-funnel','recent-activity','job-breakdown'],
-  hr_team:     ['total-candidates','open-jobs','hr-dashboard','source-funnel','recent-activity'],
-  interviewer: ['interviewer-stats','recent-activity'],
+  super_admin: ['total-candidates','open-jobs','analytics','source-funnel','job-breakdown','funnel-stages','subsource-pipeline','interviewer-schedule','hr-team'],
+  admin:       ['total-candidates','open-jobs','analytics','hr-dashboard','source-funnel','job-breakdown','subsource-pipeline','interviewer-schedule'],
+  hr_team:     ['total-candidates','open-jobs','hr-dashboard','source-funnel','funnel-stages'],
+  interviewer: ['interviewer-stats'],
   agency:      ['agency-dashboard'],
 }
 
