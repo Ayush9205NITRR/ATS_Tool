@@ -78,19 +78,64 @@ interface ColumnMap {
 }
 
 function autoDetectColumns(headers: string[]): Partial<ColumnMap> {
-  const find = (...patterns: string[]) =>
-    headers.find(h => patterns.some(p => h.toLowerCase().includes(p.toLowerCase()))) ?? ''
+  // Exact-match first, then substring — so "Name" doesn't grab "Agency Name"
+  const find = (...patterns: string[]) => {
+    const lower = headers.map(h => h.toLowerCase())
+    // 1. exact match
+    for (const p of patterns) {
+      const idx = lower.indexOf(p.toLowerCase())
+      if (idx !== -1) return headers[idx]
+    }
+    // 2. substring match
+    for (const p of patterns) {
+      const h = headers.find(h => h.toLowerCase().includes(p.toLowerCase()))
+      if (h) return h
+    }
+    return ''
+  }
   return {
-    full_name:   find('full name', 'name', 'candidate'),
-    email:       find('email', 'mail'),
-    phone:       find('phone', 'mobile', 'contact'),
-    linkedin:    find('linkedin', 'profile'),
-    source:      find('source'),
-    source_name: find('college/university', 'college', 'university', 'institution', 'agency'),
+    full_name:   find('name', 'full name', 'candidate name', 'candidate'),
+    email:       find('email id', 'email', 'mail'),
+    phone:       find('contact', 'phone', 'mobile'),
+    linkedin:    find('linkedin', 'profile url'),
+    source:      find('source type', 'source'),
+    // source_name only for non-agency (agency is hardcoded server-side)
+    source_name: find('college/university', 'college', 'university', 'institution'),
     resume:      find('resume', 'cv'),
-    notes:       find('tell us', 'about yourself', 'summary', 'note', 'why'),
+    notes:       find('feedback', 'comments', 'tell us', 'about yourself', 'summary', 'note', 'why'),
     college:     find('college/university', 'university name', 'institute'),
   }
+}
+
+// Auto-map CSV headers → custom field keys using common patterns
+function autoDetectCustomFields(headers: string[], customFields: any[]): Record<string, string> {
+  const FIELD_PATTERNS: Record<string, string[]> = {
+    ctc_in_lpa:           ['c.ctc', 'ctc', 'current ctc', 'current salary'],
+    expected_ctc:         ['e.ctc', 'ectc', 'expected ctc', 'expected salary'],
+    notice_period:        ['np', 'notice period', 'notice'],
+    current_organization: ['organization', 'current company', 'company', 'employer', 'org'],
+    designation:          ['designation', 'current designation', 'title', 'position'],
+    years_of_experience:  ['experience', 'exp', 'years of experience', 'total exp'],
+    location:             ['location', 'city', 'current location'],
+  }
+  const result: Record<string, string> = {}
+  customFields.forEach(field => {
+    const patterns = FIELD_PATTERNS[field.field_name] ?? [field.field_label?.toLowerCase(), field.field_name]
+    const lowerHeaders = headers.map(h => h.toLowerCase())
+    // exact first
+    for (const p of patterns) {
+      const idx = lowerHeaders.indexOf(p.toLowerCase())
+      if (idx !== -1) { result[field.field_name] = headers[idx]; break }
+    }
+    if (!result[field.field_name]) {
+      // substring fallback
+      for (const p of patterns) {
+        const h = headers.find(h => h.toLowerCase().includes(p.toLowerCase()))
+        if (h) { result[field.field_name] = h; break }
+      }
+    }
+  })
+  return result
 }
 
 function transformRow(
@@ -161,10 +206,13 @@ export function CsvUploader() {
     queryKey: ['jobs', 'open', isAgency ? `agency-${user?.id}` : 'all'],
     queryFn: async () => {
       const { data } = await supabase.from('jobs').select('id,title,show_to_agency,allowed_agency_ids').eq('status','open').order('title')
-      if (!isAgency || !user?.id) return data ?? []
+      if (!isAgency) return data ?? []
+      // For agency: show jobs that are visible to all agencies OR specifically include this agency user
       return (data ?? []).filter((j:any) =>
         j.show_to_agency &&
-        (!j.allowed_agency_ids || j.allowed_agency_ids.length === 0 || j.allowed_agency_ids.includes(user.id))
+        (!j.allowed_agency_ids || j.allowed_agency_ids.length === 0 ||
+          j.allowed_agency_ids.includes(user?.id) ||
+          j.allowed_agency_ids.includes(user?.agency_id))
       )
     },
   })
@@ -190,7 +238,7 @@ export function CsvUploader() {
       setIsAirtable(isAt)
       setRows(parsed); setHeaders(hdrs)
       setColMap(autoDetectColumns(hdrs))
-      setCustomFieldMap({})
+      setCustomFieldMap(autoDetectCustomFields(hdrs, customFields as any[]))
       setFileErr(''); setStep(2)
     }
     reader.readAsText(file)
@@ -319,16 +367,22 @@ export function CsvUploader() {
         <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Standard Fields</p>
         <div className="space-y-2 mb-5">
           {isAgency && (
-            <div className="flex items-center gap-3 bg-purple-50 border border-purple-200 rounded-lg px-3 py-2">
-              <span className="text-xs text-purple-700 font-medium">🏢 Source auto-set to Agency</span>
+            <div className="flex flex-col gap-1.5 bg-purple-50 border border-purple-200 rounded-lg px-3 py-2.5 mb-1">
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-semibold text-purple-700">🏢 Source</span>
+                <span className="text-xs bg-purple-200 text-purple-800 px-2 py-0.5 rounded-full font-medium">Agency — auto-set</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-semibold text-purple-700">📌 Sub-Source</span>
+                <span className="text-xs bg-purple-200 text-purple-800 px-2 py-0.5 rounded-full font-medium">{user?.full_name ?? 'Your agency name'} — auto-set</span>
+              </div>
             </div>
           )}
           {([
             ['full_name','Full Name *'],['email','Email *'],['phone','Phone'],
             ['linkedin','LinkedIn URL'],
             ...(!isAgency ? [['source','Source Type'],['source_name','Source / College']] as [keyof ColumnMap, string][] : []),
-            ...(isAgency ? [['source_name','Sub-Source (e.g. Naukri, LinkedIn)']] as [keyof ColumnMap, string][] : []),
-            ['resume','Resume / CV'],['notes','Notes'],
+            ['resume','Resume / CV'],['notes','Notes / Comments'],
           ] as [keyof ColumnMap, string][]).map(([key,label])=>(
             <div key={key} className="flex items-center gap-3">
               <span className="text-gray-600 w-36 flex-shrink-0 text-xs">{label}</span>
