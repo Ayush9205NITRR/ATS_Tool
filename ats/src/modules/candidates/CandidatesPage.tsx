@@ -151,11 +151,9 @@ const SubSourceCell = memo(({ cid, category, name, canEdit, onUpdate }: {
   const loadData = () => {
     if (loaded) return; setLoaded(true)
     if (category === 'agency') {
-      supabase.from('agencies').select('id,name').order('name')
-        .then(({data}) => {
-          const formatted = (data ?? []).map((d: any) => ({ id: d.id, full_name: d.name }))
-          setAgencyUsers(formatted)
-        })
+      // Only show agencies that are registered users in Settings (role='agency')
+      supabase.from('users').select('id,full_name').eq('role','agency').eq('is_active',true).order('full_name')
+        .then(({data}) => setAgencyUsers(data ?? []))
     } else if (category === 'college') {
       supabase.from('candidates').select('source_name').eq('source_category','college').not('source_name','is',null)
         .then(({data}) => {
