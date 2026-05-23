@@ -114,15 +114,13 @@ export const candidateService = {
   create: async (payload: Omit<Candidate, 'id' | 'created_at' | 'updated_at'>, callerRole?: string, callerId?: string) => {
     const normalized = normalizePayload(payload)
 
-    // Agency: agency_id = their own user id, source_name = their full_name
+    // Agency: agency_id = FK from agencies table (NOT user.id)
     if (callerRole === 'agency' && callerId) {
       normalized.source_category = 'agency' as any
-      ;(normalized as any).agency_id = callerId
-      if (!normalized.source_name) {
-        const { data: userRow } = await supabase
-          .from('users').select('full_name').eq('id', callerId).maybeSingle()
-        if (userRow?.full_name) normalized.source_name = userRow.full_name
-      }
+      const { data: userRow } = await supabase
+        .from('users').select('full_name, agency_id').eq('id', callerId).maybeSingle()
+      ;(normalized as any).agency_id = userRow?.agency_id ?? null
+      if (!normalized.source_name && userRow?.full_name) normalized.source_name = userRow.full_name
     }
 
     // Server-side dedup before insert
@@ -160,16 +158,17 @@ export const candidateService = {
   bulkCreate: async (candidates: Omit<Candidate, 'id' | 'created_at' | 'updated_at'>[], callerRole?: string, callerId?: string) => {
     let normalized = candidates.map(normalizePayload)
 
-    // Agency: agency_id = their own user id, source_name = their full_name
+    // Agency: agency_id = the FK from agencies table (NOT user.id), source_name = agency name
     if (callerRole === 'agency' && callerId) {
       const { data: userRow } = await supabase
-        .from('users').select('full_name').eq('id', callerId).maybeSingle()
+        .from('users').select('full_name, agency_id').eq('id', callerId).maybeSingle()
       const agencyName = userRow?.full_name ?? ''
+      const agencyId   = userRow?.agency_id ?? null  // FK to agencies table — required by RLS INSERT check
       normalized = normalized.map(c => ({
         ...c,
         source_category: 'agency' as any,
-        agency_id: callerId,                        // agency_id = user's own id
-        source_name: c.source_name || agencyName,
+        agency_id:       agencyId,
+        source_name:     c.source_name || agencyName,
       }))
     }
 
