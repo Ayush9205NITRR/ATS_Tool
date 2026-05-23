@@ -353,14 +353,22 @@ export function CsvUploader() {
           </div>
         )}
 
-        {/* Job assignment */}
-        <div className="flex items-center gap-3 mb-4 p-3 bg-gray-50 rounded-lg">
-          <span className="text-xs text-gray-600 w-36 flex-shrink-0">Assign to Job</span>
-          <select value={selectedJobId} onChange={e=>setSelectedJobId(e.target.value)}
-            className="flex-1 px-3 py-1.5 border border-gray-200 rounded-lg text-xs bg-white focus:outline-none">
-            <option value="">— No job —</option>
-            {(jobs as any[]).map(j=><option key={j.id} value={j.id}>{j.title}</option>)}
-          </select>
+        {/* Job assignment — mandatory for agency */}
+        <div className={`flex items-center gap-3 mb-4 p-3 rounded-lg ${isAgency && !selectedJobId ? 'bg-red-50 border border-red-200' : 'bg-gray-50'}`}>
+          <span className="text-xs text-gray-600 w-36 flex-shrink-0">
+            Assign to Job {isAgency && <span className="text-red-500">*</span>}
+          </span>
+          <div className="flex-1">
+            <select value={selectedJobId} onChange={e=>setSelectedJobId(e.target.value)}
+              className={`w-full px-3 py-1.5 border rounded-lg text-xs bg-white focus:outline-none ${isAgency && !selectedJobId ? 'border-red-300' : 'border-gray-200'}`}>
+              {!isAgency && <option value="">— No job —</option>}
+              {isAgency && <option value="">— Select a job (required) —</option>}
+              {(jobs as any[]).map(j=><option key={j.id} value={j.id}>{j.title}</option>)}
+            </select>
+            {isAgency && !selectedJobId && (
+              <p className="text-xs text-red-500 mt-1">You must select a job before proceeding.</p>
+            )}
+          </div>
         </div>
 
         {/* Standard fields */}
@@ -425,7 +433,7 @@ export function CsvUploader() {
         )}
 
         <div className="flex justify-end">
-          <Button onClick={preview} icon={<ChevronRight className="w-4 h-4"/>}>Preview {rows.length} rows</Button>
+          <Button onClick={preview} disabled={isAgency && !selectedJobId} icon={<ChevronRight className="w-4 h-4"/>}>Preview {rows.length} rows</Button>
         </div>
       </div>
     )
