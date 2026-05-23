@@ -30,13 +30,22 @@ export function useCandidates(filters: CandidateFilters & { search?: string } = 
       // 1. Fetch data — RLS enforces agency isolation server-side
       let candidates = await candidateService.list(filters)
 
-      // 2. Defence-in-depth client filter for agency users.
-      //    RLS already blocks non-matching rows; this guards against
-      //    misconfigured policies or anon-key edge cases.
+      // 2. Role-based client filter (defence-in-depth on top of RLS)
       if (user?.role === 'agency') {
         const agencyId = user.agency_id
         if (!agencyId) return []
         candidates = candidates.filter((c: any) => c.agency_id === agencyId)
+      } else if (user?.role === 'hr_team') {
+        // HR sees only candidates assigned to them via hr_owner or assigned_hrs
+        candidates = candidates.filter((c: any) =>
+          c.hr_owner === user.id ||
+          (Array.isArray(c.assigned_hrs) && c.assigned_hrs.includes(user.id))
+        )
+      } else if (user?.role === 'interviewer') {
+        // Interviewer sees only candidates assigned to them
+        candidates = candidates.filter((c: any) =>
+          Array.isArray(c.assigned_interviewers) && c.assigned_interviewers.includes(user.id)
+        )
       }
 
       // 3. Local fuzzy search
