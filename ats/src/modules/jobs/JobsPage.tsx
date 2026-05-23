@@ -56,10 +56,26 @@ function JobForm({ job, onClose }: { job?: any; onClose: () => void }) {
   const [agencyIds, setAgencyIds] = useState<string[]>(job?.allowed_agency_ids ?? [])
   const [showToAllAgencies, setShowToAllAgencies] = useState<boolean>(job?.show_to_agency ?? false)
 
+  // HR assignment (multi)
+  const [hrIds, setHrIds]                 = useState<string[]>(job?.assigned_hrs ?? [])
+  const [assignAllCandidates, setAssignAllCandidates] = useState<boolean>(false)
+
   const { data: agencyUsers = [] } = useQuery({
     queryKey: ['agency-users'],
     queryFn: async () => {
       const { data } = await supabase.from('users').select('id,full_name,email').eq('role','agency').eq('is_active',true).order('full_name')
+      return data ?? []
+    },
+  })
+
+  const { data: hrUsers = [] } = useQuery({
+    queryKey: ['hr-users'],
+    queryFn: async () => {
+      const { data } = await supabase.from('users')
+        .select('id,full_name,email,role')
+        .in('role', ['hr_team','admin'])
+        .eq('is_active', true)
+        .order('full_name')
       return data ?? []
     },
   })
@@ -87,14 +103,32 @@ function JobForm({ job, onClose }: { job?: any; onClose: () => void }) {
         jd_link: (d as any).jd_link||null,
         show_to_agency: showToAllAgencies || agencyIds.length > 0,
         allowed_agency_ids: showToAllAgencies ? [] : agencyIds,
+        assigned_hrs: hrIds,
+        // hr_owner stays as the FIRST selected HR for backward compatibility
+        hr_owner: hrIds[0] ?? null,
       }
-      if (job) return jobService.update(job.id, payload as any)
-      return jobService.create({
-        ...payload, status:'open', hr_owner: null, created_by: user!.id,
-        pipeline_stages: ['Applied','Screening','R1','Case Study','R2','R3','CF (Virtual)','CF (In-Person)','Offer','Hired','Rejected'],
-      } as any)
+      const saved = job
+        ? await jobService.update(job.id, payload as any)
+        : await jobService.create({
+            ...payload, status:'open', created_by: user!.id,
+            pipeline_stages: ['Applied','Screening','R1','Case Study','R2','R3','CF (Virtual)','CF (In-Person)','Offer','Hired','Rejected'],
+          } as any)
+
+      // If the toggle is on, propagate HRs to every existing candidate of this job
+      if (assignAllCandidates && hrIds.length > 0 && (saved as any)?.id) {
+        const { error: rpcErr } = await supabase.rpc('assign_hrs_to_job_candidates', {
+          p_job_id: (saved as any).id,
+          p_hr_ids: hrIds,
+        })
+        if (rpcErr) console.error('[assign_hrs_to_job_candidates]', rpcErr)
+      }
+      return saved
     },
-    onSuccess: () => { qc.invalidateQueries({queryKey:['jobs']}); onClose() },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['jobs'] })
+      qc.invalidateQueries({ queryKey: ['candidates'] })
+      onClose()
+    },
   })
 
   return (
@@ -168,6 +202,67 @@ function JobForm({ job, onClose }: { job?: any; onClose: () => void }) {
       <div>
         <label className="block text-sm font-medium text-gray-700 mb-1">Description / Notes</label>
         <textarea {...register('description')} rows={4} placeholder="Job summary, key responsibilities, what you're looking for…" className={inputCls}/>
+      </div>
+
+      {/* HR Assignment — multi-select + assign-all toggle */}
+      <div className="border border-blue-200 rounded-xl p-4 bg-blue-50/30">
+        <div className="flex items-center justify-between mb-3">
+          <div>
+            <p className="text-sm font-medium text-gray-700">Assign HR Manager(s)</p>
+            <p className="text-xs text-gray-400 mt-0.5">Who manages this job (Admin / HR Team)</p>
+          </div>
+          {hrIds.length > 0 && (
+            <span className="text-xs text-blue-700 font-medium bg-blue-100 px-2 py-1 rounded-full">
+              {hrIds.length} selected
+            </span>
+          )}
+        </div>
+
+        <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1 mb-3">
+          {(hrUsers as any[]).length === 0 ? (
+            <p className="text-xs text-amber-600">No HR or Admin users found.</p>
+          ) : (hrUsers as any[]).map((u: any) => {
+            const sel = hrIds.includes(u.id)
+            return (
+              <div key={u.id}
+                onClick={e => { e.preventDefault(); e.stopPropagation(); setHrIds(prev => sel ? prev.filter(id => id !== u.id) : [...prev, u.id]) }}
+                className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg cursor-pointer transition-colors select-none ${sel ? 'bg-blue-50 border border-blue-300' : 'hover:bg-gray-50 border border-transparent'}`}>
+                <div className={`w-4 h-4 rounded border-2 flex items-center justify-center flex-shrink-0 transition-all ${sel ? 'bg-blue-500 border-blue-500' : 'border-gray-300'}`}>
+                  {sel && <svg className="w-2.5 h-2.5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7"/></svg>}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-gray-800">{u.full_name}</p>
+                  <p className="text-xs text-gray-400">{u.email} · {u.role === 'admin' ? 'Admin' : 'HR'}</p>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+
+        {/* Assign-all toggle */}
+        <label
+          className={`flex items-center justify-between gap-3 px-3 py-2 rounded-lg cursor-pointer transition-colors ${hrIds.length === 0 ? 'bg-gray-50 opacity-50 cursor-not-allowed' : 'bg-white border border-blue-200 hover:bg-blue-50'}`}
+          title={hrIds.length === 0 ? 'Select at least one HR first' : ''}
+        >
+          <div>
+            <p className="text-sm font-medium text-gray-700">Assign all candidates</p>
+            <p className="text-xs text-gray-400">Apply these HRs to every existing candidate of this job</p>
+          </div>
+          <div
+            onClick={e => {
+              e.preventDefault(); e.stopPropagation()
+              if (hrIds.length > 0) setAssignAllCandidates(o => !o)
+            }}
+            className={`w-10 h-5 rounded-full transition-colors relative ${assignAllCandidates ? 'bg-blue-500' : 'bg-gray-200'}`}
+          >
+            <span className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${assignAllCandidates ? 'translate-x-5' : 'translate-x-0.5'}`}/>
+          </div>
+        </label>
+        {assignAllCandidates && hrIds.length > 0 && (
+          <p className="text-xs text-blue-700 mt-2 px-2">
+            ✓ On save, {hrIds.length} HR{hrIds.length > 1 ? 's' : ''} will be assigned to every candidate of this job.
+          </p>
+        )}
       </div>
 
       {/* Agency Visibility — required field, not optional */}
