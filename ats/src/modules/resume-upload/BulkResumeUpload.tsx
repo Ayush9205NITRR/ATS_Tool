@@ -234,11 +234,11 @@ export function BulkResumeUpload() {
             ...(d.current_company ? { current_organization: d.current_company } : {}),
             ...(d.current_designation ? { designation: d.current_designation } : {}),
           },
+          uploaded_by: user!.id,
           agency_id: isAgency ? (user!.id ?? null) : null,
           interview_date: null,
           archived_at: null,
           archived_by: null,
-          uploaded_by: user!.id,
         }
       })
       return candidateService.bulkCreate(payloads, user?.role, user?.id)
@@ -268,7 +268,7 @@ export function BulkResumeUpload() {
   // Upload step
   if (step === 'upload') {
     return (
-      <div>
+      <div className="p-6">
         <div className="flex items-center justify-between mb-4">
           <p className="text-sm text-gray-600">Upload a CSV with resume URLs to bulk-parse and import candidates.</p>
           <button
@@ -387,7 +387,7 @@ export function BulkResumeUpload() {
   // Review step
   if (step === 'review') {
     return (
-      <div>
+      <div className="p-6">
         <div className="flex items-center gap-2 mb-4">
           <Eye className="w-5 h-5 text-gray-400" />
           <h3 className="text-sm font-semibold text-gray-900">Review Parsed Results</h3>
@@ -525,7 +525,7 @@ export function BulkResumeUpload() {
 
   // Done step
   return (
-    <div className="flex flex-col items-center justify-center py-12 gap-3">
+    <div className="flex flex-col items-center justify-center py-12 px-6 gap-3">
       <CheckCircle className="w-12 h-12 text-green-500" />
       <p className="text-lg font-semibold text-gray-900">Bulk Upload Complete!</p>
       <p className="text-sm text-gray-500">
