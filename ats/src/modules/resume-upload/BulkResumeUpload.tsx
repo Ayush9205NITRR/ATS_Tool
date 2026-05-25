@@ -234,6 +234,9 @@ export function BulkResumeUpload() {
             ...(d.current_company ? { current_organization: d.current_company } : {}),
             ...(d.current_designation ? { designation: d.current_designation } : {}),
           },
+          interview_date: null,
+          archived_at: null,
+          archived_by: null,
           uploaded_by: user!.id,
           ...(isAgency ? { agency_id: user!.id } : {}),
         }
