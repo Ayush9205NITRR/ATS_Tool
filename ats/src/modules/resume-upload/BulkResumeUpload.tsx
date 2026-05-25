@@ -234,11 +234,11 @@ export function BulkResumeUpload() {
             ...(d.current_company ? { current_organization: d.current_company } : {}),
             ...(d.current_designation ? { designation: d.current_designation } : {}),
           },
+          agency_id: isAgency ? (user!.id ?? null) : null,
           interview_date: null,
           archived_at: null,
           archived_by: null,
           uploaded_by: user!.id,
-          ...(isAgency ? { agency_id: user!.id } : {}),
         }
       })
       return candidateService.bulkCreate(payloads, user?.role, user?.id)
