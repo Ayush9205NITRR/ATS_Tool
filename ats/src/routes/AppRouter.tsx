@@ -9,7 +9,6 @@ const CandidatesPage   = lazy(() => import('../modules/candidates/CandidatesPage
 const CandidateProfile = lazy(() => import('../modules/candidates/CandidateProfilePage').then(m => ({ default: m.CandidateProfilePage })))
 const JobsPage         = lazy(() => import('../modules/jobs/JobsPage').then(m => ({ default: m.JobsPage })))
 const UploadPage       = lazy(() => import('../modules/upload/UploadPage').then(m => ({ default: m.UploadPage })))
-const ResumeUploadPage = lazy(() => import('../modules/resume-upload/ResumeUploadPage').then(m => ({ default: m.ResumeUploadPage })))
 const InterviewsPage   = lazy(() => import('../modules/interviews/InterviewsPage').then(m => ({ default: m.InterviewsPage })))
 const SettingsPage     = lazy(() => import('../modules/settings/SettingsPage'))
 
@@ -43,9 +42,6 @@ export function AppRouter() {
             } />
             <Route path="/upload" element={
               <AuthGuard roles={['admin','super_admin','hr_team','agency']}><UploadPage /></AuthGuard>
-            } />
-            <Route path="/upload-resume" element={
-              <AuthGuard roles={['admin','super_admin','hr_team','agency']}><ResumeUploadPage /></AuthGuard>
             } />
 
             {/* Super Admin only */}

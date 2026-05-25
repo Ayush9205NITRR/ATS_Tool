@@ -1,46 +1,58 @@
 import { useState, useEffect } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
-import { Search, CheckCircle, AlertTriangle, Loader2, Edit3 } from 'lucide-react'
+import { Search, CheckCircle, AlertTriangle, Loader2, Edit3, Link2, RotateCcw } from 'lucide-react'
 import { Button } from '../../shared/components/Button'
 import { parseResumeFromUrl, checkDuplicateByEmail } from './resumeParserService'
 import { candidateService, normalizePhone } from '../candidates/candidateService'
 import { useAuthStore } from '../auth/authStore'
 import { supabase } from '../../lib/supabaseClient'
 
-const SOURCE_OPTIONS = [
-  { value: 'platform', label: 'LinkedIn' },
-  { value: 'platform', label: 'Naukri' },
-  { value: 'platform', label: 'Indeed' },
-  { value: 'agency', label: 'Agency' },
-  { value: 'platform', label: 'Direct' },
-  { value: 'college', label: 'Campus' },
-  { value: 'platform', label: 'Referral' },
-  { value: 'platform', label: 'Other' },
-]
+const PLATFORM_SRCS = ['LinkedIn','Naukri','Indeed','Internshala','Shine','Monster','Foundit','Apna','Referral','Website','Other']
 
-const inputCls = 'w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white'
-const readOnlyCls = 'w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50 text-gray-700'
+function SubSourceField({ sourceCategory, value, onChange }: {
+  sourceCategory: string; value: string; onChange: (v: string) => void
+}) {
+  const { data: agencies = [] } = useQuery({
+    queryKey: ['agency-users-subsource'],
+    queryFn: async () => {
+      const { data } = await supabase.from('users').select('id,full_name').eq('role','agency').eq('is_active',true).order('full_name')
+      return (data ?? []).map((u: any) => ({ id: u.id, name: u.full_name }))
+    },
+    staleTime: 60_000,
+    enabled: sourceCategory === 'agency',
+  })
+  const cls = 'w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-transparent transition-all'
+  if (!sourceCategory) return <input disabled placeholder="Select source type first…" className={`${cls} bg-gray-50 text-gray-400 cursor-not-allowed border-gray-100`} />
+  if (sourceCategory === 'agency') return (
+    <select value={value} onChange={e => onChange(e.target.value)} className={cls}>
+      <option value="">Select agency…</option>
+      {(agencies as any[]).map((a: any) => <option key={a.id} value={a.name}>{a.name}</option>)}
+    </select>
+  )
+  if (sourceCategory === 'platform') return (
+    <select value={value} onChange={e => onChange(e.target.value)} className={cls}>
+      <option value="">Select platform…</option>
+      {PLATFORM_SRCS.map(p => <option key={p} value={p}>{p}</option>)}
+    </select>
+  )
+  return <input type="text" value={value} onChange={e => onChange(e.target.value)} placeholder="e.g. IIT Delhi, BITS Pilani…" className={cls} />
+}
+
+const inputCls = 'w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-transparent transition-all'
 
 function Field({ label, error, required, children, className }: {
   label: string; error?: string; required?: boolean; children: React.ReactNode; className?: string
 }) {
   return (
     <div className={className}>
-      <label className="block text-sm font-medium text-gray-700 mb-1">
-        {label}{required && <span className="text-red-500 ml-0.5">*</span>}
+      <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">
+        {label}{required && <span className="text-red-400 ml-0.5">*</span>}
       </label>
       {children}
-      {error && <p className="mt-1 text-xs text-red-600">{error}</p>}
+      {error && <p className="mt-1 text-xs text-red-500">{error}</p>}
     </div>
   )
-}
-
-type SourceLabel = typeof SOURCE_OPTIONS[number]['label']
-
-function getSourceCategory(label: string): 'platform' | 'agency' | 'college' {
-  const match = SOURCE_OPTIONS.find(o => o.label === label)
-  return (match?.value as 'platform' | 'agency' | 'college') ?? 'platform'
 }
 
 export function SingleResumeUpload() {
@@ -50,8 +62,8 @@ export function SingleResumeUpload() {
   const navigate = useNavigate()
 
   const [resumeUrl, setResumeUrl] = useState('')
-  const [source, setSource] = useState<SourceLabel>(isAgency ? 'Agency' : '')
-  const [subSource, setSubSource] = useState(isAgency ? (user?.full_name ?? '') : '')
+  const [sourceCategory, setSourceCategory] = useState(isAgency ? 'agency' : '')
+  const [sourceName, setSourceName] = useState(isAgency ? (user?.full_name ?? '') : '')
 
   const [fullName, setFullName] = useState('')
   const [email, setEmail] = useState('')
@@ -59,10 +71,13 @@ export function SingleResumeUpload() {
   const [linkedinUrl, setLinkedinUrl] = useState('')
   const [currentCompany, setCurrentCompany] = useState('')
   const [currentDesignation, setCurrentDesignation] = useState('')
+  const [selectedJobId, setSelectedJobId] = useState('')
 
   const [parsed, setParsed] = useState(false)
   const [dupInfo, setDupInfo] = useState<{ exists: boolean; candidateId?: string; candidateName?: string }>({ exists: false })
   const [done, setDone] = useState(false)
+
+  useEffect(() => { if (!isAgency) setSourceName('') }, [sourceCategory])
 
   const { data: jobs = [] } = useQuery({
     queryKey: ['jobs', 'open', isAgency ? `agency-${user?.id}` : 'all'],
@@ -74,7 +89,6 @@ export function SingleResumeUpload() {
       )
     },
   })
-  const [selectedJobId, setSelectedJobId] = useState('')
 
   const parseMutation = useMutation({
     mutationFn: (url: string) => parseResumeFromUrl(url),
@@ -106,8 +120,8 @@ export function SingleResumeUpload() {
         phone: normalizePhone(phone) || null,
         resume_url: resumeUrl.trim() || null,
         linkedin_url: linkedinUrl.trim() || null,
-        source_category: isAgency ? 'agency' : getSourceCategory(source),
-        source_name: isAgency ? (user?.full_name ?? '') : (subSource.trim() || source || 'Unknown'),
+        source_category: isAgency ? 'agency' : (sourceCategory || 'platform') as 'platform' | 'agency' | 'college',
+        source_name: isAgency ? (user?.full_name ?? '') : (sourceName.trim() || 'Unknown'),
         current_stage: 'Applied',
         status: 'active',
         tags: [],
@@ -122,7 +136,10 @@ export function SingleResumeUpload() {
           ...(currentDesignation ? { designation: currentDesignation } : {}),
         },
         uploaded_by: user!.id,
-        ...(isAgency ? { agency_id: user!.id } : {}),
+        agency_id: isAgency ? (user!.id ?? null) : null,
+        interview_date: null,
+        archived_at: null,
+        archived_by: null,
       }
       return candidateService.create(payload, user?.role, user?.id)
     },
@@ -134,7 +151,9 @@ export function SingleResumeUpload() {
   })
 
   const resetForm = () => {
-    setResumeUrl(''); setSource(isAgency ? 'Agency' : ''); setSubSource(isAgency ? (user?.full_name ?? '') : '')
+    setResumeUrl('')
+    setSourceCategory(isAgency ? 'agency' : '')
+    setSourceName(isAgency ? (user?.full_name ?? '') : '')
     setFullName(''); setEmail(''); setPhone(''); setLinkedinUrl('')
     setCurrentCompany(''); setCurrentDesignation('')
     setParsed(false); setDupInfo({ exists: false }); setDone(false); setSelectedJobId('')
@@ -143,73 +162,74 @@ export function SingleResumeUpload() {
 
   if (done) {
     return (
-      <div className="flex flex-col items-center gap-3 py-12">
-        <CheckCircle className="w-10 h-10 text-green-500" />
-        <p className="text-lg font-semibold text-gray-900">Candidate added!</p>
-        <p className="text-sm text-gray-500">Resume parsed and saved successfully.</p>
-        <div className="flex gap-3">
-          <Button variant="secondary" onClick={resetForm}>Add another</Button>
-          <Button variant="secondary" onClick={() => navigate('/candidates')}>View candidates</Button>
+      <div className="flex flex-col items-center gap-4 py-16 px-6">
+        <div className="w-16 h-16 rounded-2xl bg-green-50 flex items-center justify-center">
+          <CheckCircle className="w-8 h-8 text-green-500" />
+        </div>
+        <div className="text-center">
+          <p className="text-lg font-semibold text-gray-900">Candidate Added!</p>
+          <p className="text-sm text-gray-500 mt-1">Resume parsed and saved to your pipeline.</p>
+        </div>
+        <div className="flex gap-3 mt-2">
+          <Button variant="secondary" onClick={resetForm} icon={<RotateCcw className="w-4 h-4" />}>Add another</Button>
+          <Button onClick={() => navigate('/candidates')}>View candidates</Button>
         </div>
       </div>
     )
   }
 
-  const canFetch = resumeUrl.trim().length > 0 && source.length > 0
-  const canSave = fullName.trim() && email.trim() && !dupInfo.exists
+  const canFetch = resumeUrl.trim().length > 10
 
   return (
-    <div className="space-y-6">
-      {/* Step 1: URL + Source */}
+    <div className="p-6 space-y-8">
+      {/* Step 1 */}
       <div className="space-y-4">
-        <div className="flex items-center gap-2 mb-1">
-          <div className="w-6 h-6 rounded-full bg-blue-600 flex items-center justify-center flex-shrink-0">
+        <div className="flex items-center gap-3">
+          <div className="w-7 h-7 rounded-full bg-violet-600 flex items-center justify-center flex-shrink-0">
             <span className="text-xs font-bold text-white">1</span>
           </div>
-          <h3 className="text-sm font-semibold text-gray-900">Enter Resume Details</h3>
+          <div>
+            <h3 className="text-sm font-semibold text-gray-900">Resume URL &amp; Source</h3>
+            <p className="text-xs text-gray-400">Paste the public resume link and select the source</p>
+          </div>
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <Field label="Resume URL" required className="sm:col-span-2">
-            <input
-              type="url"
-              value={resumeUrl}
-              onChange={e => setResumeUrl(e.target.value)}
-              placeholder="https://drive.google.com/file/d/... or any public resume link"
-              className={inputCls}
-            />
+            <div className="relative">
+              <Link2 className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
+              <input
+                type="url"
+                value={resumeUrl}
+                onChange={e => setResumeUrl(e.target.value)}
+                placeholder="https://drive.google.com/file/d/... or any public resume link"
+                className={`${inputCls} pl-9`}
+              />
+            </div>
           </Field>
 
           {!isAgency ? (
-            <Field label="Source" required>
-              <select
-                value={source}
-                onChange={e => setSource(e.target.value as SourceLabel)}
-                className={inputCls}
-              >
-                <option value="">Select source...</option>
-                {SOURCE_OPTIONS.map(o => <option key={o.label} value={o.label}>{o.label}</option>)}
+            <Field label="Source">
+              <select value={sourceCategory} onChange={e => setSourceCategory(e.target.value)} className={inputCls}>
+                <option value="">Select source type…</option>
+                <option value="platform">🔗 Platform</option>
+                <option value="agency">🏢 Agency</option>
+                <option value="college">🎓 College</option>
               </select>
             </Field>
           ) : (
             <Field label="Source">
-              <input value="Agency" disabled className={`${inputCls} bg-purple-50 text-purple-700 font-medium border-purple-200`} />
+              <input value="Agency" disabled className={`${inputCls} bg-violet-50 text-violet-700 font-medium border-violet-200`} />
             </Field>
           )}
 
           {!isAgency ? (
-            <Field label="Sub-Source">
-              <input
-                type="text"
-                value={subSource}
-                onChange={e => setSubSource(e.target.value)}
-                placeholder='e.g. "Post by Ayush", "Campus Drive"'
-                className={inputCls}
-              />
+            <Field label={sourceCategory === 'agency' ? 'Agency Name' : sourceCategory === 'college' ? 'College Name' : 'Platform'}>
+              <SubSourceField sourceCategory={sourceCategory} value={sourceName} onChange={setSourceName} />
             </Field>
           ) : (
             <Field label="Agency">
-              <input value={user?.full_name ?? ''} disabled className={`${inputCls} bg-purple-50 text-purple-700 font-medium border-purple-200`} />
+              <input value={user?.full_name ?? ''} disabled className={`${inputCls} bg-violet-50 text-violet-700 font-medium border-violet-200`} />
             </Field>
           )}
         </div>
@@ -217,103 +237,120 @@ export function SingleResumeUpload() {
         <div className="flex items-center gap-3">
           <Button
             onClick={() => parseMutation.mutate(resumeUrl.trim())}
-            disabled={!canFetch}
+            disabled={!canFetch || parseMutation.isPending}
             loading={parseMutation.isPending}
             icon={<Search className="w-4 h-4" />}
           >
-            Fetch & Populate
+            {parseMutation.isPending ? 'Parsing…' : 'Fetch & Populate'}
           </Button>
           {parseMutation.isPending && (
-            <span className="text-xs text-gray-500 flex items-center gap-1">
-              <Loader2 className="w-3 h-3 animate-spin" />Parsing resume...
+            <span className="text-xs text-gray-400 flex items-center gap-1.5">
+              <Loader2 className="w-3 h-3 animate-spin" />
+              Extracting resume data, this may take a moment…
             </span>
           )}
         </div>
 
         {parseMutation.error && (
-          <div className="bg-red-50 border border-red-200 rounded-lg px-3 py-2 flex items-start gap-2">
+          <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-3 flex items-start gap-2.5">
             <AlertTriangle className="w-4 h-4 text-red-500 flex-shrink-0 mt-0.5" />
             <p className="text-sm text-red-600">{(parseMutation.error as Error).message}</p>
           </div>
         )}
       </div>
 
-      {/* Step 2: Extracted data */}
+      {/* Step 2 — shown after successful parse */}
       {parsed && (
-        <div className="space-y-4">
-          <div className="flex items-center gap-2 mb-1">
-            <div className="w-6 h-6 rounded-full bg-blue-600 flex items-center justify-center flex-shrink-0">
-              <span className="text-xs font-bold text-white">2</span>
-            </div>
-            <h3 className="text-sm font-semibold text-gray-900">Review & Edit Extracted Data</h3>
-            <Edit3 className="w-3.5 h-3.5 text-gray-400" />
-          </div>
+        <>
+          <div className="h-px bg-gradient-to-r from-transparent via-violet-200 to-transparent" />
 
-          <div className="bg-blue-50/50 border border-blue-100 rounded-xl p-4">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <Field label="Full Name" required>
-                <input value={fullName} onChange={e => setFullName(e.target.value)} className={inputCls} placeholder="Candidate's full name" />
-              </Field>
-              <Field label="Email" required error={dupInfo.exists ? `Duplicate: ${dupInfo.candidateName}` : undefined}>
-                <input type="email" value={email} onChange={e => setEmail(e.target.value)} className={inputCls} placeholder="email@example.com" />
-              </Field>
-              <Field label="Phone Number">
-                <input
-                  value={phone}
-                  onChange={e => setPhone(e.target.value.replace(/\D/g, '').slice(0, 10))}
-                  className={inputCls}
-                  placeholder="10-digit number"
-                  maxLength={10}
-                />
-              </Field>
-              <Field label="LinkedIn URL">
-                <input value={linkedinUrl} onChange={e => setLinkedinUrl(e.target.value)} className={inputCls} placeholder="https://linkedin.com/in/..." />
-              </Field>
-              <Field label="Current Company">
-                <input value={currentCompany} onChange={e => setCurrentCompany(e.target.value)} className={inputCls} placeholder="Company name" />
-              </Field>
-              <Field label="Current Designation">
-                <input value={currentDesignation} onChange={e => setCurrentDesignation(e.target.value)} className={inputCls} placeholder="Job title" />
-              </Field>
-              <Field label="Assign to Job" className="sm:col-span-2">
-                <select value={selectedJobId} onChange={e => setSelectedJobId(e.target.value)} className={inputCls}>
-                  <option value="">-- No job --</option>
-                  {(jobs as any[]).map(j => <option key={j.id} value={j.id}>{j.title}</option>)}
-                </select>
-              </Field>
-            </div>
-          </div>
-
-          {dupInfo.exists && (
-            <div className="bg-red-50 border border-red-200 rounded-lg px-3 py-2 flex items-start gap-2">
-              <AlertTriangle className="w-4 h-4 text-red-500 flex-shrink-0 mt-0.5" />
-              <div>
-                <p className="text-sm text-red-700 font-medium">Duplicate candidate detected</p>
-                <p className="text-xs text-red-600">
-                  A candidate with email <strong>{email}</strong> already exists: <em>{dupInfo.candidateName}</em>.
-                  Change the email or update the existing record instead.
-                </p>
+          <div className="space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="w-7 h-7 rounded-full bg-violet-600 flex items-center justify-center flex-shrink-0">
+                <span className="text-xs font-bold text-white">2</span>
+              </div>
+              <div className="flex-1">
+                <div className="flex items-center gap-2">
+                  <h3 className="text-sm font-semibold text-gray-900">Review &amp; Edit</h3>
+                  <Edit3 className="w-3.5 h-3.5 text-gray-400" />
+                </div>
+                <p className="text-xs text-gray-400">AI-extracted data — review and correct if needed</p>
               </div>
             </div>
-          )}
 
-          {saveMutation.error && (
-            <div className="bg-red-50 border border-red-200 rounded-lg px-3 py-2">
-              <p className="text-sm text-red-600">{(saveMutation.error as Error).message}</p>
+            <div className="bg-violet-50/40 border border-violet-100 rounded-2xl p-5">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <Field label="Full Name" required>
+                  <input value={fullName} onChange={e => setFullName(e.target.value)} className={inputCls} placeholder="Candidate's full name" />
+                </Field>
+                <Field label="Email" required error={dupInfo.exists ? `Duplicate: already exists as "${dupInfo.candidateName}"` : undefined}>
+                  <input
+                    type="email"
+                    value={email}
+                    onChange={e => setEmail(e.target.value)}
+                    className={`${inputCls} ${dupInfo.exists ? 'border-red-300 focus:ring-red-400' : ''}`}
+                    placeholder="email@example.com"
+                  />
+                </Field>
+                <Field label="Phone">
+                  <input
+                    value={phone}
+                    onChange={e => setPhone(e.target.value.replace(/\D/g, '').slice(0, 10))}
+                    className={inputCls}
+                    placeholder="10-digit number"
+                    maxLength={10}
+                  />
+                </Field>
+                <Field label="LinkedIn URL">
+                  <input value={linkedinUrl} onChange={e => setLinkedinUrl(e.target.value)} className={inputCls} placeholder="https://linkedin.com/in/..." />
+                </Field>
+                <Field label="Current Company">
+                  <input value={currentCompany} onChange={e => setCurrentCompany(e.target.value)} className={inputCls} placeholder="Company name" />
+                </Field>
+                <Field label="Current Designation">
+                  <input value={currentDesignation} onChange={e => setCurrentDesignation(e.target.value)} className={inputCls} placeholder="Job title / role" />
+                </Field>
+                <Field label="Assign to Job" className="sm:col-span-2">
+                  <select value={selectedJobId} onChange={e => setSelectedJobId(e.target.value)} className={inputCls}>
+                    <option value="">— No specific job —</option>
+                    {(jobs as any[]).map(j => <option key={j.id} value={j.id}>{j.title}</option>)}
+                  </select>
+                </Field>
+              </div>
             </div>
-          )}
 
-          <div className="flex justify-end">
-            <Button
-              onClick={() => saveMutation.mutate()}
-              disabled={!canSave}
-              loading={saveMutation.isPending}
-              icon={<CheckCircle className="w-4 h-4" />}
-            >
-              Save Candidate
-            </Button>
+            {dupInfo.exists && (
+              <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-3 flex items-start gap-2.5">
+                <AlertTriangle className="w-4 h-4 text-red-500 flex-shrink-0 mt-0.5" />
+                <div>
+                  <p className="text-sm font-medium text-red-700">Duplicate candidate detected</p>
+                  <p className="text-xs text-red-500 mt-0.5">
+                    A candidate with email <strong>{email}</strong> already exists as <em>{dupInfo.candidateName}</em>.
+                    Update the email or edit the existing record instead.
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {saveMutation.error && (
+              <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-3">
+                <p className="text-sm text-red-600">{(saveMutation.error as Error).message}</p>
+              </div>
+            )}
+
+            <div className="flex justify-end gap-3">
+              <Button variant="secondary" onClick={resetForm}>Reset</Button>
+              <Button
+                onClick={() => saveMutation.mutate()}
+                disabled={!fullName.trim() || !email.trim() || dupInfo.exists}
+                loading={saveMutation.isPending}
+                icon={<CheckCircle className="w-4 h-4" />}
+              >
+                Save Candidate
+              </Button>
+            </div>
           </div>
-        </div>
+        </>
       )}
     </div>
   )

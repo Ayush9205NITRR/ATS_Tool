@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { NavLink, Outlet } from 'react-router-dom'
-import { LayoutDashboard, Users, Briefcase, Upload, ClipboardList, Settings, Menu, LogOut, FileSearch } from 'lucide-react'
+import { LayoutDashboard, Users, Briefcase, Upload, ClipboardList, Settings, Menu, LogOut } from 'lucide-react'
 import { useAuthStore } from '../../modules/auth/authStore'
 import { initialsOf } from '../utils/helpers'
 
@@ -11,7 +11,6 @@ const NAV = [
   { to: '/interviews', label: 'My Interviews',   icon: ClipboardList,   roles: ['interviewer'] },
   { to: '/jobs',       label: 'Jobs',            icon: Briefcase,       roles: ['super_admin','admin','hr_team'] },
   { to: '/upload',     label: 'Upload',          icon: Upload,          roles: ['super_admin','admin','hr_team','agency'] },
-  { to: '/upload-resume', label: 'Upload Resume', icon: FileSearch,     roles: ['super_admin','admin','hr_team','agency'] },
   { to: '/settings',   label: 'Settings',        icon: Settings,        roles: ['super_admin'] },
 ]
 
