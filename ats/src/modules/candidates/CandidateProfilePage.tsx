@@ -2,7 +2,7 @@
 // CANDIDATE PROFILE PAGE — Clean sidebar layout, unified pills
 // ============================================================
 import { useParams, useNavigate } from 'react-router-dom'
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
 import {
   ArrowLeft, ExternalLink, Phone, Mail, Linkedin, FileText,
   Loader2, Send, Pencil, Check, X, ChevronDown, CheckCircle,
@@ -88,6 +88,9 @@ export function CandidateProfilePage() {
   const [caSaveStatus, setCaSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
   const [caComment, setCaComment]     = useState('')
   const [caSavingComment, setCaSavingComment] = useState(false)
+  // Latch: once cost approval section is shown for this candidate, keep it shown
+  // even during brief cache-refetch windows where conditions might flicker false.
+  const costApprovalShownForId = useRef<string | null>(null)
 
   // Edit mode drafts
   const [contactDraft, setContactDraft] = useState({
@@ -284,7 +287,6 @@ export function CandidateProfilePage() {
     else {
       const cached = qc.getQueryData<any>(['candidate', id])
       if (cached) qc.setQueryData(['candidate', id], { ...cached, interview_notes: newNotes })
-      qc.invalidateQueries({ queryKey: ['candidate', id] })
       setDraftNotes(p => ({ ...p, [sectionKey]: '' }))
     }
     setSavingNote(null)
@@ -362,9 +364,8 @@ export function CandidateProfilePage() {
         )
       }
 
-      // Background refetch to sync any other fields
+      // Invalidate list view only; individual candidate cache is already correct from setQueryData above
       qc.invalidateQueries({ queryKey: ['candidates'] })
-      qc.invalidateQueries({ queryKey: ['candidate', id] })
       setCaSaveStatus('saved')
       setTimeout(() => setCaSaveStatus('idle'), 3000)
     } catch (err) {
@@ -386,7 +387,6 @@ export function CandidateProfilePage() {
     if (!error) {
       const cached = qc.getQueryData<any>(['candidate', id])
       if (cached) qc.setQueryData(['candidate', id], { ...cached, interview_notes: newNotes })
-      qc.invalidateQueries({ queryKey: ['candidate', id] })
       setCaComment('')
     }
     setCaSavingComment(false)
@@ -473,7 +473,10 @@ export function CandidateProfilePage() {
   const currentStageIdx = stages.indexOf(candidate.current_stage)
   const hasPassedCostApproval = costApprovalPipelineIdx >= 0 && currentStageIdx >= costApprovalPipelineIdx
   // Show section: currently in CA stage, OR at/past it in pipeline, OR decision already submitted
-  const canSeeCostApproval = (isInCostApproval || hasPassedCostApproval || hasCostApprovalRecord) && (canEdit || isCAPanel)
+  const canSeeCostApprovalNow = (isInCostApproval || hasPassedCostApproval || hasCostApprovalRecord) && (canEdit || isCAPanel)
+  // Latch: once shown for this candidate, never hide again in this session (prevents flicker during refetches)
+  if (canSeeCostApprovalNow && candidate.id) costApprovalShownForId.current = candidate.id
+  const canSeeCostApproval = canSeeCostApprovalNow || costApprovalShownForId.current === candidate.id
   // Panel can submit/re-submit whenever at/past the CA stage OR has an existing record
   const canSubmitCostApproval = isCAPanel && (isInCostApproval || hasPassedCostApproval || hasCostApprovalRecord)
 
