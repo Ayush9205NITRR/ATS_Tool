@@ -334,7 +334,8 @@ export function CandidateProfilePage() {
         )
       }
 
-      qc.invalidateQueries({ queryKey: ['candidate', id] })
+      qc.invalidateQueries({ queryKey: ['candidates'] })
+      await qc.invalidateQueries({ queryKey: ['candidate', id] })
       setCaSaveStatus('saved')
       setTimeout(() => setCaSaveStatus('idle'), 3000)
     } catch (err) {
@@ -1014,7 +1015,8 @@ export function CandidateProfilePage() {
                     neutral: 'bg-gray-100 text-gray-600', no: 'bg-red-50 text-red-600', strong_no: 'bg-red-100 text-red-700'
                   }
 
-                  const hasAnyData = HISTORY_STAGES.some(({ key }) =>
+                  const hasGeneralNotes = !!(candidate as any).notes
+                  const hasAnyData = hasGeneralNotes || HISTORY_STAGES.some(({ key }) =>
                     (interviewNotes[key] ?? []).length > 0 ||
                     (interviewFeedbacks as any[]).some((fb: any) => stageKeyOf(fb.stage ?? '') === key)
                   )
@@ -1026,6 +1028,22 @@ export function CandidateProfilePage() {
 
                   return (
                     <div className="space-y-5">
+                      {/* General Notes */}
+                      {(candidate as any).notes && (
+                        <div>
+                          <div className="flex items-center gap-2 mb-2">
+                            <span className="w-1.5 h-1.5 rounded-full bg-amber-400 flex-shrink-0" />
+                            <p className="text-xs font-bold text-gray-700 uppercase tracking-wider">General Notes</p>
+                          </div>
+                          <div className="pl-4">
+                            <div className="bg-white border border-gray-100 rounded-lg px-3 py-2.5">
+                              <p className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">{(candidate as any).notes}</p>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Per-stage history: Screening, R1, R2, CF, etc. */}
                       {HISTORY_STAGES.map(({ key, label }) => {
                         const entries: NoteEntry[] = interviewNotes[key] ?? []
                         const stageFeedback = (interviewFeedbacks as any[]).filter(
