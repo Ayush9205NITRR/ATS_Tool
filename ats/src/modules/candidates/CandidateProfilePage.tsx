@@ -473,9 +473,14 @@ export function CandidateProfilePage() {
     return ALL_NOTES_SECTIONS.filter(s => reachedStageKeys.has(s.key))
   })()
 
-  // Template questions per stage — HR only sees screening questionnaire
+  // Template questions per stage
+  // Admin/SA: never shown (they configure templates, don't need to see them inline)
+  // HR: screening only
+  // Interviewers: their current stage only (screening excluded)
   const getTemplateQuestions = (sectionKey: string): string[] => {
+    if (hasRole(['admin', 'super_admin'])) return []
     if (isHR && sectionKey !== 'screening') return []
+    if (isInterviewer && sectionKey === 'screening') return []
     if (!jobTemplates) return []
     if (sectionKey === 'screening') return (jobTemplates.screening_template as string[]) ?? []
     return ((jobTemplates.interview_templates as Record<string, string[]>) ?? {})[sectionKey] ?? []
@@ -490,11 +495,14 @@ export function CandidateProfilePage() {
     .map(s => ({ key: stageKeyOf(s), label: s }))
 
   // Cost approval context
-  const isInCostApproval = candidate.current_stage === costApprovalStageName
+  const isInCostApproval = stageKeyOf(candidate.current_stage) === stageKeyOf(costApprovalStageName)
   const isCAPanel = costApprovalPanelIds.includes(user?.id ?? '')
   const hasCostApprovalRecord = (interviewNotes['cost_approval'] ?? []).length > 0 || !!(candidate as any).cost_approval_decision
-  const canSeeCostApproval = (isInCostApproval || hasCostApprovalRecord) && (canEdit || isCAPanel)
-  const canSubmitCostApproval = isInCostApproval && isCAPanel
+  // True when candidate is at or past the cost approval stage in the pipeline
+  const costApprovalPipelineIdx = stages.findIndex(s => stageKeyOf(s) === stageKeyOf(costApprovalStageName))
+  const hasPassedCostApproval = costApprovalPipelineIdx >= 0 && currentStageIdx >= costApprovalPipelineIdx
+  const canSeeCostApproval = (isInCostApproval || hasPassedCostApproval || hasCostApprovalRecord) && (canEdit || isCAPanel)
+  const canSubmitCostApproval = isCAPanel && (isInCostApproval || hasPassedCostApproval || hasCostApprovalRecord)
 
   // Latch: once we've shown this section for this candidate, keep showing it
   // even during brief cache-refetch windows where conditions might flicker false
@@ -987,21 +995,17 @@ export function CandidateProfilePage() {
                       {entries.length > 0 && <span className="text-xs text-gray-400">{entries.length}</span>}
                     </div>
 
-                    {/* Questionnaire for this stage */}
-                    <div className="pl-3.5 pb-2">
-                      {templateQs.length > 0 ? (
-                        <>
-                          <p className="text-xs text-indigo-600 font-semibold mb-1.5 uppercase tracking-wide">Interview Format</p>
-                          <ol className="space-y-1 list-decimal list-inside">
-                            {templateQs.map((q, qi) => (
-                              <li key={qi} className="text-xs text-indigo-700 bg-indigo-50/60 rounded px-2.5 py-1.5 leading-relaxed">{q}</li>
-                            ))}
-                          </ol>
-                        </>
-                      ) : canEdit ? (
-                        <p className="text-xs text-gray-300 italic">No questionnaire set — add one in Job Settings → Interview Format.</p>
-                      ) : null}
-                    </div>
+                    {/* Questionnaire for this stage — only shown when questions exist */}
+                    {templateQs.length > 0 && (
+                      <div className="pl-3.5 pb-2">
+                        <p className="text-xs text-indigo-600 font-semibold mb-1.5 uppercase tracking-wide">Interview Format</p>
+                        <ol className="space-y-1 list-decimal list-inside">
+                          {templateQs.map((q, qi) => (
+                            <li key={qi} className="text-xs text-indigo-700 bg-indigo-50/60 rounded px-2.5 py-1.5 leading-relaxed">{q}</li>
+                          ))}
+                        </ol>
+                      </div>
+                    )}
 
                     {/* Existing entries */}
                     {entries.length > 0 && (
