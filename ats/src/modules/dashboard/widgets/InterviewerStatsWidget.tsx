@@ -12,30 +12,51 @@ export function InterviewerStatsWidget() {
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['widget','interviewer-stats', user?.id],
+    staleTime: 60_000,
     queryFn: async () => {
-      const [
-        { data: assigned },
-        { data: feedback },
-      ] = await Promise.all([
+      const today = new Date().toISOString().split('T')[0]
+
+      const [{ data: assigned }, { data: feedback }] = await Promise.all([
         supabase.from('candidates')
           .select('id, full_name, current_stage, interview_date, job_id')
           .contains('assigned_interviewers', [user!.id])
-          .eq('status','active'),
+          .eq('status', 'active'),
         supabase.from('interview_feedback')
           .select('candidate_id, submitted_at')
           .eq('interviewer_id', user!.id),
       ])
 
-      const feedbackCandidateIds = new Set(feedback?.map(f => f.candidate_id))
-      const pending = assigned?.filter(c => !feedbackCandidateIds.has(c.id)) ?? []
-      const completed = assigned?.filter(c => feedbackCandidateIds.has(c.id)) ?? []
+      // Resolve job titles in one batched query
+      const jobIds = [...new Set((assigned ?? []).map(c => c.job_id).filter(Boolean))]
+      const { data: jobs } = jobIds.length > 0
+        ? await supabase.from('jobs').select('id,title').in('id', jobIds)
+        : { data: [] as { id: string; title: string }[] }
+      const jobsMap = Object.fromEntries((jobs ?? []).map(j => [j.id, j.title]))
 
+      const feedbackDone = new Set(feedback?.map(f => f.candidate_id))
+      const enrich = (c: any) => ({ ...c, jobTitle: jobsMap[c.job_id] ?? null })
+
+      const pending   = (assigned ?? []).filter(c => !feedbackDone.has(c.id))
+      const completed = (assigned ?? []).filter(c =>  feedbackDone.has(c.id))
+
+      // Upcoming: future date only, exclude rejected stages
       const upcoming = pending
-        .filter(c => c.interview_date)
-        .sort((a,b) => new Date(a.interview_date!).getTime() - new Date(b.interview_date!).getTime())
+        .filter(c =>
+          c.interview_date &&
+          c.interview_date.slice(0, 10) >= today &&
+          !c.current_stage?.toLowerCase().includes('rejected')
+        )
+        .sort((a, b) => new Date(a.interview_date!).getTime() - new Date(b.interview_date!).getTime())
         .slice(0, 3)
+        .map(enrich)
 
-      return { total: assigned?.length ?? 0, pending: pending.length, completed: completed.length, upcoming, pendingList: pending.slice(0,5) }
+      return {
+        total:       assigned?.length ?? 0,
+        pending:     pending.length,
+        completed:   completed.length,
+        upcoming,
+        pendingList: pending.slice(0, 5).map(enrich),
+      }
     },
     enabled: !!user,
   })
@@ -70,7 +91,7 @@ export function InterviewerStatsWidget() {
               <div key={c.id} className="flex items-center justify-between bg-blue-50 rounded-lg px-3 py-2">
                 <div>
                   <p className="text-sm font-medium text-gray-900">{c.full_name}</p>
-                  <p className="text-xs text-gray-500">{(c.job as any)?.title ?? 'No role'} · {c.current_stage}</p>
+                  <p className="text-xs text-gray-500">{c.jobTitle ?? '—'} · {c.current_stage}</p>
                 </div>
                 <div className="text-right">
                   <p className="text-xs font-medium text-blue-700">{formatDate(c.interview_date)}</p>
@@ -93,7 +114,7 @@ export function InterviewerStatsWidget() {
                 className="w-full flex items-center justify-between px-3 py-2 rounded-lg hover:bg-gray-50 transition-colors text-left">
                 <div>
                   <p className="text-sm font-medium text-gray-900">{c.full_name}</p>
-                  <p className="text-xs text-gray-400">{c.current_stage}</p>
+                  <p className="text-xs text-gray-400">{c.jobTitle ? `${c.jobTitle} · ` : ''}{c.current_stage}</p>
                 </div>
                 <ChevronRight className="w-4 h-4 text-gray-300"/>
               </button>
