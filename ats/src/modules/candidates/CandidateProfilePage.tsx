@@ -109,6 +109,21 @@ export function CandidateProfilePage() {
 
   // Agencies list — used by SubSourceField internally via useAgencies hook
 
+  // Interview feedback records — used in cost approval to highlight interviewer + date
+  const { data: interviewFeedbacks = [] } = useQuery({
+    queryKey: ['interview-feedback-all', id],
+    queryFn: async () => {
+      const { data } = await supabase
+        .from('interview_feedback')
+        .select('id, interviewer_id, stage, submitted_at, overall_score, strengths, concerns, recommendation')
+        .eq('candidate_id', id!)
+        .order('submitted_at', { ascending: true })
+      return (data ?? []) as any[]
+    },
+    enabled: !!id,
+    staleTime: 30_000,
+  })
+
   // Sync cost approval fields when candidate data loads
   useEffect(() => {
     if (!candidate) return
@@ -373,11 +388,12 @@ export function CandidateProfilePage() {
     ]
   })()
 
-  // Interviewers only see the section for the candidate's current stage.
+  // Interviewers see ONLY the section matching the candidate's current stage,
+  // and never see screening notes (those are HR-only).
   // HR / Admin / Super Admin see all sections.
   const currentStageKey = stageKeyOf(candidate.current_stage)
   const NOTES_SECTIONS = isInterviewer
-    ? ALL_NOTES_SECTIONS.filter(s => s.key === currentStageKey)
+    ? ALL_NOTES_SECTIONS.filter(s => s.key === currentStageKey && s.key !== 'screening')
     : ALL_NOTES_SECTIONS
 
   // Determine cost approval context
@@ -387,8 +403,18 @@ export function CandidateProfilePage() {
   const canSubmitCostApproval = canSeeCostApproval && (canEdit || isCAPanel)
 
   // Interview format guide from the job
+  // Screening template → HR only | Interview stage templates → interviewer sees only their current stage
   const jobInterviewFormat: Record<string, string[]> = (candidate as any)?.job?.interview_format ?? {}
-  const currentStageGuide: string[] = jobInterviewFormat[currentStageKey] ?? []
+  const currentStageGuide: string[] = (() => {
+    const guide = jobInterviewFormat[currentStageKey] ?? []
+    if (!guide.length) return []
+    if (currentStageKey === 'screening') {
+      // Screening template visible only to HR/admin, not interviewers
+      return isInterviewer ? [] : guide
+    }
+    // Interview stage templates visible to everyone (interviewer only sees their stage anyway)
+    return guide
+  })()
 
   // Stage pill color — DB config → hardcoded map → gray fallback
   const STAGE_COLOURS: Record<string, string> = {
@@ -916,33 +942,106 @@ export function CandidateProfilePage() {
                 </div>
               </div>
 
-              {/* Candidate History — read-only notes from all previous stages */}
+              {/* Candidate History — read-only notes + interviewer feedback per stage */}
               <div className="px-5 py-4 border-b border-amber-100">
                 <div className="flex items-center gap-2 mb-3">
                   <History className="w-3.5 h-3.5 text-gray-500" />
                   <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Candidate History</p>
+                  {(candidate as any).interview_date && (
+                    <span className="text-xs text-gray-400 ml-auto">
+                      Interview Date: <span className="font-medium text-gray-600">{formatDateTime((candidate as any).interview_date)}</span>
+                    </span>
+                  )}
                 </div>
+
                 {ALL_NOTES_SECTIONS.map(({ key, label }) => {
                   const entries: NoteEntry[] = interviewNotes[key] ?? []
-                  if (entries.length === 0) return null
+                  // Find submitted feedback records for this stage
+                  const stageFeedback = (interviewFeedbacks as any[]).filter(
+                    (fb: any) => stageKeyOf(fb.stage ?? '') === key
+                  )
+                  if (entries.length === 0 && stageFeedback.length === 0) return null
+
                   return (
-                    <div key={key} className="mb-3">
-                      <p className="text-xs font-medium text-gray-500 mb-1.5">{label}</p>
-                      <div className="space-y-1.5 pl-3">
-                        {entries.map((e, i) => (
-                          <div key={i} className="bg-white border border-gray-100 rounded-lg px-3 py-2">
-                            <p className="text-sm text-gray-700 whitespace-pre-wrap">{e.text}</p>
-                            <p className="text-xs text-gray-400 mt-1">
-                              <span className="font-medium">{e.author}</span> · {formatRelative(e.timestamp)}
-                            </p>
-                          </div>
-                        ))}
-                      </div>
+                    <div key={key} className="mb-4">
+                      <p className="text-xs font-semibold text-gray-600 mb-2 uppercase tracking-wide">{label}</p>
+
+                      {/* Formal feedback submissions — highlighted with interviewer name */}
+                      {stageFeedback.length > 0 && (
+                        <div className="space-y-2 mb-2 pl-3">
+                          {stageFeedback.map((fb: any) => {
+                            const reviewer = allUsers.find(u => u.id === fb.interviewer_id)
+                            const recLabel: Record<string, string> = {
+                              strong_yes: 'Strong Yes', yes: 'Yes', neutral: 'Neutral', no: 'No', strong_no: 'Strong No'
+                            }
+                            const recColor: Record<string, string> = {
+                              strong_yes: 'text-green-700 bg-green-50', yes: 'text-green-600 bg-green-50',
+                              neutral: 'text-gray-600 bg-gray-100', no: 'text-red-600 bg-red-50', strong_no: 'text-red-700 bg-red-50'
+                            }
+                            return (
+                              <div key={fb.id} className="bg-indigo-50 border border-indigo-200 rounded-lg px-4 py-3">
+                                {/* Interviewer name + date — highlighted */}
+                                <div className="flex items-center justify-between mb-2">
+                                  <div className="flex items-center gap-2">
+                                    <div className="w-6 h-6 rounded-full bg-indigo-200 flex items-center justify-center flex-shrink-0">
+                                      <span className="text-xs font-bold text-indigo-700">
+                                        {(reviewer?.full_name ?? '?').charAt(0).toUpperCase()}
+                                      </span>
+                                    </div>
+                                    <span className="text-sm font-semibold text-indigo-900">
+                                      {reviewer?.full_name ?? 'Unknown'}
+                                    </span>
+                                    {fb.recommendation && (
+                                      <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${recColor[fb.recommendation] ?? 'bg-gray-100 text-gray-600'}`}>
+                                        {recLabel[fb.recommendation] ?? fb.recommendation}
+                                      </span>
+                                    )}
+                                  </div>
+                                  {fb.submitted_at && (
+                                    <span className="text-xs text-indigo-500">
+                                      {formatDateTime(fb.submitted_at)}
+                                    </span>
+                                  )}
+                                </div>
+                                {/* Strengths / Concerns */}
+                                {fb.strengths && (
+                                  <p className="text-sm text-gray-700 mb-1">
+                                    <span className="text-xs font-medium text-green-700">Strengths:</span> {fb.strengths}
+                                  </p>
+                                )}
+                                {fb.concerns && (
+                                  <p className="text-sm text-gray-700">
+                                    <span className="text-xs font-medium text-red-600">Concerns:</span> {fb.concerns}
+                                  </p>
+                                )}
+                              </div>
+                            )
+                          })}
+                        </div>
+                      )}
+
+                      {/* Interview notes */}
+                      {entries.length > 0 && (
+                        <div className="space-y-1.5 pl-3">
+                          {entries.map((e, i) => (
+                            <div key={i} className="bg-white border border-gray-100 rounded-lg px-3 py-2.5">
+                              <p className="text-sm text-gray-700 whitespace-pre-wrap">{e.text}</p>
+                              <p className="text-xs text-gray-400 mt-1.5 flex items-center gap-1.5">
+                                <span className="font-semibold text-gray-600">{e.author}</span>
+                                <span>·</span>
+                                <span>{formatRelative(e.timestamp)}</span>
+                              </p>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   )
                 })}
-                {ALL_NOTES_SECTIONS.every(({ key }) => (interviewNotes[key] ?? []).length === 0) && (
-                  <p className="text-xs text-gray-400 italic">No interview notes recorded yet.</p>
+
+                {ALL_NOTES_SECTIONS.every(({ key }) => (interviewNotes[key] ?? []).length === 0) &&
+                 (interviewFeedbacks as any[]).length === 0 && (
+                  <p className="text-xs text-gray-400 italic">No interview notes or feedback recorded yet.</p>
                 )}
               </div>
 
