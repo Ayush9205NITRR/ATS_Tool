@@ -883,8 +883,8 @@ export function CandidateProfilePage() {
           </div>
           )}
 
-          {/* Interview Notes — always visible (except agency; hidden for interviewer during cost approval) */}
-          {!isAgency && !(isInterviewer && isInCostApproval) && (
+          {/* Interview Notes — hidden when cost approval section is visible (it already has full Candidate History) */}
+          {!isAgency && !canSeeCostApproval && (
           <div>
             <p className="text-sm font-semibold text-gray-700 mb-3 px-1">Interview Notes</p>
 
