@@ -457,10 +457,10 @@ export function CandidateProfilePage() {
   // Interviewers: only their current stage (screening excluded).
   // HR team: only screening.
   // Admin / Super Admin: stages reached so far (no future-round clutter).
+  // Interviewers: only their current stage (screening excluded).
+  // HR + Admin/SA: all stages the candidate has actually reached (HR is read-only beyond screening).
   const NOTES_SECTIONS = isInterviewer
     ? ALL_NOTES_SECTIONS.filter(s => s.key === currentStageKey && s.key !== 'screening')
-    : isHR
-    ? ALL_NOTES_SECTIONS.filter(s => s.key === 'screening')
     : ALL_NOTES_SECTIONS.filter(s => reachedStageKeys.has(s.key))
 
   // Determine cost approval context — use stageKeyOf for robust comparison (handles case differences)
@@ -1021,8 +1021,8 @@ export function CandidateProfilePage() {
                       </div>
                     )}
 
-                    {/* Input */}
-                    {canAddNotes && (
+                    {/* Input — HR can only add to screening; other roles follow canAddNotes */}
+                    {canAddNotes && (!isHR || key === 'screening') && (
                       <div className="flex gap-2 items-end pb-3 pl-3.5">
                         <textarea rows={3} value={draft}
                           onChange={e => setDraftNotes(p => ({ ...p, [key]: e.target.value }))}
@@ -1035,7 +1035,7 @@ export function CandidateProfilePage() {
                         </button>
                       </div>
                     )}
-                    {entries.length === 0 && !canAddNotes && (
+                    {entries.length === 0 && !(canAddNotes && (!isHR || key === 'screening')) && (
                       <p className="text-xs text-gray-400 pl-3.5 pb-3 italic">No notes yet.</p>
                     )}
                   </div>
