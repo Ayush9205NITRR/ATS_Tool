@@ -808,8 +808,8 @@ export function CandidateProfilePage() {
             )}
           </div>
 
-          {/* General Notes — hidden from agency */}
-          {!isAgency && (
+          {/* General Notes — hidden from agency; hidden when cost approval section consolidates it */}
+          {!isAgency && !canSeeCostApproval && (
           <div>
             <div className="flex items-center justify-between mb-2 px-1">
               <p className="text-sm font-semibold text-gray-700">General Notes</p>
@@ -1019,6 +1019,7 @@ export function CandidateProfilePage() {
                     neutral: 'bg-gray-100 text-gray-600', no: 'bg-red-50 text-red-600', strong_no: 'bg-red-100 text-red-700'
                   }
 
+                  const hasGeneralNotes = !!(candidate as any).notes
                   const hasStageData = HISTORY_STAGES.some(({ key }) =>
                     (interviewNotes[key] ?? []).length > 0 ||
                     (interviewFeedbacks as any[]).some((fb: any) => stageKeyOf(fb.stage ?? '') === key)
@@ -1026,12 +1027,27 @@ export function CandidateProfilePage() {
                   const hasCostApprovalNotes = (interviewNotes['cost_approval'] ?? []).length > 0
                   const hasCostApprovalData = hasCostApprovalNotes || !!(candidate as any).cost_approval_decision
 
-                  if (!hasStageData && !hasCostApprovalData) {
+                  if (!hasGeneralNotes && !hasStageData && !hasCostApprovalData) {
                     return <p className="text-xs text-gray-400 italic">No interview notes or feedback recorded yet.</p>
                   }
 
                   return (
                     <div className="space-y-5">
+                      {/* General Notes */}
+                      {(candidate as any).notes && (
+                        <div>
+                          <div className="flex items-center gap-2 mb-2">
+                            <span className="w-1.5 h-1.5 rounded-full bg-amber-400 flex-shrink-0" />
+                            <p className="text-xs font-bold text-gray-700 uppercase tracking-wider">General Notes</p>
+                          </div>
+                          <div className="pl-4">
+                            <div className="bg-white border border-gray-100 rounded-lg px-3 py-2.5">
+                              <p className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">{(candidate as any).notes}</p>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
                       {/* Per-stage history: Screening, R1, R2, CF, etc. */}
                       {HISTORY_STAGES.map(({ key, label }) => {
                         const entries: NoteEntry[] = interviewNotes[key] ?? []
