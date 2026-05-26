@@ -444,15 +444,24 @@ export function CandidateProfilePage() {
     .filter(s => s !== costApprovalStageName)
     .map(s => ({ key: stageKeyOf(s), label: s }))
 
-  // Interviewers see ONLY their current stage section (screening excluded).
-  // HR team sees ONLY screening.
-  // Admin / Super Admin see all sections.
+  // Build the set of stage keys the candidate has actually reached (up to and including current stage).
+  // Used to avoid showing future-stage note sections that would never have content.
   const currentStageKey = stageKeyOf(candidate.current_stage)
+  const currentPipelineIdx = stages.indexOf(candidate.current_stage)
+  const reachedStageKeys = new Set(
+    (currentPipelineIdx >= 0 ? stages.slice(0, currentPipelineIdx + 1) : stages)
+      .filter(s => s !== costApprovalStageName)
+      .map(s => stageKeyOf(s))
+  )
+
+  // Interviewers: only their current stage (screening excluded).
+  // HR team: only screening.
+  // Admin / Super Admin: stages reached so far (no future-round clutter).
   const NOTES_SECTIONS = isInterviewer
     ? ALL_NOTES_SECTIONS.filter(s => s.key === currentStageKey && s.key !== 'screening')
     : isHR
     ? ALL_NOTES_SECTIONS.filter(s => s.key === 'screening')
-    : ALL_NOTES_SECTIONS
+    : ALL_NOTES_SECTIONS.filter(s => reachedStageKeys.has(s.key))
 
   // Determine cost approval context
   const isInCostApproval = candidate.current_stage === costApprovalStageName
