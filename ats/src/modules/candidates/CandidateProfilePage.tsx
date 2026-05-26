@@ -368,7 +368,8 @@ export function CandidateProfilePage() {
     return stageConfigsRaw.map((s: any) => s.name)
   })()
 
-  // Notes sections — DB config if available, else sensible defaults
+  // Notes sections — all pipeline stages that have notes capability
+  // Used for the interview notes panel (left column) and for cost approval history
   const ALL_NOTES_SECTIONS: { key: string; label: string }[] = (() => {
     const richConfigs = stageConfigsRaw.filter((s: any) => s.hasNotes)
     if (richConfigs.length) {
@@ -388,6 +389,12 @@ export function CandidateProfilePage() {
     ]
   })()
 
+  // History stages: every pipeline stage except the cost approval stage itself.
+  // Derived from the actual job pipeline so Culture Fit, R3, etc. are always included.
+  const HISTORY_STAGES: { key: string; label: string }[] = stages
+    .filter(s => s !== costApprovalStageName)
+    .map(s => ({ key: stageKeyOf(s), label: s }))
+
   // Interviewers see ONLY the section matching the candidate's current stage,
   // and never see screening notes (those are HR-only).
   // HR / Admin / Super Admin see all sections.
@@ -399,8 +406,10 @@ export function CandidateProfilePage() {
   // Determine cost approval context
   const isInCostApproval = candidate.current_stage === costApprovalStageName
   const isCAPanel = costApprovalPanelIds.includes(user?.id ?? '')
-  // HR / Admin / Super Admin can SEE cost approval — but ONLY panel users can SUBMIT
-  const canSeeCostApproval = isInCostApproval && (canEdit || isCAPanel)
+  const hasCostApprovalRecord = !!(candidate as any).cost_approval_decision
+  // Show section: currently in CA stage (active), OR decision was already submitted (retrospective view)
+  const canSeeCostApproval = (isInCostApproval || hasCostApprovalRecord) && (canEdit || isCAPanel)
+  // Only panel members can submit (and only while still in the stage)
   const canSubmitCostApproval = isInCostApproval && isCAPanel
 
   // Interview format guide from the job
@@ -931,8 +940,8 @@ export function CandidateProfilePage() {
           </div>
           )}
 
-          {/* Cost Approval Section — only shown when candidate is in cost approval stage */}
-          {!isAgency && isInCostApproval && canSeeCostApproval && (
+          {/* Cost Approval Section — shown while in stage OR after decision submitted */}
+          {!isAgency && canSeeCostApproval && (
             <div className="bg-amber-50/40 rounded-xl border border-amber-200 overflow-hidden">
               {/* Header */}
               <div className="flex items-center gap-2.5 px-5 py-3.5 border-b border-amber-100 bg-amber-50">
@@ -959,7 +968,7 @@ export function CandidateProfilePage() {
                     neutral: 'bg-gray-100 text-gray-600', no: 'bg-red-50 text-red-600', strong_no: 'bg-red-100 text-red-700'
                   }
 
-                  const hasAnyData = ALL_NOTES_SECTIONS.some(({ key }) =>
+                  const hasAnyData = HISTORY_STAGES.some(({ key }) =>
                     (interviewNotes[key] ?? []).length > 0 ||
                     (interviewFeedbacks as any[]).some((fb: any) => stageKeyOf(fb.stage ?? '') === key)
                   )
@@ -971,7 +980,7 @@ export function CandidateProfilePage() {
 
                   return (
                     <div className="space-y-5">
-                      {ALL_NOTES_SECTIONS.map(({ key, label }) => {
+                      {HISTORY_STAGES.map(({ key, label }) => {
                         const entries: NoteEntry[] = interviewNotes[key] ?? []
                         const stageFeedback = (interviewFeedbacks as any[]).filter(
                           (fb: any) => stageKeyOf(fb.stage ?? '') === key
