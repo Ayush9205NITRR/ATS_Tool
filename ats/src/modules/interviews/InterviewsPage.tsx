@@ -796,7 +796,7 @@ export function InterviewsPage() {
           </div>
         </div>
       ) : null}
-      </> {/* <--- ADD THIS CLOSING FRAGMENT HERE */}
+      </> } {/* <--- ADD THIS CLOSING FRAGMENT HERE */}
     </div>
   )
 }
