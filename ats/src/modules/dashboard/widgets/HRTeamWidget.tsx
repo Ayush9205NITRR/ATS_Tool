@@ -49,7 +49,6 @@ export function HRTeamWidget() {
         allJobs: allJobs ?? [],
       }
     },
-    staleTime: 30_000,
   })
 
   const assignJob = useMutation({

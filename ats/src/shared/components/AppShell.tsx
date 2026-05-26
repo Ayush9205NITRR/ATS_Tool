@@ -3,8 +3,7 @@ import { NavLink, Outlet } from 'react-router-dom'
 import { LayoutDashboard, Users, Briefcase, Upload, ClipboardList, Settings, Menu, LogOut, X, Bell } from 'lucide-react'
 import { useAuthStore } from '../../modules/auth/authStore'
 import { initialsOf } from '../utils/helpers'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { supabase } from '../../lib/supabaseClient'
+import { NotificationBell } from './NotificationBell'
 
 const NAV = [
   { to: '/dashboard',  label: 'Dashboard',     icon: LayoutDashboard, roles: ['super_admin','admin','hr_team','interviewer','agency'] },
@@ -124,19 +123,12 @@ export function AppShell() {
         <span className="font-semibold text-zinc-900 tracking-tight text-[15px]">ATS</span>
       </div>
 
-      {/* Nav */}
-      <nav className="flex-1 px-3 py-2 space-y-0.5 overflow-y-auto scrollbar-thin">
+      <nav className="flex-1 px-3 py-4 space-y-0.5 overflow-y-auto">
         {visibleNav.map(({ to, label, icon: Icon }) => (
-          <NavLink
-            key={`${to}-${label}`}
-            to={to}
-            end={to === '/dashboard'}
-            onClick={() => setMobileOpen(false)}
+          <NavLink key={`${to}-${label}`} to={to} end={to === '/dashboard'} onClick={() => setMobileOpen(false)}
             className={({ isActive }) =>
-              `flex items-center gap-2.5 px-3 py-2 rounded-xl text-sm transition-all duration-150 ${
-                isActive
-                  ? 'bg-indigo-50 text-indigo-700 font-medium'
-                  : 'text-zinc-500 hover:text-zinc-800 hover:bg-zinc-50 font-normal'
+              `flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                isActive ? 'bg-blue-50 text-blue-700' : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
               }`
             }
           >
@@ -161,13 +153,9 @@ export function AppShell() {
               <p className="text-sm font-medium text-zinc-900 truncate leading-tight">{user.full_name}</p>
               <p className="text-xs text-zinc-400 truncate leading-tight mt-0.5">{ROLE_LABELS[user.role] ?? user.role}</p>
             </div>
-            <NotificationBell />
-            <button
-              onClick={signOut}
-              className="text-zinc-300 hover:text-zinc-600 transition-colors p-1 rounded-lg hover:bg-zinc-100"
-              title="Sign out"
-            >
-              <LogOut className="w-3.5 h-3.5" />
+            {['super_admin', 'admin', 'hr_team'].includes(user.role) && <NotificationBell />}
+            <button onClick={signOut} className="text-gray-400 hover:text-gray-600 transition-colors" title="Sign out">
+              <LogOut className="w-4 h-4"/>
             </button>
           </div>
         </div>

@@ -678,3 +678,65 @@ create index idx_feedback_interviewer   on public.interview_feedback(interviewer
 -- Step 11: Add indexes for new columns
 -- CREATE INDEX IF NOT EXISTS idx_candidates_agency ON public.candidates(agency_id);
 -- CREATE INDEX IF NOT EXISTS idx_users_agency      ON public.users(agency_id);
+
+-- ============================================================
+-- === MIGRATION: Interview Format + Cost Approval (v3) ===
+-- Run these statements once in the Supabase SQL editor.
+-- ============================================================
+
+-- 1. Add interview format column to jobs table
+--    Stores questions per stage as { "screening": ["Q1"], "r1": ["Q2"], ... }
+ALTER TABLE public.jobs
+  ADD COLUMN IF NOT EXISTS interview_format jsonb NOT NULL DEFAULT '{}';
+
+-- 2. Add cost approval fields to candidates table
+ALTER TABLE public.candidates
+  ADD COLUMN IF NOT EXISTS cost_approval_decision      text
+    CHECK (cost_approval_decision IN ('go_ahead', 'rework_required')),
+  ADD COLUMN IF NOT EXISTS cost_approval_notes         text,
+  ADD COLUMN IF NOT EXISTS cost_approval_submitted_at  timestamptz,
+  ADD COLUMN IF NOT EXISTS cost_approval_submitted_by  uuid REFERENCES public.users(id) ON DELETE SET NULL;
+
+-- 3. Create notifications table
+CREATE TABLE IF NOT EXISTS public.notifications (
+  id           uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id      uuid        NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
+  type         text        NOT NULL DEFAULT 'info',
+  message      text        NOT NULL,
+  candidate_id uuid        REFERENCES public.candidates(id) ON DELETE CASCADE,
+  read_at      timestamptz,
+  created_at   timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_notifications_user
+  ON public.notifications(user_id, created_at DESC);
+
+-- 4. RLS for notifications
+ALTER TABLE public.notifications ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "notifications_read_own" ON public.notifications
+  FOR SELECT USING (user_id = auth.uid());
+
+CREATE POLICY "notifications_insert_authenticated" ON public.notifications
+  FOR INSERT WITH CHECK (auth.uid() IS NOT NULL);
+
+CREATE POLICY "notifications_update_own" ON public.notifications
+  FOR UPDATE USING (user_id = auth.uid());
+
+-- 5. Ensure app_settings table exists (rename from org_settings if needed)
+--    Skip this step if app_settings already exists in your project.
+-- CREATE TABLE IF NOT EXISTS public.app_settings (
+--   key        text PRIMARY KEY,
+--   value      text NOT NULL DEFAULT '',
+--   updated_at timestamptz NOT NULL DEFAULT now()
+-- );
+-- ALTER TABLE public.app_settings ENABLE ROW LEVEL SECURITY;
+-- CREATE POLICY "app_settings_read_all"        ON public.app_settings FOR SELECT USING (auth.uid() IS NOT NULL);
+-- CREATE POLICY "app_settings_write_superadmin" ON public.app_settings FOR ALL    USING (current_user_role() IN ('super_admin','admin'));
+
+-- 6. Seed default cost approval settings (optional — UI can also set these)
+INSERT INTO public.app_settings (key, value, updated_at)
+VALUES
+  ('cost_approval_stage_name',    'Cost Approval', now()),
+  ('cost_approval_panel_user_ids', '[]',           now())
+ON CONFLICT (key) DO NOTHING;

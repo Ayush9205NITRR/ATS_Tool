@@ -179,14 +179,23 @@ export const candidateService = {
     // Server-side dedup
     const { emailDups, phoneDups } = await findDuplicates(normalized)
 
+    // Also track emails/phones seen within this batch to catch intra-batch duplicates
+    const seenEmails = new Set<string>()
+    const seenPhones = new Set<string>()
+
     const clean: typeof normalized = []
     normalized.forEach(c => {
-      const emailDup = c.email && emailDups.has(c.email.toLowerCase().trim())
-      const phoneDup = c.phone && phoneDups.has(c.phone.replace(/\D/g,'').slice(-10))
+      const email = c.email?.toLowerCase().trim() ?? ''
+      const phone = c.phone?.replace(/\D/g,'').slice(-10) ?? ''
+
+      const emailDup = email && (emailDups.has(email) || seenEmails.has(email))
+      const phoneDup = phone && (phoneDups.has(phone) || seenPhones.has(phone))
       if (emailDup || phoneDup) {
-        console.warn('[bulkCreate] blocked duplicate:', c.email, c.phone)
+        console.warn('[bulkCreate] skipping duplicate:', c.email, c.phone)
         return
       }
+      if (email) seenEmails.add(email)
+      if (phone) seenPhones.add(phone)
       if (c.phone && c.phone.replace(/\D/g,'').length !== 10) c.phone = null
       clean.push(c)
     })
@@ -202,11 +211,24 @@ export const candidateService = {
     })
 
     const { data, error } = await supabase.rpc('bulk_insert_candidates', { p_candidates: payload })
-    if (error) {
-      if (error.code === '23505') throw new Error('Candidate already exists.')
-      throw error
+    if (!error) return data ?? []
+
+    // If the batch hit a unique-constraint violation, fall back to row-by-row so
+    // non-duplicate rows still get saved and duplicates are silently skipped.
+    if (error.code === '23505') {
+      const results: any[] = []
+      for (const row of payload) {
+        const { data: d, error: e } = await supabase.rpc('bulk_insert_candidates', { p_candidates: [row] })
+        if (e) {
+          if (e.code === '23505') continue  // skip this duplicate, keep going
+          throw e
+        }
+        if (d?.[0]) results.push(d[0])
+      }
+      return results
     }
-    return data ?? []
+
+    throw error
   },
 
   delete: async (id: string) => {

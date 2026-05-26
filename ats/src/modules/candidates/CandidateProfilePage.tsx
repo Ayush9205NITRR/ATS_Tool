@@ -5,7 +5,8 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { useState, useCallback, useEffect } from 'react'
 import {
   ArrowLeft, ExternalLink, Phone, Mail, Linkedin, FileText,
-  Loader2, Send, Pencil, Check, X, ChevronDown, CheckCircle
+  Loader2, Send, Pencil, Check, X, ChevronDown, CheckCircle,
+  ClipboardList, ShieldCheck, History, BookOpen
 } from 'lucide-react'
 import { useCandidate, useUpdateStage } from './useCandidates'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -16,6 +17,32 @@ import { supabase } from '../../lib/supabaseClient'
 import { INTERVIEW_STAGES, type NoteEntry, type CostApprovalSettings } from '../../types/database.types'
 import { useStages as useStagesHook } from '../../shared/hooks/useStages'
 import { useAgencies } from '../../shared/hooks/useAgencies'
+
+// Derives stable key from stage name — same logic used everywhere
+function stageKeyOf(name: string) {
+  return name.toLowerCase().replace(/[^a-z0-9]/g, '_')
+}
+
+// Fetch cost approval settings (stage name + panel user IDs)
+function useCostApprovalSettings() {
+  return useQuery({
+    queryKey: ['app-settings', 'cost-approval'],
+    queryFn: async () => {
+      const { data } = await supabase.from('app_settings')
+        .select('key,value')
+        .in('key', ['cost_approval_stage_name', 'cost_approval_panel_user_ids'])
+      const rows = (data ?? []) as { key: string; value: string }[]
+      const stageName = rows.find(r => r.key === 'cost_approval_stage_name')?.value ?? 'Cost Approval'
+      const panelIds: string[] = (() => {
+        const raw = rows.find(r => r.key === 'cost_approval_panel_user_ids')?.value
+        if (!raw) return []
+        try { return JSON.parse(raw) } catch { return [] }
+      })()
+      return { stageName, panelIds }
+    },
+    staleTime: 30_000,
+  })
+}
 
 // Unified pill design
 const PILL_BASE     = 'px-2.5 py-1 rounded-full text-xs font-medium border transition-all cursor-pointer select-none'
@@ -52,6 +79,10 @@ export function CandidateProfilePage() {
   // Note editing: key = `${sectionKey}:${entryIndex}`, value = draft text
   const [editingNote, setEditingNote] = useState<{ section: string; index: number; text: string } | null>(null)
   const [savingEditNote, setSavingEditNote] = useState(false)
+  // Cost approval state
+  const [caDecision, setCaDecision]   = useState<'go_ahead' | 'rework_required' | ''>('')
+  const [caNotes, setCaNotes]         = useState('')
+  const [caSaveStatus, setCaSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
 
   // Edit mode drafts
   const [contactDraft, setContactDraft] = useState({
@@ -100,6 +131,28 @@ export function CandidateProfilePage() {
     staleTime: 60_000,
   })
 
+  // Interview feedback records — used in cost approval to highlight interviewer + date
+  const { data: interviewFeedbacks = [] } = useQuery({
+    queryKey: ['interview-feedback-all', id],
+    queryFn: async () => {
+      const { data } = await supabase
+        .from('interview_feedback')
+        .select('id, interviewer_id, stage, submitted_at, overall_score, strengths, concerns, recommendation')
+        .eq('candidate_id', id!)
+        .order('submitted_at', { ascending: true })
+      return (data ?? []) as any[]
+    },
+    enabled: !!id,
+    staleTime: 30_000,
+  })
+
+  // Sync cost approval fields when candidate data loads
+  useEffect(() => {
+    if (!candidate) return
+    setCaDecision((candidate as any).cost_approval_decision ?? '')
+    setCaNotes((candidate as any).cost_approval_notes ?? '')
+  }, [(candidate as any)?.id, (candidate as any)?.cost_approval_decision, (candidate as any)?.cost_approval_notes])
+
   // Stage config — shared hook (same queryKey as OrgSettingsTab + CandidatesPage)
   const { stageConfigs: stageConfigsRaw } = useStagesHook()
 
@@ -116,6 +169,10 @@ export function CandidateProfilePage() {
     },
     staleTime: 60_000,
   })
+
+  const { data: caSettings } = useCostApprovalSettings()
+  const costApprovalStageName = caSettings?.stageName ?? 'Cost Approval'
+  const costApprovalPanelIds  = caSettings?.panelIds  ?? []
 
   const { data: myFeedback, refetch: refetchFeedback } = useQuery({
     queryKey: ['my-feedback', id, user?.id],
@@ -268,6 +325,60 @@ export function CandidateProfilePage() {
     setSavingEditNote(false)
   }
 
+  const submitCostApproval = async () => {
+    if (!caDecision) return
+    setCaSaveStatus('saving')
+    try {
+      const decisionLabel = caDecision === 'go_ahead' ? 'Go Ahead' : 'Re-work Required'
+
+      // Save into interview_notes.cost_approval (guaranteed to work — JSONB column exists)
+      const existing = (candidate as any)?.interview_notes ?? {}
+      const caEntry = {
+        text: caNotes || '',
+        author: user!.full_name,
+        authorId: user!.id,
+        timestamp: new Date().toISOString(),
+        decision: caDecision,
+      }
+      const { error } = await supabase.from('candidates').update({
+        interview_notes: { ...existing, cost_approval: [caEntry] },
+      }).eq('id', id!)
+      if (error) throw error
+
+      // Also try dedicated columns (might not exist if migration not run — ignore errors)
+      await supabase.from('candidates').update({
+        cost_approval_decision: caDecision,
+        cost_approval_notes: caNotes || null,
+        cost_approval_submitted_at: new Date().toISOString(),
+        cost_approval_submitted_by: user!.id,
+      }).eq('id', id!).then(() => {}, () => {})
+
+      // Notify super_admin + admin + hr_team
+      const { data: notifyUsers } = await supabase.from('users')
+        .select('id')
+        .in('role', ['super_admin', 'admin', 'hr_team'])
+        .eq('is_active', true)
+      if (notifyUsers?.length) {
+        await supabase.from('notifications').insert(
+          notifyUsers.map(u => ({
+            user_id: u.id,
+            type: 'cost_approval',
+            message: `Cost Approval decision for ${candidate.full_name}: ${decisionLabel}. Submitted by ${user!.full_name}.`,
+            candidate_id: id!,
+          }))
+        )
+      }
+
+      qc.invalidateQueries({ queryKey: ['candidates'] })
+      await qc.invalidateQueries({ queryKey: ['candidate', id] })
+      setCaSaveStatus('saved')
+      setTimeout(() => setCaSaveStatus('idle'), 3000)
+    } catch (err) {
+      console.error('[submitCostApproval]', err)
+      setCaSaveStatus('error')
+    }
+  }
+
   const toggleInterviewer = useCallback((uid: string) => {
     const curr: string[] = (candidate as any)?.assigned_interviewers ?? []
     const next = curr.includes(uid) ? curr.filter(i => i !== uid) : [...curr, uid]
@@ -293,12 +404,13 @@ export function CandidateProfilePage() {
     return stageConfigsRaw.map((s: any) => s.name)
   })()
 
-  // Notes sections — DB config if available, else sensible defaults
-  const NOTES_SECTIONS: { key: string; label: string }[] = (() => {
+  // Notes sections — all pipeline stages that have notes capability
+  // Used for the interview notes panel (left column) and for cost approval history
+  const ALL_NOTES_SECTIONS: { key: string; label: string }[] = (() => {
     const richConfigs = stageConfigsRaw.filter((s: any) => s.hasNotes)
     if (richConfigs.length) {
       return richConfigs.map((s: any) => ({
-        key: s.name.toLowerCase().replace(/[^a-z0-9]/g, '_'),
+        key: stageKeyOf(s.name),
         label: s.name,
       }))
     }
@@ -328,6 +440,33 @@ export function CandidateProfilePage() {
     if (sectionKey === 'screening') return (jobTemplates.screening_template as string[]) ?? []
     return ((jobTemplates.interview_templates as Record<string, string[]>) ?? {})[sectionKey] ?? []
   }
+  // History stages: every pipeline stage except the cost approval stage itself.
+  // Derived from the actual job pipeline so Culture Fit, R3, etc. are always included.
+  const HISTORY_STAGES: { key: string; label: string }[] = stages
+    .filter(s => s !== costApprovalStageName)
+    .map(s => ({ key: stageKeyOf(s), label: s }))
+
+  // Interviewers see ONLY the section matching the candidate's current stage,
+  // and never see screening notes (those are HR-only).
+  // HR / Admin / Super Admin see all sections.
+  const currentStageKey = stageKeyOf(candidate.current_stage)
+  const NOTES_SECTIONS = isInterviewer
+    ? ALL_NOTES_SECTIONS.filter(s => s.key === currentStageKey && s.key !== 'screening')
+    : ALL_NOTES_SECTIONS
+
+  // Determine cost approval context
+  const isInCostApproval = candidate.current_stage === costApprovalStageName
+  const isCAPanel = costApprovalPanelIds.includes(user?.id ?? '')
+  const interviewNotes = (candidate as any).interview_notes ?? {}
+  const hasCostApprovalRecord = (interviewNotes['cost_approval'] ?? []).length > 0 || !!(candidate as any).cost_approval_decision
+  // Show section: currently in CA stage (active), OR decision was already submitted (retrospective view)
+  const canSeeCostApproval = (isInCostApproval || hasCostApprovalRecord) && (canEdit || isCAPanel)
+  // Only panel members can submit (and only while still in the stage)
+  const canSubmitCostApproval = isInCostApproval && isCAPanel
+
+  // Interview format guide from the job (per-stage questionnaire templates)
+  // Screening template is HR-only; other stages shown to interviewers for their current stage
+  const jobInterviewFormat: Record<string, string[]> = (candidate as any)?.job?.interview_format ?? {}
 
   // Stage pill color — DB config → hardcoded map → gray fallback
   const STAGE_COLOURS: Record<string, string> = {
@@ -343,7 +482,6 @@ export function CandidateProfilePage() {
     if (cfg?.color) return `${cfg.color} ${cfg.textColor}`
     return STAGE_COLOURS[name] ?? 'bg-gray-100 text-gray-600'
   }
-  const interviewNotes = (candidate as any).interview_notes ?? {}
   const assignedInterviewers: string[] = (candidate as any).assigned_interviewers ?? []
   const assignedHROwners: string[] = (candidate as any)?.assigned_hr_owners?.length > 0
     ? (candidate as any).assigned_hr_owners
@@ -511,7 +649,12 @@ export function CandidateProfilePage() {
                     <Linkedin className="w-3.5 h-3.5 flex-shrink-0"/>LinkedIn Profile
                   </a>
                 )}
-                {!candidate.phone && !candidate.linkedin_url && (
+                {candidate.resume_url && (
+                  <a href={candidate.resume_url} target="_blank" rel="noreferrer" className="flex items-center gap-2.5 text-sm text-blue-600 hover:underline">
+                    <FileText className="w-3.5 h-3.5 flex-shrink-0"/>View Resume
+                  </a>
+                )}
+                {!candidate.phone && !candidate.linkedin_url && !candidate.resume_url && (
                   <p className="text-xs text-gray-400 italic">Click Edit to add phone / LinkedIn</p>
                 )}
               </div>
@@ -697,7 +840,15 @@ export function CandidateProfilePage() {
               )}
             </div>
             {drivePreviewUrl ? (
-              <iframe src={drivePreviewUrl} className="w-full border-0" style={{ height: '300px' }} title="Resume"/>
+              <iframe src={drivePreviewUrl} className="w-full border-0" style={{ height: '320px' }} title="Resume"/>
+            ) : candidate.resume_url ? (
+              <div className="px-5 py-4 flex items-center gap-2.5">
+                <FileText className="w-4 h-4 flex-shrink-0 text-gray-400"/>
+                <a href={candidate.resume_url} target="_blank" rel="noreferrer" className="text-sm text-blue-600 hover:underline break-all">
+                  Open resume ↗
+                </a>
+                <span className="text-xs text-gray-400 flex-shrink-0">(inline preview for Google Drive only)</span>
+              </div>
             ) : (
               <div className="flex items-center gap-2.5 px-5 py-4 text-gray-400">
                 <FileText className="w-4 h-4 flex-shrink-0"/>
@@ -707,8 +858,8 @@ export function CandidateProfilePage() {
             )}
           </div>
 
-          {/* General Notes — hidden from agency */}
-          {!isAgency && (
+          {/* General Notes — hidden from agency; hidden when cost approval section consolidates it */}
+          {!isAgency && !canSeeCostApproval && (
           <div>
             <div className="flex items-center justify-between mb-2 px-1">
               <p className="text-sm font-semibold text-gray-700">General Notes</p>
@@ -730,15 +881,66 @@ export function CandidateProfilePage() {
           </div>
           )}
 
-          {/* Interview Notes — hidden from agency */}
-          {!isAgency && (
+          {/* Interview Notes — hidden from agency and from cost approval view */}
+          {!isAgency && !isInCostApproval && (
           <div>
             <p className="text-sm font-semibold text-gray-700 mb-3 px-1">Interview Notes</p>
+
+            {/* ── Interviewer: Knowledge Base (previous rounds, read-only) ── */}
+            {isInterviewer && (() => {
+              const currentIdx = stages.indexOf(candidate.current_stage)
+              const prevStages = currentIdx > 0
+                ? stages.slice(0, currentIdx)
+                    .filter(s => s !== costApprovalStageName)
+                    .map(s => ({ key: stageKeyOf(s), label: s }))
+                : []
+              const hasPrevNotes = prevStages.some(({ key }) => (interviewNotes[key] ?? []).length > 0)
+              if (!hasPrevNotes) return null
+              return (
+                <div className="mb-4 rounded-xl border border-slate-200 overflow-hidden">
+                  <div className="flex items-center gap-2 px-4 py-2.5 bg-slate-100/80 border-b border-slate-200">
+                    <BookOpen className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" />
+                    <p className="text-xs font-semibold text-slate-600 uppercase tracking-wide">Knowledge Base</p>
+                    <span className="text-xs text-slate-400">— previous rounds, read-only</span>
+                  </div>
+                  <div className="divide-y divide-slate-100">
+                    {/* Previous stage notes in pipeline order */}
+                    {prevStages.map(({ key, label }) => {
+                      const entries: NoteEntry[] = interviewNotes[key] ?? []
+                      if (entries.length === 0) return null
+                      return (
+                        <div key={key} className="px-4 py-3">
+                          <p className="text-xs font-medium text-slate-400 mb-1.5">{label}</p>
+                          <div className="space-y-1.5">
+                            {entries.map((e, i) => (
+                              <div key={i} className="bg-white border border-slate-100 rounded-lg px-3 py-2.5">
+                                <p className="text-sm text-slate-700 whitespace-pre-wrap leading-relaxed">{e.text}</p>
+                                <p className="text-xs text-slate-400 mt-1">
+                                  <span className="font-medium text-slate-500">{e.author}</span> · {formatRelative(e.timestamp)}
+                                </p>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              )
+            })()}
+
+            {/* ── Notes sections (per pipeline stage) ── */}
             <div className="space-y-0">
               {visibleNotesSections.map(({ key, label }, sectionIdx) => {
                 const entries: NoteEntry[] = interviewNotes[key] ?? []
                 const draft = draftNotes[key] ?? ''
-                const templateQs = getTemplateQuestions(key)
+                // Format guide per stage — screening guide is HR-only
+                const stageGuide: string[] = (() => {
+                  const guide = jobInterviewFormat[key] ?? []
+                  if (!guide.length) return []
+                  if (key === 'screening' && isInterviewer) return []
+                  return guide
+                })()
                 return (
                   <div key={key} className={`${sectionIdx > 0 ? 'border-t border-gray-100' : ''}`}>
                     {/* Section header */}
@@ -748,13 +950,21 @@ export function CandidateProfilePage() {
                       {entries.length > 0 && <span className="text-xs text-gray-400">{entries.length}</span>}
                     </div>
 
-                    {/* Template questions — format for this stage */}
-                    {templateQs.length > 0 && (
-                      <div className="pl-3.5 pb-2">
-                        <p className="text-xs text-indigo-600 font-medium mb-1.5">Format / Questions</p>
-                        <ol className="space-y-1 list-decimal list-inside">
-                          {templateQs.map((q, qi) => (
-                            <li key={qi} className="text-xs text-indigo-700 bg-indigo-50/60 rounded px-2.5 py-1.5 leading-relaxed">{q}</li>
+                    {/* Format guide for this stage */}
+                    {stageGuide.length > 0 && (
+                      <div className="mb-2 mx-3.5 bg-green-50 border border-green-200 rounded-xl px-4 py-3">
+                        <div className="flex items-center gap-2 mb-2">
+                          <ClipboardList className="w-3.5 h-3.5 text-green-600 flex-shrink-0" />
+                          <p className="text-xs font-semibold text-green-800 uppercase tracking-wide">
+                            {label} Interview Guide
+                          </p>
+                        </div>
+                        <ol className="space-y-1">
+                          {stageGuide.map((q, i) => (
+                            <li key={i} className="text-sm text-green-900 flex gap-2">
+                              <span className="text-green-500 font-mono text-xs mt-0.5 flex-shrink-0">{i + 1}.</span>
+                              {q}
+                            </li>
                           ))}
                         </ol>
                       </div>
@@ -807,7 +1017,7 @@ export function CandidateProfilePage() {
                       </div>
                     )}
 
-                    {/* Input — resizable so user can expand for long paragraphs */}
+                    {/* Input */}
                     {canAddNotes && (
                       <div className="flex gap-2 items-end pb-3 pl-3.5">
                         <textarea rows={3} value={draft}
@@ -829,7 +1039,253 @@ export function CandidateProfilePage() {
               })}
             </div>
           </div>
-          )} {/* end !isAgency — Interview Notes hidden from agency */}
+          )}
+
+          {/* Cost Approval Section — shown while in stage OR after decision submitted */}
+          {!isAgency && canSeeCostApproval && (
+            <div className="bg-amber-50/40 rounded-xl border border-amber-200 overflow-hidden">
+              {/* Header */}
+              <div className="flex items-center gap-2.5 px-5 py-3.5 border-b border-amber-100 bg-amber-50">
+                <ShieldCheck className="w-4 h-4 text-amber-600 flex-shrink-0" />
+                <div>
+                  <p className="text-sm font-semibold text-amber-900">{costApprovalStageName}</p>
+                  <p className="text-xs text-amber-600">Review candidate history and submit your decision</p>
+                </div>
+              </div>
+
+              {/* Candidate History — compact "who · when | notes" per stage */}
+              <div className="px-5 py-4 border-b border-amber-100">
+                <div className="flex items-center gap-2 mb-4">
+                  <History className="w-3.5 h-3.5 text-gray-500" />
+                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Candidate History</p>
+                </div>
+
+                {(() => {
+                  const recLabel: Record<string, string> = {
+                    strong_yes: 'Strong Yes', yes: 'Yes', neutral: 'Neutral', no: 'No', strong_no: 'Strong No'
+                  }
+                  const recColor: Record<string, string> = {
+                    strong_yes: 'bg-green-100 text-green-700', yes: 'bg-green-50 text-green-600',
+                    neutral: 'bg-gray-100 text-gray-600', no: 'bg-red-50 text-red-600', strong_no: 'bg-red-100 text-red-700'
+                  }
+
+                  const hasGeneralNotes = !!(candidate as any).notes
+                  const hasStageData = HISTORY_STAGES.some(({ key }) =>
+                    (interviewNotes[key] ?? []).length > 0 ||
+                    (interviewFeedbacks as any[]).some((fb: any) => stageKeyOf(fb.stage ?? '') === key)
+                  )
+                  const hasCostApprovalNotes = (interviewNotes['cost_approval'] ?? []).length > 0
+                  const hasCostApprovalData = hasCostApprovalNotes || !!(candidate as any).cost_approval_decision
+
+                  if (!hasGeneralNotes && !hasStageData && !hasCostApprovalData) {
+                    return <p className="text-xs text-gray-400 italic">No interview notes or feedback recorded yet.</p>
+                  }
+
+                  return (
+                    <div className="space-y-5">
+                      {/* General Notes */}
+                      {(candidate as any).notes && (
+                        <div>
+                          <div className="flex items-center gap-2 mb-2">
+                            <span className="w-1.5 h-1.5 rounded-full bg-amber-400 flex-shrink-0" />
+                            <p className="text-xs font-bold text-gray-700 uppercase tracking-wider">General Notes</p>
+                          </div>
+                          <div className="pl-4">
+                            <div className="bg-white border border-gray-100 rounded-lg px-3 py-2.5">
+                              <p className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">{(candidate as any).notes}</p>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Per-stage history: Screening, R1, R2, CF, etc. */}
+                      {HISTORY_STAGES.map(({ key, label }) => {
+                        const entries: NoteEntry[] = interviewNotes[key] ?? []
+                        const stageFeedback = (interviewFeedbacks as any[]).filter(
+                          (fb: any) => stageKeyOf(fb.stage ?? '') === key
+                        )
+                        if (entries.length === 0 && stageFeedback.length === 0) return null
+
+                        return (
+                          <div key={key}>
+                            {/* Stage label */}
+                            <div className="flex items-center gap-2 mb-2">
+                              <span className="w-1.5 h-1.5 rounded-full bg-amber-400 flex-shrink-0" />
+                              <p className="text-xs font-bold text-gray-700 uppercase tracking-wider">{label}</p>
+                            </div>
+
+                            <div className="pl-4 space-y-2.5">
+                              {/* Formal feedback — interviewer identity + recommendation + notes */}
+                              {stageFeedback.map((fb: any) => {
+                                const reviewer = allUsers.find(u => u.id === fb.interviewer_id)
+                                const initials = (reviewer?.full_name ?? '?').split(' ').map((n: string) => n[0]).join('').toUpperCase().slice(0, 2)
+                                return (
+                                  <div key={fb.id} className="bg-indigo-50/60 border border-indigo-100 rounded-lg px-3 py-2.5">
+                                    {/* who · when · recommendation */}
+                                    <div className="flex items-center gap-2 flex-wrap">
+                                      <div className="w-6 h-6 rounded-full bg-indigo-200 flex items-center justify-center flex-shrink-0">
+                                        <span className="text-xs font-bold text-indigo-700">{initials}</span>
+                                      </div>
+                                      <span className="text-sm font-semibold text-indigo-900">{reviewer?.full_name ?? 'Unknown'}</span>
+                                      {fb.submitted_at && (
+                                        <>
+                                          <span className="text-gray-300">·</span>
+                                          <span className="text-xs text-gray-500">{formatDateTime(fb.submitted_at)}</span>
+                                        </>
+                                      )}
+                                      {fb.recommendation && (
+                                        <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${recColor[fb.recommendation] ?? 'bg-gray-100 text-gray-600'}`}>
+                                          {recLabel[fb.recommendation] ?? fb.recommendation}
+                                        </span>
+                                      )}
+                                    </div>
+                                    {/* notes */}
+                                    {(fb.strengths || fb.concerns) && (
+                                      <div className="mt-1.5 text-sm text-gray-700 space-y-0.5">
+                                        {fb.strengths && (
+                                          <p><span className="text-xs font-medium text-green-700">Strengths:</span> {fb.strengths}</p>
+                                        )}
+                                        {fb.concerns && (
+                                          <p><span className="text-xs font-medium text-red-600">Concerns:</span> {fb.concerns}</p>
+                                        )}
+                                      </div>
+                                    )}
+                                  </div>
+                                )
+                              })}
+
+                              {/* Interview notes — who · when | notes */}
+                              {entries.map((e, i) => (
+                                <div key={i} className="bg-white border border-gray-100 rounded-lg px-3 py-2.5">
+                                  {/* who · when */}
+                                  <div className="flex items-center gap-1.5 mb-1">
+                                    <span className="text-xs font-semibold text-gray-700">{e.author}</span>
+                                    <span className="text-gray-300">·</span>
+                                    <span className="text-xs text-gray-400">{formatRelative(e.timestamp)}</span>
+                                  </div>
+                                  {/* notes */}
+                                  <p className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">{e.text}</p>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )
+                      })}
+
+                      {/* Cost Approval decision — from interview_notes.cost_approval */}
+                      {(() => {
+                        const caEntries: any[] = interviewNotes['cost_approval'] ?? []
+                        if (caEntries.length === 0) return null
+                        return (
+                          <div>
+                            <div className="flex items-center gap-2 mb-2">
+                              <span className="w-1.5 h-1.5 rounded-full bg-amber-600 flex-shrink-0" />
+                              <p className="text-xs font-bold text-amber-800 uppercase tracking-wider">{costApprovalStageName}</p>
+                            </div>
+                            <div className="pl-4 space-y-2.5">
+                              {caEntries.map((e: any, i: number) => {
+                                const isGoAhead = e.decision === 'go_ahead'
+                                const isRework = e.decision === 'rework_required'
+                                const initials = (e.author ?? '?').split(' ').map((n: string) => n[0]).join('').toUpperCase().slice(0, 2)
+                                return (
+                                  <div key={i} className={`border rounded-lg px-3 py-2.5 ${isGoAhead ? 'bg-green-50 border-green-100' : isRework ? 'bg-red-50 border-red-100' : 'bg-white border-gray-100'}`}>
+                                    <div className="flex items-center gap-2 flex-wrap">
+                                      <div className={`w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0 ${isGoAhead ? 'bg-green-200' : isRework ? 'bg-red-200' : 'bg-gray-200'}`}>
+                                        <span className={`text-xs font-bold ${isGoAhead ? 'text-green-800' : isRework ? 'text-red-800' : 'text-gray-700'}`}>{initials}</span>
+                                      </div>
+                                      <span className="text-sm font-semibold text-gray-800">{e.author}</span>
+                                      <span className="text-gray-300">·</span>
+                                      <span className="text-xs text-gray-500">{formatRelative(e.timestamp)}</span>
+                                      {e.decision && (
+                                        <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${isGoAhead ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                                          {isGoAhead ? 'Go Ahead' : 'Re-work Required'}
+                                        </span>
+                                      )}
+                                    </div>
+                                    {e.text && (
+                                      <p className="mt-1.5 text-sm text-gray-700 whitespace-pre-wrap">{e.text}</p>
+                                    )}
+                                  </div>
+                                )
+                              })}
+                            </div>
+                          </div>
+                        )
+                      })()}
+                    </div>
+                  )
+                })()}
+              </div>
+
+              {/* Cost Approval Notes + Decision */}
+              <div className="px-5 py-4 space-y-4">
+                {canSubmitCostApproval && (
+                  <>
+                    <div>
+                      <p className="text-xs font-semibold text-gray-600 mb-2">Cost Approval Notes</p>
+                      <textarea
+                        rows={3}
+                        value={caNotes}
+                        onChange={e => setCaNotes(e.target.value)}
+                        placeholder="Add notes for cost approval decision…"
+                        className="w-full px-3 py-2 border border-amber-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-amber-400 resize-y"
+                      />
+                    </div>
+
+                    <div>
+                      <p className="text-xs font-semibold text-gray-600 mb-2">Decision</p>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => setCaDecision('go_ahead')}
+                          className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium border-2 transition-all ${
+                            caDecision === 'go_ahead'
+                              ? 'bg-green-600 text-white border-green-600'
+                              : 'bg-white text-green-700 border-green-200 hover:border-green-400'
+                          }`}
+                        >
+                          <Check className="w-4 h-4" /> Go Ahead
+                        </button>
+                        <button
+                          onClick={() => setCaDecision('rework_required')}
+                          className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium border-2 transition-all ${
+                            caDecision === 'rework_required'
+                              ? 'bg-red-600 text-white border-red-600'
+                              : 'bg-white text-red-700 border-red-200 hover:border-red-400'
+                          }`}
+                        >
+                          <X className="w-4 h-4" /> Re-work Required
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-3">
+                      <button
+                        onClick={submitCostApproval}
+                        disabled={!caDecision || caSaveStatus === 'saving'}
+                        className={`flex items-center gap-2 px-5 py-2.5 rounded-lg text-sm font-medium transition-all ${
+                          caSaveStatus === 'saved'
+                            ? 'bg-green-500 text-white'
+                            : !caDecision
+                            ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                            : 'bg-amber-700 hover:bg-amber-800 text-white'
+                        }`}
+                      >
+                        {caSaveStatus === 'saving' && <Loader2 className="w-4 h-4 animate-spin" />}
+                        {caSaveStatus === 'saved' && <Check className="w-4 h-4" />}
+                        {caSaveStatus === 'saved' ? 'Submitted!' : caSaveStatus === 'saving' ? 'Submitting…' : 'Submit Decision'}
+                      </button>
+                      {caSaveStatus === 'error' && (
+                        <p className="text-xs text-red-600">Failed to submit. Please try again.</p>
+                      )}
+                      {!caDecision && (
+                        <p className="text-xs text-gray-400">Select a decision above before submitting</p>
+                      )}
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+          )} {/* end Cost Approval Section */}
 
           {/* ── Cost Approval Panel ── */}
           {canViewCostApproval && (

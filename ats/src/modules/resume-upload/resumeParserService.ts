@@ -9,7 +9,8 @@ export interface ParsedResume {
   current_designation: string | null
 }
 
-const PARSER_URL = import.meta.env.VITE_RESUME_PARSER_URL as string | undefined
+const _RAW_URL = (import.meta.env.VITE_RESUME_PARSER_URL as string | undefined)?.replace(/\/+$/, '')
+const PARSER_URL = _RAW_URL ? (_RAW_URL.endsWith('/parse') ? _RAW_URL : `${_RAW_URL}/parse`) : undefined
 const PARSER_API_KEY = import.meta.env.VITE_RESUME_PARSER_API_KEY as string | undefined
 const TIMEOUT_MS = 30_000
 

@@ -9,16 +9,30 @@ import phonenumbers
 
 
 def extract_all_fields(text: str) -> dict:
-    """Master extraction function — returns all fields with best-effort values."""
-    result = {}
+    """
+    Master extraction — tries Gemini LLM first, falls back to regex.
+    LLM is used when GEMINI_API_KEY env var is set on the server.
+    """
+    from extractors.llm_extractor import extract_fields_with_llm
+    llm_result = extract_fields_with_llm(text)
+    if llm_result:
+        # Fill any missing LLM fields with regex (belt-and-suspenders)
+        if not llm_result.get("email"):
+            llm_result["email"] = extract_email(text) or ""
+        if not llm_result.get("phone"):
+            llm_result["phone"] = extract_phone(text)
+        if not llm_result.get("linkedin_url"):
+            llm_result["linkedin_url"] = extract_linkedin(text)
+        return llm_result
 
+    # Regex-only fallback (when no API key is configured)
+    result = {}
     result["email"] = extract_email(text) or ""
     result["phone"] = extract_phone(text)
     result["linkedin_url"] = extract_linkedin(text)
     result["full_name"] = extract_name(text, result.get("email", ""))
     result["current_company"] = extract_current_company(text)
     result["current_designation"] = extract_current_designation(text)
-
     return result
 
 
@@ -210,31 +224,34 @@ def extract_name(text: str, email: str = "") -> str:
 
 def _is_likely_name_line(line: str) -> bool:
     """Check if a line likely contains just a name."""
-    # Skip if it contains common non-name indicators
     skip_indicators = [
         "@", "http", "www.", "phone", "tel:", "mobile", "address",
         "resume", "curriculum", "vitae", "objective", "summary",
         "experience", "education", "skill", "project",
-        "|", "•", "●", "■",
+        "|", "•", "●", "■", "+91", "linkedin", "github",
     ]
     line_lower = line.lower()
     if any(ind in line_lower for ind in skip_indicators):
         return False
 
-    # Name lines are typically short (2-5 words, < 50 chars)
+    # Names need at least 2 words (first + last name minimum)
     words = line.split()
-    if len(words) < 1 or len(words) > 5:
+    if len(words) < 2 or len(words) > 5:
         return False
     if len(line) > 60:
         return False
 
-    # Should contain mostly letters
-    alpha_ratio = sum(1 for c in line if c.isalpha() or c.isspace()) / max(len(line), 1)
-    if alpha_ratio < 0.8:
+    # Each word must be at least 2 chars
+    if any(len(w) < 2 for w in words):
         return False
 
-    # At least one word should start with uppercase
-    if not any(w[0].isupper() for w in words if w):
+    # Should contain mostly letters
+    alpha_ratio = sum(1 for c in line if c.isalpha() or c.isspace()) / max(len(line), 1)
+    if alpha_ratio < 0.85:
+        return False
+
+    # First word must start with uppercase
+    if not words[0][0].isupper():
         return False
 
     return True
@@ -266,12 +283,21 @@ def _is_valid_name(name: str) -> bool:
         if alpha_chars < len(word) * 0.7:
             return False
 
+    # Must be at least 4 chars total (avoids "ile", "Mr" etc.)
+    if len(name) < 4:
+        return False
+
+    # Must have at least 2 words
+    if len(words) < 2:
+        return False
+
     # Not a common non-name word
     NON_NAMES = {
         "resume", "curriculum", "vitae", "objective", "summary",
         "experience", "education", "skills", "projects", "profile",
         "contact", "address", "phone", "email", "linkedin",
         "professional", "personal", "details", "information",
+        "mr", "mrs", "ms", "dr", "sir", "prof",
     }
     if name.lower() in NON_NAMES or words[0].lower() in NON_NAMES:
         return False
@@ -337,39 +363,68 @@ def extract_current_company(text: str) -> Optional[str]:
     ])
 
     if exp_section:
-        # Look for company names (often in bold or on their own line, preceded by dates)
         lines = [l.strip() for l in exp_section.split("\n") if l.strip()]
-        for i, line in enumerate(lines[:10]):
-            # Skip date-only lines
-            if re.match(r"^\d{4}\s*[\-–]\s*(?:\d{4}|present|current|till\s*date)", line, re.IGNORECASE):
+        for i, line in enumerate(lines[:12]):
+            # Skip pure date lines
+            if re.match(r"^\d{4}\s*[-–]\s*(?:\d{4}|present|current|till\s*date)", line, re.IGNORECASE):
                 continue
-            # Skip designation-looking lines (too generic)
-            if re.match(r"^(senior|junior|lead|sr|jr|chief|head|vp|director|manager)", line, re.IGNORECASE):
-                # This might be the designation — next line could be company
+            if re.match(rf"^{_MONTH}\s+\d{{4}}", line, re.IGNORECASE):
+                continue
+
+            # Composite line with pipes/bullets → extract company component
+            if re.search(r"[|·•]", line):
+                company = _company_from_composite(line)
+                if company:
+                    return company
+                continue
+
+            cleaned = _strip_date_ranges(line.strip(" |•●■·–-.,"))
+            if not cleaned:
+                continue
+
+            # If the whole line is a designation, skip (next line may be company)
+            if _DESIG_RE.search(cleaned) and not re.search(
+                r"\b(?:technologies|solutions|consulting|group|ltd|pvt|inc|corp|"
+                r"global|services|systems|associates|ventures|digital)\b", cleaned, re.IGNORECASE
+            ):
                 if i + 1 < len(lines):
-                    candidate = lines[i + 1].strip(" |•●■–-.,")
-                    if _is_valid_company(candidate):
-                        return candidate[:80]
+                    next_cleaned = _strip_date_ranges(lines[i + 1].strip(" |•●■·–-.,"))
+                    if next_cleaned and _is_valid_company(next_cleaned):
+                        return next_cleaned[:80]
                 continue
 
-            # Check if this line looks like a company name
-            cleaned = line.strip(" |•●■–-.,")
-            # Remove date ranges from the line
-            cleaned = re.sub(r"\s*[\(]?\s*\d{4}\s*[\-–]\s*(?:\d{4}|present|current|till\s*date)\s*[\)]?\s*$", "", cleaned, flags=re.IGNORECASE)
-            cleaned = re.sub(r"^\s*\d{4}\s*[\-–]\s*(?:\d{4}|present|current|till\s*date)\s*[|:\-]\s*", "", cleaned, flags=re.IGNORECASE)
-
-            if cleaned and _is_valid_company(cleaned):
+            if _is_valid_company(cleaned):
                 return cleaned[:80]
 
     return None
 
 
+def _company_from_composite(line: str) -> Optional[str]:
+    """From a pipe/bullet-separated line, extract the company name component."""
+    parts = _split_composite_line(line)
+    candidates = []
+    for part in parts:
+        stripped = _strip_date_ranges(part)
+        if not stripped or len(stripped) < 2:
+            continue
+        # Skip date-only parts
+        if re.match(r"^\d{4}$", stripped) or re.match(rf"^{_MONTH}\s+\d{{4}}$", stripped, re.IGNORECASE):
+            continue
+        # Skip parts that are clearly designations
+        if _DESIG_RE.search(stripped):
+            continue
+        # Strip trailing city/location (",  Bengaluru" etc.)
+        stripped = re.sub(r",\s*[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?\s*$", "", stripped).strip()
+        if stripped and 2 <= len(stripped) <= 80:
+            candidates.append(stripped)
+    return candidates[0] if candidates else None
+
+
 def _is_valid_company(name: str) -> bool:
     """Check if string looks like a company name."""
-    if not name or len(name) < 2 or len(name) > 100:
+    if not name or len(name) < 2 or len(name) > 80:
         return False
 
-    # Skip common section headers
     SKIP = {
         "experience", "education", "skills", "projects", "summary",
         "objective", "profile", "interests", "hobbies", "references",
@@ -378,7 +433,13 @@ def _is_valid_company(name: str) -> bool:
     if name.lower().strip() in SKIP:
         return False
 
-    # Should have at least one word with 2+ chars
+    # Reject if it's primarily a designation (job title keywords dominate)
+    if _DESIG_RE.search(name):
+        # Allow if it contains "& Co", "Technologies", "Solutions" etc. alongside
+        if not re.search(r"\b(?:technologies|solutions|consulting|group|ltd|pvt|inc|corp|"
+                         r"global|services|systems|associates|ventures|digital)\b", name, re.IGNORECASE):
+            return False
+
     words = name.split()
     if not any(len(w) >= 2 for w in words):
         return False
@@ -399,7 +460,7 @@ def extract_current_designation(text: str) -> Optional[str]:
     for pattern in label_patterns:
         match = re.search(pattern, text, re.IGNORECASE)
         if match:
-            title = match.group(1).strip().strip(".,;")
+            title = _clean_designation(match.group(1).strip().strip(".,;"))
             if title and len(title) > 2 and len(title) < 80:
                 return title
 
@@ -410,33 +471,103 @@ def extract_current_designation(text: str) -> Optional[str]:
     ])
 
     if exp_section:
-        # Common job title patterns
-        TITLE_KEYWORDS = [
-            r"(?:senior|junior|lead|sr\.?|jr\.?|chief|head|principal|staff)?\s*"
-            r"(?:software|web|mobile|full[\s-]?stack|front[\s-]?end|back[\s-]?end|data|ml|ai|cloud|devops|qa|ui/ux|product|project|program|business|marketing|sales|hr|finance|operations)?\s*"
-            r"(?:engineer|developer|architect|designer|analyst|manager|consultant|specialist|coordinator|associate|executive|intern|trainee|officer|administrator|lead|director|vp|scientist|researcher)",
-        ]
-
         lines = [l.strip() for l in exp_section.split("\n") if l.strip()]
-        for line in lines[:8]:
-            cleaned = line.strip(" |•●■–-.,")
-            # Remove dates
-            cleaned = re.sub(r"\s*[\(]?\s*\d{4}\s*[\-–]\s*(?:\d{4}|present|current|till\s*date)\s*[\)]?\s*$", "", cleaned, flags=re.IGNORECASE)
-            cleaned = re.sub(r"^\s*\d{4}\s*[\-–]\s*(?:\d{4}|present|current|till\s*date)\s*[|:\-]\s*", "", cleaned, flags=re.IGNORECASE)
+        for line in lines[:12]:
+            # Skip pure date lines
+            if re.match(r"^\d{4}\s*[-–]\s*(?:\d{4}|present|current|till\s*date)", line, re.IGNORECASE):
+                continue
 
-            for pattern in TITLE_KEYWORDS:
-                match = re.search(pattern, cleaned, re.IGNORECASE)
-                if match:
-                    title = match.group(0).strip()
-                    if len(title) > 3:
-                        return title[:80]
+            # Composite line → extract designation component
+            if re.search(r"[|·•]", line):
+                desig = _designation_from_composite(line)
+                if desig:
+                    return desig
+                continue
 
+            cleaned = _strip_date_ranges(line.strip(" |•●■·–-.,"))
+            if not cleaned:
+                continue
+
+            if _DESIG_RE.search(cleaned):
+                title = _clean_designation(cleaned)
+                if title and 3 < len(title) <= 80:
+                    return title
+
+    return None
+
+
+def _designation_from_composite(line: str) -> Optional[str]:
+    """From a pipe/bullet-separated line, extract the designation component."""
+    parts = _split_composite_line(line)
+    for part in parts:
+        stripped = _strip_date_ranges(part)
+        if not stripped:
+            continue
+        if _DESIG_RE.search(stripped):
+            return _clean_designation(stripped)[:80]
     return None
 
 
 # ═══════════════════════════════════════════════════════════════════
 # UTILITY FUNCTIONS
 # ═══════════════════════════════════════════════════════════════════
+
+_MONTH = r"(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)"
+_END_DATE = rf"(?:{_MONTH}\s+\d{{4}}|present|current|ongoing|till\s*date)"
+
+def _strip_date_ranges(text: str) -> str:
+    """Remove all date range patterns from a string."""
+    # "Jan 2025 – Oct 2025" / "Jan 2025 - present"
+    text = re.sub(rf"\s*[,|]?\s*{_MONTH}\s+\d{{4}}\s*[-–]\s*{_END_DATE}", "", text, flags=re.IGNORECASE)
+    # Standalone "Jan 2025" at end
+    text = re.sub(rf"\s*[,|]?\s*{_MONTH}\s+\d{{4}}\s*$", "", text, flags=re.IGNORECASE)
+    # "01/2025 to 08/2025" / "01/2025 - present" (MM/YYYY format)
+    text = re.sub(r"\s*\d{1,2}/\d{4}\s*(?:to|[-–])\s*(?:\d{1,2}/\d{4}|present|current|ongoing)", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s*\d{1,2}/\d{4}\s*$", "", text, flags=re.IGNORECASE)
+    # "07/2025 – 02/2026" at end (with dash surrounded by spaces)
+    text = re.sub(r"\s+\d{1,2}/\d{4}\s*[-–]\s*\d{1,2}/\d{4}", "", text, flags=re.IGNORECASE)
+    # "2024 – 2025" / "2024 – present"
+    text = re.sub(r"\s*[\(]?\s*\d{4}\s*[-–]\s*(?:\d{4}|present|current|till\s*date|ongoing)\s*[\)]?", "", text, flags=re.IGNORECASE)
+    return text.strip(" |•●■·–-.,")
+
+
+# Regex to detect designation/job-title keywords
+_DESIG_RE = re.compile(
+    r"\b(?:engineer|developer|architect|designer|analyst|manager|consultant|specialist|"
+    r"coordinator|associate|executive|intern|trainee|officer|administrator|director|"
+    r"scientist|researcher|lead|head|chief|vp|vice\s*president|president|"
+    r"sales|marketing|business\s*development|support|operations|hr|finance)\b",
+    re.IGNORECASE,
+)
+
+
+def _split_composite_line(line: str) -> list[str]:
+    """Split a pipe/bullet composite experience line into components."""
+    parts = re.split(r"\s*[|·•]\s*", line)
+    return [p.strip() for p in parts if p.strip()]
+
+
+def _clean_designation(title: str) -> str:
+    """Remove sentence fragments from a designation string."""
+    cut_pattern = re.compile(
+        r"\s+(?:where|while|and\s+I|in\s+which|to\s+(?:work|help|support|contribute|manage)|"
+        r"working|reporting|based|located)\b",
+        re.IGNORECASE
+    )
+    m = cut_pattern.search(title)
+    if m:
+        title = title[:m.start()]
+
+    # Strip trailing "at/with/for <Company>"
+    title = re.sub(r"\s+(?:at|with|for|in)\s+\S.*$", "", title, flags=re.IGNORECASE)
+    title = title.strip(" .,;:-–")
+
+    words = title.split()
+    if len(words) > 7:
+        return ""
+    return title
+
+
 def _extract_section(text: str, section_names: list[str]) -> Optional[str]:
     """Extract a section of the resume by its header name."""
     # Build pattern to find section header
