@@ -490,6 +490,19 @@ export function CandidateProfilePage() {
   const canSeeCostApproval = (isInCostApproval || hasCostApprovalRecord) && (canEdit || isCAPanel)
   const canSubmitCostApproval = isInCostApproval && isCAPanel
 
+  // Derived variables for the cost approval UI section
+  const caEntries: any[] = interviewNotes['cost_approval'] ?? []
+  const latestCAEntry = caEntries[caEntries.length - 1] ?? null
+  const costApprovalDecision = (candidate as any).cost_approval_decision as string | null
+  const costApprovalNotes: NoteEntry[] = (candidate as any).cost_approval_notes ?? []
+  const hasCAResult = !!(latestCAEntry?.decision || costApprovalDecision)
+  const caResultDecision: string = latestCAEntry?.decision ?? costApprovalDecision ?? ''
+  const caResultGoAhead = caResultDecision === 'go_ahead'
+  const caResultAuthor = latestCAEntry?.author ?? ''
+  const caResultTs = latestCAEntry?.timestamp ?? ''
+  const caResultNotes = latestCAEntry?.text ?? ''
+  const showCAForm = canSubmitCostApproval && (!hasCAResult || caEditMode)
+
   // Stage pill color — DB config → hardcoded map → gray fallback
   const STAGE_COLOURS: Record<string, string> = {
     Applied:'bg-gray-100 text-gray-600',      Screening:'bg-blue-50 text-blue-700',
@@ -515,8 +528,6 @@ export function CandidateProfilePage() {
   const isCostApprovalStage = !!(costApprovalSettings?.stage_name && candidate.current_stage === costApprovalSettings.stage_name)
   const isCostApprovalReviewer = !!(costApprovalSettings && user && costApprovalSettings.reviewer_ids.includes(user.id))
   const canViewCostApproval = isCostApprovalStage && (isCostApprovalReviewer || canEdit)
-  const costApprovalDecision = (candidate as any).cost_approval_decision as string | null
-  const costApprovalNotes: NoteEntry[] = (candidate as any).cost_approval_notes ?? []
 
   // Google Drive preview: convert share URL to embedded preview
   const drivePreviewUrl = candidate.resume_url
