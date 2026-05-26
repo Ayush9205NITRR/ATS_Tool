@@ -33,12 +33,12 @@ export function AppShell() {
         <span className="font-semibold text-gray-900">ATS</span>
       </div>
 
-      <nav className="flex-1 px-3 py-4 space-y-0.5">
+      <nav className="flex-1 px-3 py-4 space-y-0.5 overflow-y-auto">
         {visibleNav.map(({ to, label, icon: Icon }) => (
-          <NavLink key={to} to={to} onClick={() => setMobileOpen(false)}
+          <NavLink key={`${to}-${label}`} to={to} end={to === '/dashboard'} onClick={() => setMobileOpen(false)}
             className={({ isActive }) =>
-              `flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
-                isActive ? 'bg-blue-50 text-blue-700' : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'
+              `flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                isActive ? 'bg-blue-50 text-blue-700' : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
               }`
             }>
             <Icon className="w-4 h-4 flex-shrink-0"/>

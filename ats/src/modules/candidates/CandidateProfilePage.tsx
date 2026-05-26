@@ -458,7 +458,12 @@ export function CandidateProfilePage() {
                     <Linkedin className="w-3.5 h-3.5 flex-shrink-0"/>LinkedIn Profile
                   </a>
                 )}
-                {!candidate.phone && !candidate.linkedin_url && (
+                {candidate.resume_url && (
+                  <a href={candidate.resume_url} target="_blank" rel="noreferrer" className="flex items-center gap-2.5 text-sm text-blue-600 hover:underline">
+                    <FileText className="w-3.5 h-3.5 flex-shrink-0"/>View Resume
+                  </a>
+                )}
+                {!candidate.phone && !candidate.linkedin_url && !candidate.resume_url && (
                   <p className="text-xs text-gray-400 italic">Click Edit to add phone / LinkedIn</p>
                 )}
               </div>
@@ -646,9 +651,16 @@ export function CandidateProfilePage() {
               )}
             </div>
             {drivePreviewUrl ? (
-              <iframe src={drivePreviewUrl} className="w-full border-0" style={{ height: '300px' }} title="Resume"/>
+              <iframe src={drivePreviewUrl} className="w-full border-0" style={{ height: '320px' }} title="Resume"/>
+            ) : candidate.resume_url ? (
+              <div className="px-5 py-4 flex items-center gap-2.5">
+                <FileText className="w-4 h-4 flex-shrink-0 text-gray-400"/>
+                <a href={candidate.resume_url} target="_blank" rel="noreferrer" className="text-sm text-blue-600 hover:underline break-all">
+                  Open resume ↗
+                </a>
+                <span className="text-xs text-gray-400 flex-shrink-0">(inline preview for Google Drive only)</span>
+              </div>
             ) : (
-              /* Minimal empty state — no giant box */
               <div className="flex items-center gap-2.5 px-5 py-4 text-gray-400">
                 <FileText className="w-4 h-4 flex-shrink-0"/>
                 <p className="text-sm">No resume attached</p>

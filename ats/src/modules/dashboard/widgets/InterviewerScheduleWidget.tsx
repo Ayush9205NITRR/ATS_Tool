@@ -15,7 +15,7 @@ export function InterviewerScheduleWidget() {
   const { data = [], isLoading, error } = useQuery({
     queryKey: ['widget', 'interviewer-schedule'],
     queryFn: async () => {
-      // 1. All active interviewers
+      // Fetch interviewers first (needed for ids), then candidates + feedback in parallel
       const { data: interviewers } = await supabase
         .from('users')
         .select('id, full_name')
@@ -27,18 +27,17 @@ export function InterviewerScheduleWidget() {
 
       const ids = interviewers.map(u => u.id)
 
-      // 2. All candidates with interview_date assigned to these interviewers
-      const { data: candidates } = await supabase
-        .from('candidates')
-        .select('id, full_name, interview_date, current_stage, assigned_interviewers')
-        .eq('status', 'active')
-        .not('assigned_interviewers', 'is', null)
-
-      // 3. All feedback submitted by these interviewers
-      const { data: feedback } = await supabase
-        .from('interview_feedback')
-        .select('interviewer_id, candidate_id, submitted_at')
-        .in('interviewer_id', ids)
+      const [{ data: candidates }, { data: feedback }] = await Promise.all([
+        supabase
+          .from('candidates')
+          .select('id, full_name, interview_date, current_stage, assigned_interviewers')
+          .eq('status', 'active')
+          .not('assigned_interviewers', 'is', null),
+        supabase
+          .from('interview_feedback')
+          .select('interviewer_id, candidate_id, submitted_at')
+          .in('interviewer_id', ids),
+      ])
 
       // Build per-interviewer data
       const feedbackByInterviewer: Record<string, Set<string>> = {}

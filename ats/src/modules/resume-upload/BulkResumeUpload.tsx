@@ -221,12 +221,14 @@ export function BulkResumeUpload() {
 
   const saveMutation = useMutation({
     mutationFn: async (rowsToSave: ProcessedRow[]) => {
-      const payloads = rowsToSave.map(row => {
+      const payloads = rowsToSave.map((row, i) => {
         const d = row.data!
         const sourceCategory = isAgency ? 'agency' : normalizeSourceCategory(row.csv.source)
+        const email = d.email?.trim().toLowerCase()
+          || `noemail.${row.index}.${Date.now() + i}@placeholder.local`
         return {
           full_name: d.full_name,
-          email: d.email.trim().toLowerCase(),
+          email,
           phone: normalizePhone(d.phone) || null,
           resume_url: row.csv.resume_url,
           linkedin_url: d.linkedin_url || null,
@@ -474,7 +476,12 @@ export function BulkResumeUpload() {
                 <tr className="bg-gray-50 border-b border-gray-100">
                   <th className="text-left px-3 py-2.5 font-medium text-gray-500">#</th>
                   <th className="text-left px-3 py-2.5 font-medium text-gray-500">Name</th>
-                  <th className="text-left px-3 py-2.5 font-medium text-gray-500">Email</th>
+                  <th className="text-left px-3 py-2.5 font-medium text-gray-500">
+                    Email
+                    {parsedRows.some(r => !r.data?.email) && (
+                      <span className="ml-1 text-amber-500 font-normal">⚠ some missing</span>
+                    )}
+                  </th>
                   <th className="text-left px-3 py-2.5 font-medium text-gray-500">Phone</th>
                   <th className="text-left px-3 py-2.5 font-medium text-gray-500">Company</th>
                   <th className="text-left px-3 py-2.5 font-medium text-gray-500">Designation</th>
@@ -482,17 +489,29 @@ export function BulkResumeUpload() {
                 </tr>
               </thead>
               <tbody>
-                {parsedRows.slice(0, 50).map(row => (
-                  <tr key={row.index} className="border-b border-gray-50">
-                    <td className="px-3 py-2 text-gray-400">{row.index + 1}</td>
-                    <td className="px-3 py-2 text-gray-700 font-medium">{row.data?.full_name || '-'}</td>
-                    <td className="px-3 py-2 text-gray-600">{row.data?.email || '-'}</td>
-                    <td className="px-3 py-2 text-gray-500">{row.data?.phone || '-'}</td>
-                    <td className="px-3 py-2 text-gray-500">{row.data?.current_company || '-'}</td>
-                    <td className="px-3 py-2 text-gray-500">{row.data?.current_designation || '-'}</td>
-                    <td className="px-3 py-2 text-gray-500">{row.csv.source}</td>
-                  </tr>
-                ))}
+                {parsedRows.slice(0, 50).map(row => {
+                  const missingEmail = !row.data?.email
+                  return (
+                    <tr key={row.index} className={`border-b border-gray-50 ${missingEmail ? 'bg-amber-50/40' : ''}`}>
+                      <td className="px-3 py-2 text-gray-400">{row.index + 1}</td>
+                      <td className="px-3 py-2 text-gray-700 font-medium">{row.data?.full_name || '-'}</td>
+                      <td className="px-3 py-2">
+                        {missingEmail ? (
+                          <span className="flex items-center gap-1 text-amber-600 italic">
+                            <AlertTriangle className="w-3 h-3 flex-shrink-0"/>
+                            No email — placeholder used
+                          </span>
+                        ) : (
+                          <span className="text-gray-600">{row.data!.email}</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2 text-gray-500">{row.data?.phone || '-'}</td>
+                      <td className="px-3 py-2 text-gray-500">{row.data?.current_company || '-'}</td>
+                      <td className="px-3 py-2 text-gray-500">{row.data?.current_designation || '-'}</td>
+                      <td className="px-3 py-2 text-gray-500">{row.csv.source}</td>
+                    </tr>
+                  )
+                })}
               </tbody>
             </table>
             {parsedRows.length > 50 && (
@@ -501,6 +520,17 @@ export function BulkResumeUpload() {
           </div>
         )}
 
+        {parsedRows.some(r => !r.data?.email) && (
+          <div className="mb-4 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2.5 flex items-start gap-2">
+            <AlertTriangle className="w-4 h-4 text-amber-500 flex-shrink-0 mt-0.5"/>
+            <div>
+              <p className="text-sm font-medium text-amber-800">
+                {parsedRows.filter(r => !r.data?.email).length} candidate{parsedRows.filter(r => !r.data?.email).length > 1 ? 's' : ''} have no email detected.
+              </p>
+              <p className="text-xs text-amber-600 mt-0.5">A placeholder email will be used. Edit the candidate profile after saving to add the real email.</p>
+            </div>
+          </div>
+        )}
         {saveMutation.error && (
           <div className="mb-4 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
             <p className="text-sm text-red-600">{(saveMutation.error as Error).message}</p>
