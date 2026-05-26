@@ -53,6 +53,7 @@ interface ColDef { key: string; label: string; width: number; alwaysVisible?: bo
 const COLS: ColDef[] = [
   { key:'stage',          label:'Stage',          width:150 },
   { key:'job',            label:'Job',            width:160 },
+  { key:'ca_decision',    label:'CA Decision',    width:140 },
   { key:'source',         label:'Source',         width:100 },
   { key:'subsource',      label:'Sub-Source',     width:140 },
   { key:'hr_owner',       label:'HR Owner',       width:130 },
@@ -65,7 +66,7 @@ const COLS: ColDef[] = [
   { key:'resume',         label:'Resume',         width:80  },
   { key:'notes',          label:'Notes',          width:150 },
 ]
-const DEFAULT_VISIBLE  = new Set(['stage','job','hr_owner','interviewer','interview_date'])
+const DEFAULT_VISIBLE  = new Set(['stage','job','ca_decision','hr_owner','interviewer','interview_date'])
 const DEFAULT_ORDER    = COLS.map(c=>c.key)
 
 // ── Tiny popup (no-lag dropdown) ──────────────────────────────
@@ -869,6 +870,20 @@ const displayed = useMemo(() => {
                             {orderedVisible.map(key=>{
                               if (key==='stage') return <td key="stage" className="px-3 py-2.5"><StageCell cid={c.id} value={c.current_stage} canEdit={canEdit} onUpdate={onUpdate} stages={STAGES} stageConfigs={stageConfigs}/></td>
                               if (key==='job') return <td key="job" className="px-3 py-2.5"><SelectCell cid={c.id} field="job_id" display={c.job?.title ?? getName(jobs as any[],c.job_id)} canEdit={canAssign} onUpdate={onUpdate} options={(jobs as any[]).map(j=>({label:j.title,value:j.id}))}/></td>
+                              if (key==='ca_decision') {
+                                const caEntries: any[] = c.interview_notes?.cost_approval ?? []
+                                const decision: string = caEntries[caEntries.length - 1]?.decision ?? c.cost_approval_decision ?? ''
+                                if (!decision) return <td key="ca_decision" className="px-3 py-2.5"><span className="text-gray-200 text-xs">—</span></td>
+                                return <td key="ca_decision" className="px-3 py-2.5">
+                                  <span className={`inline-flex items-center gap-1 text-xs px-2 py-1 rounded-md font-semibold ${
+                                    decision === 'go_ahead'
+                                      ? 'bg-green-100 text-green-700'
+                                      : 'bg-orange-100 text-orange-700'
+                                  }`}>
+                                    {decision === 'go_ahead' ? '✓ Go Ahead' : '↺ Re-work'}
+                                  </span>
+                                </td>
+                              }
                               if (key==='source') return <td key="source" className="px-3 py-2.5"><SourceCell cid={c.id} category={c.source_category} canEdit={canEdit} onUpdate={onUpdate}/></td>
                               if (key==='subsource') return <td key="subsource" className="px-3 py-2.5"><SubSourceCell cid={c.id} category={c.source_category} name={c.source_name??''} canEdit={canEdit} onUpdate={onUpdate}/></td>
                               if (key==='hr_owner') return <td key="hr_owner" className="px-3 py-2.5"><SelectCell cid={c.id} field="hr_owner" display={getName(hrUsers as any[],c.hr_owner)} canEdit={canAssignHR} onUpdate={onUpdate} options={(hrUsers as any[]).map(u=>({label:u.full_name,value:u.id}))}/></td>
