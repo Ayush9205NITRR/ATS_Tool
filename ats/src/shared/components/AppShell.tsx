@@ -3,6 +3,7 @@ import { NavLink, Outlet } from 'react-router-dom'
 import { LayoutDashboard, Users, Briefcase, Upload, ClipboardList, Settings, Menu, LogOut } from 'lucide-react'
 import { useAuthStore } from '../../modules/auth/authStore'
 import { initialsOf } from '../utils/helpers'
+import { NotificationBell } from './NotificationBell'
 
 const NAV = [
   { to: '/dashboard',  label: 'Dashboard',      icon: LayoutDashboard, roles: ['super_admin','admin','hr_team','interviewer','agency'] },
@@ -57,6 +58,7 @@ export function AppShell() {
               <p className="text-sm font-medium text-gray-900 truncate">{user.full_name}</p>
               <p className="text-xs text-gray-400 truncate">{ROLE_LABELS[user.role] ?? user.role}</p>
             </div>
+            {user.role === 'super_admin' && <NotificationBell />}
             <button onClick={signOut} className="text-gray-400 hover:text-gray-600 transition-colors" title="Sign out">
               <LogOut className="w-4 h-4"/>
             </button>

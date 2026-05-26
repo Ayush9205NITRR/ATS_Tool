@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Plus, Briefcase, Loader2, ChevronDown, ChevronRight, Pencil, Users, Calendar, DollarSign, Target, Hash, Layers, ExternalLink } from 'lucide-react'
+import { Plus, Briefcase, Loader2, ChevronDown, ChevronRight, Pencil, Users, Calendar, DollarSign, Target, Hash, Layers, ExternalLink, ClipboardList, X } from 'lucide-react'
 import { jobService } from './jobService'
 import { supabase } from '../../lib/supabaseClient'
 import { PageHeader } from '../../shared/components/PageHeader'
@@ -12,6 +12,14 @@ import { formatDate, labelOf } from '../../shared/utils/helpers'
 import { useForm } from 'react-hook-form'
 import { z } from 'zod'
 import { zodResolver } from '@hookform/resolvers/zod'
+
+// Derive a stable key from a stage name (mirrors CandidateProfilePage logic)
+function stageKeyOf(name: string) {
+  return name.toLowerCase().replace(/[^a-z0-9]/g, '_')
+}
+
+// Interview stages that can have question formats
+const INTERVIEW_STAGE_NAMES = ['Screening', 'R1', 'Case Study', 'R2', 'R3', 'CF (Virtual)', 'CF (In-Person)']
 
 const inputCls = 'w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white'
 
@@ -60,6 +68,19 @@ function JobForm({ job, onClose }: { job?: any; onClose: () => void }) {
   const [hrIds, setHrIds]                 = useState<string[]>(job?.assigned_hrs ?? [])
   const [assignAllCandidates, setAssignAllCandidates] = useState<boolean>(false)
 
+  // Interview format state — keyed by stage key, value is newline-separated questions
+  const existingFormat: Record<string, string[]> = job?.interview_format ?? {}
+  const [interviewFormat, setInterviewFormat] = useState<Record<string, string>>(
+    Object.fromEntries(
+      INTERVIEW_STAGE_NAMES.map(name => {
+        const key = stageKeyOf(name)
+        const qs: string[] = existingFormat[key] ?? []
+        return [key, qs.join('\n')]
+      })
+    )
+  )
+  const [showInterviewFormat, setShowInterviewFormat] = useState(false)
+
   const { data: agencyUsers = [] } = useQuery({
     queryKey: ['agency-users'],
     queryFn: async () => {
@@ -93,6 +114,15 @@ function JobForm({ job, onClose }: { job?: any; onClose: () => void }) {
   const save = useMutation({
     mutationFn: async (d: FormData) => {
       const skills = d.required_skills ? d.required_skills.split(',').map(s=>s.trim()).filter(Boolean) : []
+
+      // Build interview_format from textarea states
+      const fmtObj: Record<string, string[]> = {}
+      INTERVIEW_STAGE_NAMES.forEach(name => {
+        const key = stageKeyOf(name)
+        const qs = (interviewFormat[key] ?? '').split('\n').map(s => s.trim()).filter(Boolean)
+        if (qs.length) fmtObj[key] = qs
+      })
+
       const payload = {
         title: d.title, department: d.department||null, location: d.location||null,
         employment_type: d.employment_type??null, description: d.description||null,
@@ -106,6 +136,7 @@ function JobForm({ job, onClose }: { job?: any; onClose: () => void }) {
         assigned_hrs: hrIds,
         // hr_owner stays as the FIRST selected HR for backward compatibility
         hr_owner: hrIds[0] ?? null,
+        interview_format: fmtObj,
       }
       const saved = job
         ? await jobService.update(job.id, payload as any)
@@ -309,6 +340,48 @@ function JobForm({ job, onClose }: { job?: any; onClose: () => void }) {
                 ✓ {agencyIds.length} agenc{agencyIds.length > 1 ? 'ies' : 'y'} selected
               </p>
             )}
+          </div>
+        )}
+      </div>
+
+      {/* Interview Format Templates */}
+      <div className="border border-green-200 rounded-xl overflow-hidden bg-green-50/20">
+        <button
+          type="button"
+          onClick={() => setShowInterviewFormat(o => !o)}
+          className="w-full flex items-center justify-between px-4 py-3 text-left hover:bg-green-50/40 transition-colors"
+        >
+          <div className="flex items-center gap-2">
+            <ClipboardList className="w-4 h-4 text-green-600" />
+            <p className="text-sm font-medium text-gray-700">Interview Format Templates</p>
+            <span className="text-xs text-gray-400">(optional — shown as a guide to interviewers)</span>
+          </div>
+          <ChevronDown className={`w-4 h-4 text-gray-400 transition-transform ${showInterviewFormat ? 'rotate-180' : ''}`} />
+        </button>
+
+        {showInterviewFormat && (
+          <div className="px-4 pb-4 border-t border-green-100 space-y-3">
+            <p className="text-xs text-gray-500 mt-3">
+              Add questions for each stage below. These will be shown to interviewers as a guide on the candidate profile.
+              Enter one question per line.
+            </p>
+            {INTERVIEW_STAGE_NAMES.map(stageName => {
+              const key = stageKeyOf(stageName)
+              return (
+                <div key={key}>
+                  <label className="block text-xs font-semibold text-gray-600 mb-1">
+                    {stageName} Questions
+                  </label>
+                  <textarea
+                    rows={3}
+                    value={interviewFormat[key] ?? ''}
+                    onChange={e => setInterviewFormat(p => ({ ...p, [key]: e.target.value }))}
+                    placeholder={`e.g.\nTell me about your relevant experience\nWhat's your approach to problem solving?`}
+                    className={inputCls + ' resize-y font-normal text-xs'}
+                  />
+                </div>
+              )
+            })}
           </div>
         )}
       </div>

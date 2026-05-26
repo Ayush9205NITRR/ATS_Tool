@@ -11,7 +11,7 @@ function useJobsMap() {
   return useQuery({
     queryKey: ['jobs', 'map'],
     queryFn: async () => {
-      const { data } = await supabase.from('jobs').select('id,title,pipeline_stages,jd_link')
+      const { data } = await supabase.from('jobs').select('id,title,pipeline_stages,jd_link,interview_format')
       const map: Record<string, any> = {}
       ;(data ?? []).forEach(j => { map[j.id] = j })
       return map
