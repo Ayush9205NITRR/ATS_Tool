@@ -11,7 +11,7 @@ function useJobsMap() {
   return useQuery({
     queryKey: ['jobs', 'map'],
     queryFn: async () => {
-      const { data } = await supabase.from('jobs').select('id,title,pipeline_stages,jd_link')
+      const { data } = await supabase.from('jobs').select('id,title,pipeline_stages,jd_link,interview_format')
       const map: Record<string, any> = {}
       ;(data ?? []).forEach(j => { map[j.id] = j })
       return map
@@ -24,7 +24,7 @@ export function useCandidates(filters: CandidateFilters & { search?: string } = 
   const { user } = useAuthStore()
   const { data: jobsMap = {} } = useJobsMap()
 
-  return useQuery({
+  const query = useQuery({
     queryKey: ['candidates', filters, user?.id, user?.role],
     queryFn: async () => {
       // 1. Fetch data — RLS enforces agency isolation server-side
@@ -58,30 +58,34 @@ export function useCandidates(filters: CandidateFilters & { search?: string } = 
         )
       }
 
-      // 4. Enrich with cached job data
-      return candidates.map((c: any) => ({
-        ...c,
-        job: c.job_id && jobsMap[c.job_id] ? jobsMap[c.job_id] : null,
-      }))
+      return candidates
     },
     enabled: true,
   })
+
+  // Enrich with job data at render time so jobsMap updates propagate without re-fetching
+  const enriched = query.data?.map((c: any) => ({
+    ...c,
+    job: c.job_id && jobsMap[c.job_id] ? jobsMap[c.job_id] : null,
+  }))
+
+  return { ...query, data: enriched }
 }
 
 export function useCandidate(id: string) {
   const { data: jobsMap = {} } = useJobsMap()
-  return useQuery({
+  const query = useQuery({
     queryKey: ['candidate', id],
-    queryFn: async () => {
-      const c = await candidateService.getById(id)
-      if (!c) return null
-      return {
-        ...c,
-        job: c.job_id && jobsMap[c.job_id] ? jobsMap[c.job_id] : null,
-      }
-    },
+    queryFn: async () => candidateService.getById(id),
     enabled: !!id,
   })
+
+  // Enrich with job data at render time so jobsMap updates propagate without re-fetching
+  const candidate = query.data
+    ? { ...query.data, job: query.data.job_id ? (jobsMap[query.data.job_id] ?? null) : null }
+    : query.data
+
+  return { ...query, data: candidate }
 }
 
 export function useUpdateStage() {

@@ -13,18 +13,12 @@ export function JobBreakdownWidget() {
   const { data = [], isLoading, error } = useQuery({
     queryKey: ['widget', 'job-breakdown'],
     queryFn: async () => {
-      const { data: jobs } = await supabase
-        .from('jobs')
-        .select('id, title, status')
-        .eq('status', 'open')
-        .order('title')
+      const [{ data: jobs }, { data: candidates }] = await Promise.all([
+        supabase.from('jobs').select('id, title, status').eq('status', 'open').order('title'),
+        supabase.from('candidates').select('job_id, current_stage, status').eq('status', 'active'),
+      ])
 
       if (!jobs?.length) return []
-
-      const { data: candidates } = await supabase
-        .from('candidates')
-        .select('job_id, current_stage, status')
-        .eq('status', 'active')
 
       return jobs.map((job) => {
         const jobCandidates = (candidates ?? []).filter((c) => c.job_id === job.id)

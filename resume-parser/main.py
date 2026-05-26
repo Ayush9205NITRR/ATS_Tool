@@ -161,6 +161,10 @@ async def parse_resume(req: ParseRequest):
 async def health():
     return {"status": "ok", "version": "1.0.0"}
 
+@app.get("/")
+async def root():
+    return {"status": "ok", "service": "resume-parser"}
+
 
 async def download_file(url: str) -> bytes:
     """Download file from URL with retries and proper headers."""

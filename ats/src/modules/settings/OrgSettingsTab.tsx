@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { supabase } from '../../lib/supabaseClient'
 import { useAuthStore } from '../auth/authStore'
-import { Check, Loader2, Mail, User, Building, Plus, X, GripVertical } from 'lucide-react'
+import { Check, Loader2, Mail, User, Building, Plus, X, ShieldCheck } from 'lucide-react'
 import { useStages, useSaveStages, DEFAULT_STAGE_CONFIGS, COLOR_OPTIONS, type StageConfig } from '../../shared/hooks/useStages'
 
 interface Setting { key: string; value: string }

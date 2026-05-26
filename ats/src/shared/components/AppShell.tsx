@@ -161,7 +161,7 @@ export function AppShell() {
               <p className="text-sm font-medium text-zinc-900 truncate leading-tight">{user.full_name}</p>
               <p className="text-xs text-zinc-400 truncate leading-tight mt-0.5">{ROLE_LABELS[user.role] ?? user.role}</p>
             </div>
-            <NotificationBell />
+            {['super_admin', 'admin', 'hr_team'].includes(user.role) && <NotificationBell />}
             <button
               onClick={signOut}
               className="text-zinc-300 hover:text-zinc-600 transition-colors p-1 rounded-lg hover:bg-zinc-100"
