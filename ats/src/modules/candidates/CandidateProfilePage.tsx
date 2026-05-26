@@ -277,14 +277,13 @@ export function CandidateProfilePage() {
     setSavingNote(sectionKey)
     const existing = (candidate as any)?.interview_notes ?? {}
     const entries: NoteEntry[] = existing[sectionKey] ?? []
-    const { error } = await supabase.from('candidates').update({
-      interview_notes: { ...existing, [sectionKey]: [...entries, {
-        text: draft, author: user!.full_name,
-        authorId: user!.id, timestamp: new Date().toISOString(),
-      }]}
-    }).eq('id', id!)
-    if (error) console.error('[saveNote]', error)
+    const newEntry: NoteEntry = { text: draft, author: user!.full_name, authorId: user!.id, timestamp: new Date().toISOString() }
+    const newNotes = { ...existing, [sectionKey]: [...entries, newEntry] }
+    const { error } = await supabase.from('candidates').update({ interview_notes: newNotes }).eq('id', id!)
+    if (error) { console.error('[saveNote]', error) }
     else {
+      const cached = qc.getQueryData<any>(['candidate', id])
+      if (cached) qc.setQueryData(['candidate', id], { ...cached, interview_notes: newNotes })
       qc.invalidateQueries({ queryKey: ['candidate', id] })
       setDraftNotes(p => ({ ...p, [sectionKey]: '' }))
     }
@@ -318,7 +317,6 @@ export function CandidateProfilePage() {
     try {
       const decisionLabel = caDecision === 'go_ahead' ? 'Go Ahead' : 'Re-work Required'
 
-      // Save into interview_notes.cost_approval (guaranteed to work — JSONB column exists)
       const existing = (candidate as any)?.interview_notes ?? {}
       const caEntry = {
         text: caNotes || '',
@@ -327,10 +325,18 @@ export function CandidateProfilePage() {
         timestamp: new Date().toISOString(),
         decision: caDecision,
       }
+      const newNotes = { ...existing, cost_approval: [caEntry] }
+
       const { error } = await supabase.from('candidates').update({
-        interview_notes: { ...existing, cost_approval: [caEntry] },
+        interview_notes: newNotes,
       }).eq('id', id!)
       if (error) throw error
+
+      // Optimistically update the React Query cache immediately so UI reflects decision at once
+      const cached = qc.getQueryData<any>(['candidate', id])
+      if (cached) {
+        qc.setQueryData(['candidate', id], { ...cached, interview_notes: newNotes })
+      }
 
       // Also try dedicated columns (might not exist if migration not run — ignore errors)
       await supabase.from('candidates').update({
@@ -356,8 +362,9 @@ export function CandidateProfilePage() {
         )
       }
 
+      // Background refetch to sync any other fields
       qc.invalidateQueries({ queryKey: ['candidates'] })
-      await qc.invalidateQueries({ queryKey: ['candidate', id] })
+      qc.invalidateQueries({ queryKey: ['candidate', id] })
       setCaSaveStatus('saved')
       setTimeout(() => setCaSaveStatus('idle'), 3000)
     } catch (err) {
@@ -371,14 +378,15 @@ export function CandidateProfilePage() {
     setCaSavingComment(true)
     const existing = (candidate as any)?.interview_notes ?? {}
     const comments: NoteEntry[] = existing['cost_approval_comments'] ?? []
+    const newEntry = { text: caComment.trim(), author: user!.full_name, authorId: user!.id, timestamp: new Date().toISOString() }
+    const newNotes = { ...existing, cost_approval_comments: [...comments, newEntry] }
     const { error } = await supabase.from('candidates').update({
-      interview_notes: { ...existing, cost_approval_comments: [...comments, {
-        text: caComment.trim(), author: user!.full_name,
-        authorId: user!.id, timestamp: new Date().toISOString(),
-      }]}
+      interview_notes: newNotes,
     }).eq('id', id!)
     if (!error) {
-      await qc.invalidateQueries({ queryKey: ['candidate', id] })
+      const cached = qc.getQueryData<any>(['candidate', id])
+      if (cached) qc.setQueryData(['candidate', id], { ...cached, interview_notes: newNotes })
+      qc.invalidateQueries({ queryKey: ['candidate', id] })
       setCaComment('')
     }
     setCaSavingComment(false)
@@ -451,10 +459,14 @@ export function CandidateProfilePage() {
   const isCAPanel = costApprovalPanelIds.includes(user?.id ?? '')
   const interviewNotes = (candidate as any).interview_notes ?? {}
   const hasCostApprovalRecord = (interviewNotes['cost_approval'] ?? []).length > 0 || !!(candidate as any).cost_approval_decision
-  // Show section: currently in CA stage (active), OR decision was already submitted (retrospective view)
-  const canSeeCostApproval = (isInCostApproval || hasCostApprovalRecord) && (canEdit || isCAPanel)
-  // Only panel members can submit (and only while still in the stage)
-  const canSubmitCostApproval = isInCostApproval && isCAPanel
+  // True when candidate is at or past the cost approval stage in the pipeline
+  const costApprovalPipelineIdx = stages.indexOf(costApprovalStageName)
+  const currentStageIdx = stages.indexOf(candidate.current_stage)
+  const hasPassedCostApproval = costApprovalPipelineIdx >= 0 && currentStageIdx >= costApprovalPipelineIdx
+  // Show section: at/past CA stage OR decision already submitted
+  const canSeeCostApproval = (hasPassedCostApproval || hasCostApprovalRecord) && (canEdit || isCAPanel)
+  // Panel can submit/re-submit whenever at/past the CA stage OR no decision recorded yet
+  const canSubmitCostApproval = isCAPanel && (hasPassedCostApproval || hasCostApprovalRecord)
 
   // Interview format guide from the job (per-stage questionnaire templates)
   // Screening template is HR-only; other stages shown to interviewers for their current stage
@@ -1136,8 +1148,15 @@ export function CandidateProfilePage() {
                 {hasCostApprovalRecord ? (() => {
                   const caEntries: any[] = interviewNotes['cost_approval'] ?? []
                   const latest = caEntries[caEntries.length - 1]
-                  if (!latest) return null
-                  const isGoAhead = latest.decision === 'go_ahead'
+                  // Fallback to dedicated DB columns when JSONB entry is absent (old data path)
+                  const decision = latest?.decision ?? (candidate as any).cost_approval_decision
+                  const noteText = latest?.text ?? (candidate as any).cost_approval_notes ?? ''
+                  const submittedBy = (candidate as any).cost_approval_submitted_by
+                  const author = latest?.author
+                    ?? (submittedBy ? (allUsers.find(u => u.id === submittedBy)?.full_name ?? 'Panel member') : 'Panel member')
+                  const timestamp = latest?.timestamp ?? (candidate as any).cost_approval_submitted_at
+                  if (!decision) return null
+                  const isGoAhead = decision === 'go_ahead'
                   return (
                     <div className={`rounded-xl p-4 border-2 ${isGoAhead ? 'bg-green-50 border-green-300' : 'bg-red-50 border-red-300'}`}>
                       <div className="flex items-center gap-3 flex-wrap mb-1">
@@ -1151,8 +1170,8 @@ export function CandidateProfilePage() {
                           {isGoAhead ? '✅ Go Ahead' : '🔄 Re-work Required'}
                         </p>
                       </div>
-                      <p className="text-xs text-gray-500 pl-11">{latest.author} · {formatRelative(latest.timestamp)}</p>
-                      {latest.text && <p className="text-sm text-gray-700 mt-2 whitespace-pre-wrap pl-11">{latest.text}</p>}
+                      <p className="text-xs text-gray-500 pl-11">{author}{timestamp ? ` · ${formatRelative(timestamp)}` : ''}</p>
+                      {noteText && <p className="text-sm text-gray-700 mt-2 whitespace-pre-wrap pl-11">{noteText}</p>}
                     </div>
                   )
                 })() : (
