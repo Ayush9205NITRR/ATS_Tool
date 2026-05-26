@@ -239,7 +239,7 @@ export function BulkResumeUpload() {
           tags: [],
           assigned_interviewers: [],
           job_id: selectedJobId || null,
-          hr_owner: null,
+          hr_owner: user?.role === 'hr_team' ? user!.id : null,
           notes: null,
           screening_notes: null,
           interview_notes: {},

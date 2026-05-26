@@ -143,7 +143,8 @@ function transformRow(
   colMap: Partial<ColumnMap>,
   customFieldMap: Record<string, string>,
   userId: string,
-  jobId: string | null
+  jobId: string | null,
+  hrOwner: string | null = null
 ): any {
   const get = (key: keyof ColumnMap) => colMap[key] ? (row[colMap[key]!] ?? '') : ''
   const sourceName = get('college') || get('source_name') || get('source') || 'Unknown'
@@ -170,7 +171,7 @@ function transformRow(
     tags:                  [],
     assigned_interviewers: [],
     job_id:                jobId || null,
-    hr_owner:              null,
+    hr_owner:              hrOwner,
     screening_notes:       null,
     interview_notes:       {},
     custom_data,
@@ -252,7 +253,8 @@ export function CsvUploader() {
   }, [onFile, customFields])
 
   const preview = async () => {
-    const result = rows.map(r => transformRow(r, colMap, customFieldMap, user!.id, selectedJobId || null))
+    const hrOwner = user?.role === 'hr_team' ? user!.id : null
+    const result = rows.map(r => transformRow(r, colMap, customFieldMap, user!.id, selectedJobId || null, hrOwner))
     setTransformed(result)
 
     // ── Dedup check — ALL rows, batched to avoid Supabase URL limit ──

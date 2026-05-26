@@ -122,7 +122,7 @@ export function SingleEntryForm({ onSuccess }: { onSuccess?: () => void }) {
         status:               'active',
         tags:                 [],
         assigned_interviewers:[],
-        hr_owner:             null,
+        hr_owner:             user?.role === 'hr_team' ? user!.id : null,
         screening_notes:      null,
         interview_notes:      {},
         custom_data:          customValues,
