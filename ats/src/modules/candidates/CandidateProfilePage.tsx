@@ -6,7 +6,7 @@ import { useState, useCallback, useEffect } from 'react'
 import {
   ArrowLeft, ExternalLink, Phone, Mail, Linkedin, FileText,
   Loader2, Send, Pencil, Check, X, ChevronDown, CheckCircle,
-  ClipboardList, ShieldCheck, History
+  ClipboardList, ShieldCheck, History, BookOpen
 } from 'lucide-react'
 import { useCandidate, useUpdateStage } from './useCandidates'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -412,19 +412,9 @@ export function CandidateProfilePage() {
   // Only panel members can submit (and only while still in the stage)
   const canSubmitCostApproval = isInCostApproval && isCAPanel
 
-  // Interview format guide from the job
-  // Screening template → HR only | Interview stage templates → interviewer sees only their current stage
+  // Interview format guide from the job (per-stage questionnaire templates)
+  // Screening template is HR-only; other stages shown to interviewers for their current stage
   const jobInterviewFormat: Record<string, string[]> = (candidate as any)?.job?.interview_format ?? {}
-  const currentStageGuide: string[] = (() => {
-    const guide = jobInterviewFormat[currentStageKey] ?? []
-    if (!guide.length) return []
-    if (currentStageKey === 'screening') {
-      // Screening template visible only to HR/admin, not interviewers
-      return isInterviewer ? [] : guide
-    }
-    // Interview stage templates visible to everyone (interviewer only sees their stage anyway)
-    return guide
-  })()
 
   // Stage pill color — DB config → hardcoded map → gray fallback
   const STAGE_COLOURS: Record<string, string> = {
@@ -829,37 +819,73 @@ export function CandidateProfilePage() {
           {/* Interview Notes — hidden from agency and from cost approval view */}
           {!isAgency && !isInCostApproval && (
           <div>
-            <p className="text-sm font-semibold text-gray-700 mb-3 px-1">
-              Interview Notes
-              {isInterviewer && NOTES_SECTIONS.length > 0 && (
-                <span className="ml-2 text-xs font-normal text-gray-400">— showing {NOTES_SECTIONS[0]?.label} stage</span>
-              )}
-            </p>
+            <p className="text-sm font-semibold text-gray-700 mb-3 px-1">Interview Notes</p>
 
-            {/* Interview Format Guide — shown to interviewers for current stage */}
-            {currentStageGuide.length > 0 && (
-              <div className="mb-3 bg-green-50 border border-green-200 rounded-xl px-4 py-3">
-                <div className="flex items-center gap-2 mb-2">
-                  <ClipboardList className="w-3.5 h-3.5 text-green-600 flex-shrink-0" />
-                  <p className="text-xs font-semibold text-green-800 uppercase tracking-wide">
-                    {candidate.current_stage} — Interview Guide
-                  </p>
+            {/* ── Interviewer: Knowledge Base (previous rounds, read-only) ── */}
+            {isInterviewer && (() => {
+              const currentIdx = stages.indexOf(candidate.current_stage)
+              const prevStages = currentIdx > 0
+                ? stages.slice(0, currentIdx)
+                    .filter(s => s !== costApprovalStageName)
+                    .map(s => ({ key: stageKeyOf(s), label: s }))
+                : []
+              const hasGeneralNotes = !!(candidate as any).notes
+              const hasPrevNotes = prevStages.some(({ key }) => (interviewNotes[key] ?? []).length > 0)
+              if (!hasGeneralNotes && !hasPrevNotes) return null
+              return (
+                <div className="mb-4 rounded-xl border border-slate-200 overflow-hidden">
+                  <div className="flex items-center gap-2 px-4 py-2.5 bg-slate-100/80 border-b border-slate-200">
+                    <BookOpen className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" />
+                    <p className="text-xs font-semibold text-slate-600 uppercase tracking-wide">Knowledge Base</p>
+                    <span className="text-xs text-slate-400">— previous rounds, read-only</span>
+                  </div>
+                  <div className="divide-y divide-slate-100">
+                    {/* General Notes */}
+                    {(candidate as any).notes && (
+                      <div className="px-4 py-3">
+                        <p className="text-xs font-medium text-slate-400 mb-1.5">General Notes</p>
+                        <p className="text-sm text-slate-700 whitespace-pre-wrap leading-relaxed bg-slate-50 rounded-lg px-3 py-2">
+                          {(candidate as any).notes}
+                        </p>
+                      </div>
+                    )}
+                    {/* Previous stage notes in pipeline order */}
+                    {prevStages.map(({ key, label }) => {
+                      const entries: NoteEntry[] = interviewNotes[key] ?? []
+                      if (entries.length === 0) return null
+                      return (
+                        <div key={key} className="px-4 py-3">
+                          <p className="text-xs font-medium text-slate-400 mb-1.5">{label}</p>
+                          <div className="space-y-1.5">
+                            {entries.map((e, i) => (
+                              <div key={i} className="bg-white border border-slate-100 rounded-lg px-3 py-2.5">
+                                <p className="text-sm text-slate-700 whitespace-pre-wrap leading-relaxed">{e.text}</p>
+                                <p className="text-xs text-slate-400 mt-1">
+                                  <span className="font-medium text-slate-500">{e.author}</span> · {formatRelative(e.timestamp)}
+                                </p>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
                 </div>
-                <ol className="space-y-1">
-                  {currentStageGuide.map((q, i) => (
-                    <li key={i} className="text-sm text-green-900 flex gap-2">
-                      <span className="text-green-500 font-mono text-xs mt-0.5 flex-shrink-0">{i + 1}.</span>
-                      {q}
-                    </li>
-                  ))}
-                </ol>
-              </div>
-            )}
+              )
+            })()}
 
+            {/* ── Notes sections (per pipeline stage) ── */}
             <div className="space-y-0">
               {NOTES_SECTIONS.map(({ key, label }, sectionIdx) => {
                 const entries: NoteEntry[] = interviewNotes[key] ?? []
                 const draft = draftNotes[key] ?? ''
+                // Format guide per stage — screening guide is HR-only
+                const stageGuide: string[] = (() => {
+                  const guide = jobInterviewFormat[key] ?? []
+                  if (!guide.length) return []
+                  if (key === 'screening' && isInterviewer) return []
+                  return guide
+                })()
                 return (
                   <div key={key} className={`${sectionIdx > 0 ? 'border-t border-gray-100' : ''}`}>
                     {/* Section header */}
@@ -868,6 +894,26 @@ export function CandidateProfilePage() {
                       <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide flex-1">{label}</p>
                       {entries.length > 0 && <span className="text-xs text-gray-400">{entries.length}</span>}
                     </div>
+
+                    {/* Format guide for this stage */}
+                    {stageGuide.length > 0 && (
+                      <div className="mb-2 mx-3.5 bg-green-50 border border-green-200 rounded-xl px-4 py-3">
+                        <div className="flex items-center gap-2 mb-2">
+                          <ClipboardList className="w-3.5 h-3.5 text-green-600 flex-shrink-0" />
+                          <p className="text-xs font-semibold text-green-800 uppercase tracking-wide">
+                            {label} Interview Guide
+                          </p>
+                        </div>
+                        <ol className="space-y-1">
+                          {stageGuide.map((q, i) => (
+                            <li key={i} className="text-sm text-green-900 flex gap-2">
+                              <span className="text-green-500 font-mono text-xs mt-0.5 flex-shrink-0">{i + 1}.</span>
+                              {q}
+                            </li>
+                          ))}
+                        </ol>
+                      </div>
+                    )}
 
                     {/* Existing entries */}
                     {entries.length > 0 && (
@@ -916,7 +962,7 @@ export function CandidateProfilePage() {
                       </div>
                     )}
 
-                    {/* Input — resizable so user can expand for long paragraphs */}
+                    {/* Input */}
                     {canAddNotes && (
                       <div className="flex gap-2 items-end pb-3 pl-3.5">
                         <textarea rows={3} value={draft}
