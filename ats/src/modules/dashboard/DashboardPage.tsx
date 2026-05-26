@@ -12,7 +12,7 @@ const STORAGE_KEY = 'ats_db_v4'
 const ROLE_DEFAULTS: Record<string, string[]> = {
   super_admin: ['total-candidates','open-jobs','analytics','source-funnel','job-source-breakdown','subsource-pipeline','interviewer-schedule','hr-team'],
   admin:       ['total-candidates','open-jobs','analytics','source-funnel','job-source-breakdown','subsource-pipeline','interviewer-schedule'],
-  hr_team:     ['total-candidates','open-jobs','hr-dashboard','job-source-breakdown'],
+  hr_team:     ['total-candidates','open-jobs','hr-dashboard'],
   interviewer: ['interviewer-stats'],
   agency:      ['agency-dashboard'],
 }

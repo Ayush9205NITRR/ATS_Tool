@@ -69,6 +69,7 @@ export function CandidateProfilePage() {
 
   const isInterviewer = hasRole(['interviewer'])
   const isAgency      = hasRole(['agency'])
+  const isHR          = hasRole(['hr_team'])
   const canEdit       = hasRole(['admin', 'super_admin', 'hr_team'])
   const canAssignHR   = hasRole(['admin', 'super_admin'])
   const canAddNotes   = hasRole(['admin', 'super_admin', 'hr_team', 'interviewer'])
@@ -85,6 +86,8 @@ export function CandidateProfilePage() {
   const [caDecision, setCaDecision]   = useState<'go_ahead' | 'rework_required' | ''>('')
   const [caNotes, setCaNotes]         = useState('')
   const [caSaveStatus, setCaSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
+  const [caComment, setCaComment]     = useState('')
+  const [caSavingComment, setCaSavingComment] = useState(false)
 
   // Edit mode drafts
   const [contactDraft, setContactDraft] = useState({
@@ -124,12 +127,17 @@ export function CandidateProfilePage() {
     staleTime: 30_000,
   })
 
-  // Sync cost approval fields when candidate data loads
+  // Sync cost approval fields from interview_notes.cost_approval when candidate loads
   useEffect(() => {
     if (!candidate) return
-    setCaDecision((candidate as any).cost_approval_decision ?? '')
-    setCaNotes((candidate as any).cost_approval_notes ?? '')
-  }, [(candidate as any)?.id, (candidate as any)?.cost_approval_decision, (candidate as any)?.cost_approval_notes])
+    const iNotes = (candidate as any).interview_notes ?? {}
+    const caEntries: any[] = iNotes['cost_approval'] ?? []
+    const latest = caEntries[caEntries.length - 1]
+    if (latest) {
+      setCaDecision(latest.decision ?? '')
+      setCaNotes(latest.text ?? '')
+    }
+  }, [(candidate as any)?.id])
 
   // Stage config — shared hook (same queryKey as OrgSettingsTab + CandidatesPage)
   // staleTime:0 ensures immediate reflection of Settings changes
@@ -358,6 +366,24 @@ export function CandidateProfilePage() {
     }
   }
 
+  const submitCAComment = async () => {
+    if (!caComment.trim()) return
+    setCaSavingComment(true)
+    const existing = (candidate as any)?.interview_notes ?? {}
+    const comments: NoteEntry[] = existing['cost_approval_comments'] ?? []
+    const { error } = await supabase.from('candidates').update({
+      interview_notes: { ...existing, cost_approval_comments: [...comments, {
+        text: caComment.trim(), author: user!.full_name,
+        authorId: user!.id, timestamp: new Date().toISOString(),
+      }]}
+    }).eq('id', id!)
+    if (!error) {
+      await qc.invalidateQueries({ queryKey: ['candidate', id] })
+      setCaComment('')
+    }
+    setCaSavingComment(false)
+  }
+
   const toggleInterviewer = useCallback((uid: string) => {
     const curr: string[] = (candidate as any)?.assigned_interviewers ?? []
     const next = curr.includes(uid) ? curr.filter(i => i !== uid) : [...curr, uid]
@@ -410,12 +436,14 @@ export function CandidateProfilePage() {
     .filter(s => s !== costApprovalStageName)
     .map(s => ({ key: stageKeyOf(s), label: s }))
 
-  // Interviewers see ONLY the section matching the candidate's current stage,
-  // and never see screening notes (those are HR-only).
-  // HR / Admin / Super Admin see all sections.
+  // Interviewers see ONLY their current stage section (screening excluded).
+  // HR team sees ONLY screening.
+  // Admin / Super Admin see all sections.
   const currentStageKey = stageKeyOf(candidate.current_stage)
   const NOTES_SECTIONS = isInterviewer
     ? ALL_NOTES_SECTIONS.filter(s => s.key === currentStageKey && s.key !== 'screening')
+    : isHR
+    ? ALL_NOTES_SECTIONS.filter(s => s.key === 'screening')
     : ALL_NOTES_SECTIONS
 
   // Determine cost approval context
@@ -884,11 +912,13 @@ export function CandidateProfilePage() {
               {NOTES_SECTIONS.map(({ key, label }, sectionIdx) => {
                 const entries: NoteEntry[] = interviewNotes[key] ?? []
                 const draft = draftNotes[key] ?? ''
-                // Format guide per stage — screening guide is HR-only
+                // Questionnaire: admin/super_admin see none; HR sees only screening; interviewers see current stage (not screening)
                 const stageGuide: string[] = (() => {
                   const guide = jobInterviewFormat[key] ?? []
                   if (!guide.length) return []
-                  if (key === 'screening' && isInterviewer) return []
+                  if (hasRole(['admin', 'super_admin'])) return []
+                  if (isHR) return key === 'screening' ? guide : []
+                  if (isInterviewer && key === 'screening') return []
                   return guide
                 })()
                 return (
@@ -999,17 +1029,16 @@ export function CandidateProfilePage() {
                 <ShieldCheck className="w-4 h-4 text-amber-600 flex-shrink-0" />
                 <div>
                   <p className="text-sm font-semibold text-amber-900">{costApprovalStageName}</p>
-                  <p className="text-xs text-amber-600">Review candidate history and submit your decision</p>
+                  <p className="text-xs text-amber-600">Panel review and approval decision</p>
                 </div>
               </div>
 
-              {/* Candidate History — compact "who · when | notes" per stage */}
+              {/* Candidate History — pipeline stages only (no cost approval entries here) */}
               <div className="px-5 py-4 border-b border-amber-100">
                 <div className="flex items-center gap-2 mb-4">
                   <History className="w-3.5 h-3.5 text-gray-500" />
                   <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Candidate History</p>
                 </div>
-
                 {(() => {
                   const recLabel: Record<string, string> = {
                     strong_yes: 'Strong Yes', yes: 'Yes', neutral: 'Neutral', no: 'No', strong_no: 'Strong No'
@@ -1018,22 +1047,16 @@ export function CandidateProfilePage() {
                     strong_yes: 'bg-green-100 text-green-700', yes: 'bg-green-50 text-green-600',
                     neutral: 'bg-gray-100 text-gray-600', no: 'bg-red-50 text-red-600', strong_no: 'bg-red-100 text-red-700'
                   }
-
                   const hasGeneralNotes = !!(candidate as any).notes
                   const hasStageData = HISTORY_STAGES.some(({ key }) =>
                     (interviewNotes[key] ?? []).length > 0 ||
                     (interviewFeedbacks as any[]).some((fb: any) => stageKeyOf(fb.stage ?? '') === key)
                   )
-                  const hasCostApprovalNotes = (interviewNotes['cost_approval'] ?? []).length > 0
-                  const hasCostApprovalData = hasCostApprovalNotes || !!(candidate as any).cost_approval_decision
-
-                  if (!hasGeneralNotes && !hasStageData && !hasCostApprovalData) {
+                  if (!hasGeneralNotes && !hasStageData) {
                     return <p className="text-xs text-gray-400 italic">No interview notes or feedback recorded yet.</p>
                   }
-
                   return (
                     <div className="space-y-5">
-                      {/* General Notes */}
                       {(candidate as any).notes && (
                         <div>
                           <div className="flex items-center gap-2 mb-2">
@@ -1047,41 +1070,31 @@ export function CandidateProfilePage() {
                           </div>
                         </div>
                       )}
-
-                      {/* Per-stage history: Screening, R1, R2, CF, etc. */}
                       {HISTORY_STAGES.map(({ key, label }) => {
                         const entries: NoteEntry[] = interviewNotes[key] ?? []
                         const stageFeedback = (interviewFeedbacks as any[]).filter(
                           (fb: any) => stageKeyOf(fb.stage ?? '') === key
                         )
                         if (entries.length === 0 && stageFeedback.length === 0) return null
-
                         return (
                           <div key={key}>
-                            {/* Stage label */}
                             <div className="flex items-center gap-2 mb-2">
                               <span className="w-1.5 h-1.5 rounded-full bg-amber-400 flex-shrink-0" />
                               <p className="text-xs font-bold text-gray-700 uppercase tracking-wider">{label}</p>
                             </div>
-
                             <div className="pl-4 space-y-2.5">
-                              {/* Formal feedback — interviewer identity + recommendation + notes */}
                               {stageFeedback.map((fb: any) => {
                                 const reviewer = allUsers.find(u => u.id === fb.interviewer_id)
                                 const initials = (reviewer?.full_name ?? '?').split(' ').map((n: string) => n[0]).join('').toUpperCase().slice(0, 2)
                                 return (
                                   <div key={fb.id} className="bg-indigo-50/60 border border-indigo-100 rounded-lg px-3 py-2.5">
-                                    {/* who · when · recommendation */}
                                     <div className="flex items-center gap-2 flex-wrap">
                                       <div className="w-6 h-6 rounded-full bg-indigo-200 flex items-center justify-center flex-shrink-0">
                                         <span className="text-xs font-bold text-indigo-700">{initials}</span>
                                       </div>
                                       <span className="text-sm font-semibold text-indigo-900">{reviewer?.full_name ?? 'Unknown'}</span>
                                       {fb.submitted_at && (
-                                        <>
-                                          <span className="text-gray-300">·</span>
-                                          <span className="text-xs text-gray-500">{formatDateTime(fb.submitted_at)}</span>
-                                        </>
+                                        <><span className="text-gray-300">·</span><span className="text-xs text-gray-500">{formatDateTime(fb.submitted_at)}</span></>
                                       )}
                                       {fb.recommendation && (
                                         <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${recColor[fb.recommendation] ?? 'bg-gray-100 text-gray-600'}`}>
@@ -1089,31 +1102,22 @@ export function CandidateProfilePage() {
                                         </span>
                                       )}
                                     </div>
-                                    {/* notes */}
                                     {(fb.strengths || fb.concerns) && (
                                       <div className="mt-1.5 text-sm text-gray-700 space-y-0.5">
-                                        {fb.strengths && (
-                                          <p><span className="text-xs font-medium text-green-700">Strengths:</span> {fb.strengths}</p>
-                                        )}
-                                        {fb.concerns && (
-                                          <p><span className="text-xs font-medium text-red-600">Concerns:</span> {fb.concerns}</p>
-                                        )}
+                                        {fb.strengths && <p><span className="text-xs font-medium text-green-700">Strengths:</span> {fb.strengths}</p>}
+                                        {fb.concerns && <p><span className="text-xs font-medium text-red-600">Concerns:</span> {fb.concerns}</p>}
                                       </div>
                                     )}
                                   </div>
                                 )
                               })}
-
-                              {/* Interview notes — who · when | notes */}
                               {entries.map((e, i) => (
                                 <div key={i} className="bg-white border border-gray-100 rounded-lg px-3 py-2.5">
-                                  {/* who · when */}
                                   <div className="flex items-center gap-1.5 mb-1">
                                     <span className="text-xs font-semibold text-gray-700">{e.author}</span>
                                     <span className="text-gray-300">·</span>
                                     <span className="text-xs text-gray-400">{formatRelative(e.timestamp)}</span>
                                   </div>
-                                  {/* notes */}
                                   <p className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">{e.text}</p>
                                 </div>
                               ))}
@@ -1121,119 +1125,155 @@ export function CandidateProfilePage() {
                           </div>
                         )
                       })}
-
-                      {/* Cost Approval decision — from interview_notes.cost_approval */}
-                      {(() => {
-                        const caEntries: any[] = interviewNotes['cost_approval'] ?? []
-                        if (caEntries.length === 0) return null
-                        return (
-                          <div>
-                            <div className="flex items-center gap-2 mb-2">
-                              <span className="w-1.5 h-1.5 rounded-full bg-amber-600 flex-shrink-0" />
-                              <p className="text-xs font-bold text-amber-800 uppercase tracking-wider">{costApprovalStageName}</p>
-                            </div>
-                            <div className="pl-4 space-y-2.5">
-                              {caEntries.map((e: any, i: number) => {
-                                const isGoAhead = e.decision === 'go_ahead'
-                                const isRework = e.decision === 'rework_required'
-                                const initials = (e.author ?? '?').split(' ').map((n: string) => n[0]).join('').toUpperCase().slice(0, 2)
-                                return (
-                                  <div key={i} className={`border rounded-lg px-3 py-2.5 ${isGoAhead ? 'bg-green-50 border-green-100' : isRework ? 'bg-red-50 border-red-100' : 'bg-white border-gray-100'}`}>
-                                    <div className="flex items-center gap-2 flex-wrap">
-                                      <div className={`w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0 ${isGoAhead ? 'bg-green-200' : isRework ? 'bg-red-200' : 'bg-gray-200'}`}>
-                                        <span className={`text-xs font-bold ${isGoAhead ? 'text-green-800' : isRework ? 'text-red-800' : 'text-gray-700'}`}>{initials}</span>
-                                      </div>
-                                      <span className="text-sm font-semibold text-gray-800">{e.author}</span>
-                                      <span className="text-gray-300">·</span>
-                                      <span className="text-xs text-gray-500">{formatRelative(e.timestamp)}</span>
-                                      {e.decision && (
-                                        <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${isGoAhead ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-                                          {isGoAhead ? 'Go Ahead' : 'Re-work Required'}
-                                        </span>
-                                      )}
-                                    </div>
-                                    {e.text && (
-                                      <p className="mt-1.5 text-sm text-gray-700 whitespace-pre-wrap">{e.text}</p>
-                                    )}
-                                  </div>
-                                )
-                              })}
-                            </div>
-                          </div>
-                        )
-                      })()}
                     </div>
                   )
                 })()}
               </div>
 
-              {/* Cost Approval Notes + Decision */}
-              <div className="px-5 py-4 space-y-4">
-                {canSubmitCostApproval && (
-                  <>
-                    <div>
-                      <p className="text-xs font-semibold text-gray-600 mb-2">Cost Approval Notes</p>
-                      <textarea
-                        rows={3}
-                        value={caNotes}
-                        onChange={e => setCaNotes(e.target.value)}
-                        placeholder="Add notes for cost approval decision…"
-                        className="w-full px-3 py-2 border border-amber-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-amber-400 resize-y"
-                      />
-                    </div>
-
-                    <div>
-                      <p className="text-xs font-semibold text-gray-600 mb-2">Decision</p>
-                      <div className="flex gap-2">
-                        <button
-                          onClick={() => setCaDecision('go_ahead')}
-                          className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium border-2 transition-all ${
-                            caDecision === 'go_ahead'
-                              ? 'bg-green-600 text-white border-green-600'
-                              : 'bg-white text-green-700 border-green-200 hover:border-green-400'
-                          }`}
-                        >
-                          <Check className="w-4 h-4" /> Go Ahead
-                        </button>
-                        <button
-                          onClick={() => setCaDecision('rework_required')}
-                          className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium border-2 transition-all ${
-                            caDecision === 'rework_required'
-                              ? 'bg-red-600 text-white border-red-600'
-                              : 'bg-white text-red-700 border-red-200 hover:border-red-400'
-                          }`}
-                        >
-                          <X className="w-4 h-4" /> Re-work Required
-                        </button>
+              {/* Panel Decision — prominently displayed; shows two placeholder boxes before submission */}
+              <div className="px-5 py-4 border-b border-amber-100">
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Panel Decision</p>
+                {hasCostApprovalRecord ? (() => {
+                  const caEntries: any[] = interviewNotes['cost_approval'] ?? []
+                  const latest = caEntries[caEntries.length - 1]
+                  if (!latest) return null
+                  const isGoAhead = latest.decision === 'go_ahead'
+                  return (
+                    <div className={`rounded-xl p-4 border-2 ${isGoAhead ? 'bg-green-50 border-green-300' : 'bg-red-50 border-red-300'}`}>
+                      <div className="flex items-center gap-3 flex-wrap mb-1">
+                        <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 ${isGoAhead ? 'bg-green-200' : 'bg-red-200'}`}>
+                          {isGoAhead
+                            ? <CheckCircle className="w-4 h-4 text-green-700" />
+                            : <X className="w-4 h-4 text-red-700" />
+                          }
+                        </div>
+                        <p className={`text-base font-bold ${isGoAhead ? 'text-green-800' : 'text-red-800'}`}>
+                          {isGoAhead ? '✅ Go Ahead' : '🔄 Re-work Required'}
+                        </p>
                       </div>
+                      <p className="text-xs text-gray-500 pl-11">{latest.author} · {formatRelative(latest.timestamp)}</p>
+                      {latest.text && <p className="text-sm text-gray-700 mt-2 whitespace-pre-wrap pl-11">{latest.text}</p>}
                     </div>
-
-                    <div className="flex items-center gap-3">
-                      <button
-                        onClick={submitCostApproval}
-                        disabled={!caDecision || caSaveStatus === 'saving'}
-                        className={`flex items-center gap-2 px-5 py-2.5 rounded-lg text-sm font-medium transition-all ${
-                          caSaveStatus === 'saved'
-                            ? 'bg-green-500 text-white'
-                            : !caDecision
-                            ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
-                            : 'bg-amber-700 hover:bg-amber-800 text-white'
-                        }`}
-                      >
-                        {caSaveStatus === 'saving' && <Loader2 className="w-4 h-4 animate-spin" />}
-                        {caSaveStatus === 'saved' && <Check className="w-4 h-4" />}
-                        {caSaveStatus === 'saved' ? 'Submitted!' : caSaveStatus === 'saving' ? 'Submitting…' : 'Submit Decision'}
-                      </button>
-                      {caSaveStatus === 'error' && (
-                        <p className="text-xs text-red-600">Failed to submit. Please try again.</p>
-                      )}
-                      {!caDecision && (
-                        <p className="text-xs text-gray-400">Select a decision above before submitting</p>
-                      )}
+                  )
+                })() : (
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="border-2 border-dashed border-green-200 rounded-xl p-3 text-center">
+                      <CheckCircle className="w-5 h-5 text-green-400 mx-auto mb-1.5" />
+                      <p className="text-sm font-semibold text-green-700">Go Ahead</p>
+                      <p className="text-xs text-green-600 mt-0.5">Approved to proceed</p>
                     </div>
-                  </>
+                    <div className="border-2 border-dashed border-red-200 rounded-xl p-3 text-center">
+                      <X className="w-5 h-5 text-red-400 mx-auto mb-1.5" />
+                      <p className="text-sm font-semibold text-red-700">Re-work Required</p>
+                      <p className="text-xs text-red-600 mt-0.5">Needs revision</p>
+                    </div>
+                    <p className="col-span-2 text-xs text-amber-600 text-center">
+                      {isCAPanel ? 'Submit your decision in the section below' : 'Awaiting panel decision'}
+                    </p>
+                  </div>
                 )}
               </div>
+
+              {/* Comments — HR / Admin / Super Admin can add */}
+              {canEdit && (
+                <div className="px-5 py-4 border-b border-amber-100 space-y-3">
+                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Comments</p>
+                  {(interviewNotes['cost_approval_comments'] ?? []).length === 0 && (
+                    <p className="text-xs text-gray-400 italic">No comments yet.</p>
+                  )}
+                  {(interviewNotes['cost_approval_comments'] ?? []).map((c: any, i: number) => (
+                    <div key={i} className="bg-white border border-gray-100 rounded-lg px-3 py-2.5">
+                      <div className="flex items-center gap-1.5 mb-1">
+                        <span className="text-xs font-semibold text-gray-700">{c.author}</span>
+                        <span className="text-gray-300">·</span>
+                        <span className="text-xs text-gray-400">{formatRelative(c.timestamp)}</span>
+                      </div>
+                      <p className="text-sm text-gray-700 whitespace-pre-wrap">{c.text}</p>
+                    </div>
+                  ))}
+                  <div className="flex gap-2 items-end">
+                    <textarea
+                      rows={2}
+                      value={caComment}
+                      onChange={e => setCaComment(e.target.value)}
+                      placeholder="Add a comment…"
+                      className="flex-1 px-3 py-2 border border-amber-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-amber-400 resize-y"
+                    />
+                    <button
+                      onClick={submitCAComment}
+                      disabled={!caComment.trim() || caSavingComment}
+                      className="flex-shrink-0 w-8 h-8 rounded-lg bg-amber-700 hover:bg-amber-800 disabled:bg-gray-200 flex items-center justify-center transition-colors self-end"
+                    >
+                      {caSavingComment ? <Loader2 className="w-3.5 h-3.5 text-white animate-spin" /> : <Send className="w-3.5 h-3.5 text-white" />}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Submit Decision — CA Panel only, while in stage */}
+              {canSubmitCostApproval && (
+                <div className="px-5 py-4 space-y-4">
+                  <p className="text-xs font-semibold text-gray-600 uppercase tracking-wide">Submit Decision</p>
+                  <div>
+                    <p className="text-xs text-gray-500 mb-2">Notes (optional)</p>
+                    <textarea
+                      rows={3}
+                      value={caNotes}
+                      onChange={e => setCaNotes(e.target.value)}
+                      placeholder="Add notes for your decision…"
+                      className="w-full px-3 py-2 border border-amber-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-amber-400 resize-y"
+                    />
+                  </div>
+                  <div>
+                    <p className="text-xs text-gray-500 mb-2">Decision</p>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => setCaDecision('go_ahead')}
+                        className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium border-2 transition-all ${
+                          caDecision === 'go_ahead'
+                            ? 'bg-green-600 text-white border-green-600'
+                            : 'bg-white text-green-700 border-green-200 hover:border-green-400'
+                        }`}
+                      >
+                        <Check className="w-4 h-4" /> Go Ahead
+                      </button>
+                      <button
+                        onClick={() => setCaDecision('rework_required')}
+                        className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium border-2 transition-all ${
+                          caDecision === 'rework_required'
+                            ? 'bg-red-600 text-white border-red-600'
+                            : 'bg-white text-red-700 border-red-200 hover:border-red-400'
+                        }`}
+                      >
+                        <X className="w-4 h-4" /> Re-work Required
+                      </button>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <button
+                      onClick={submitCostApproval}
+                      disabled={!caDecision || caSaveStatus === 'saving'}
+                      className={`flex items-center gap-2 px-5 py-2.5 rounded-lg text-sm font-medium transition-all ${
+                        caSaveStatus === 'saved'
+                          ? 'bg-green-500 text-white'
+                          : !caDecision
+                          ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                          : 'bg-amber-700 hover:bg-amber-800 text-white'
+                      }`}
+                    >
+                      {caSaveStatus === 'saving' && <Loader2 className="w-4 h-4 animate-spin" />}
+                      {caSaveStatus === 'saved' && <Check className="w-4 h-4" />}
+                      {caSaveStatus === 'saved' ? 'Submitted!' : caSaveStatus === 'saving' ? 'Submitting…' : 'Submit Decision'}
+                    </button>
+                    {caSaveStatus === 'error' && (
+                      <p className="text-xs text-red-600">Failed to submit. Please try again.</p>
+                    )}
+                    {!caDecision && (
+                      <p className="text-xs text-gray-400">Select a decision above</p>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
           )} {/* end Cost Approval Section */}
 
