@@ -5,7 +5,8 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { useState, useCallback, useEffect } from 'react'
 import {
   ArrowLeft, ExternalLink, Phone, Mail, Linkedin, FileText,
-  Loader2, Send, Pencil, Check, X, ChevronDown, CheckCircle
+  Loader2, Send, Pencil, Check, X, ChevronDown, CheckCircle,
+  ClipboardList, ShieldCheck, History
 } from 'lucide-react'
 import { useCandidate, useUpdateStage } from './useCandidates'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -16,6 +17,32 @@ import { supabase } from '../../lib/supabaseClient'
 import { INTERVIEW_STAGES } from '../../types/database.types'
 import { useStages as useStagesHook } from '../../shared/hooks/useStages'
 import { useAgencies } from '../../shared/hooks/useAgencies'
+
+// Derives stable key from stage name — same logic used everywhere
+function stageKeyOf(name: string) {
+  return name.toLowerCase().replace(/[^a-z0-9]/g, '_')
+}
+
+// Fetch cost approval settings (stage name + panel user IDs)
+function useCostApprovalSettings() {
+  return useQuery({
+    queryKey: ['app-settings', 'cost-approval'],
+    queryFn: async () => {
+      const { data } = await supabase.from('app_settings')
+        .select('key,value')
+        .in('key', ['cost_approval_stage_name', 'cost_approval_panel_user_ids'])
+      const rows = (data ?? []) as { key: string; value: string }[]
+      const stageName = rows.find(r => r.key === 'cost_approval_stage_name')?.value ?? 'Cost Approval'
+      const panelIds: string[] = (() => {
+        const raw = rows.find(r => r.key === 'cost_approval_panel_user_ids')?.value
+        if (!raw) return []
+        try { return JSON.parse(raw) } catch { return [] }
+      })()
+      return { stageName, panelIds }
+    },
+    staleTime: 30_000,
+  })
+}
 
 // Unified pill design
 const PILL_BASE     = 'px-2.5 py-1 rounded-full text-xs font-medium border transition-all cursor-pointer select-none'
@@ -54,6 +81,10 @@ export function CandidateProfilePage() {
   // Note editing: key = `${sectionKey}:${entryIndex}`, value = draft text
   const [editingNote, setEditingNote] = useState<{ section: string; index: number; text: string } | null>(null)
   const [savingEditNote, setSavingEditNote] = useState(false)
+  // Cost approval state
+  const [caDecision, setCaDecision]   = useState<'go_ahead' | 'rework_required' | ''>('')
+  const [caNotes, setCaNotes]         = useState('')
+  const [caSaveStatus, setCaSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
 
   // Edit mode drafts
   const [contactDraft, setContactDraft] = useState({
@@ -78,6 +109,13 @@ export function CandidateProfilePage() {
 
   // Agencies list — used by SubSourceField internally via useAgencies hook
 
+  // Sync cost approval fields when candidate data loads
+  useEffect(() => {
+    if (!candidate) return
+    setCaDecision((candidate as any).cost_approval_decision ?? '')
+    setCaNotes((candidate as any).cost_approval_notes ?? '')
+  }, [(candidate as any)?.id, (candidate as any)?.cost_approval_decision, (candidate as any)?.cost_approval_notes])
+
   // Stage config — shared hook (same queryKey as OrgSettingsTab + CandidatesPage)
   // staleTime:0 ensures immediate reflection of Settings changes
   const { stageConfigs: stageConfigsRaw } = useStagesHook()
@@ -95,6 +133,10 @@ export function CandidateProfilePage() {
     },
     staleTime: 60_000,
   })
+
+  const { data: caSettings } = useCostApprovalSettings()
+  const costApprovalStageName = caSettings?.stageName ?? 'Cost Approval'
+  const costApprovalPanelIds  = caSettings?.panelIds  ?? []
 
   const { data: myFeedback, refetch: refetchFeedback } = useQuery({
     queryKey: ['my-feedback', id, user?.id],
@@ -247,6 +289,45 @@ export function CandidateProfilePage() {
     setSavingEditNote(false)
   }
 
+  const submitCostApproval = async () => {
+    if (!caDecision) return
+    setCaSaveStatus('saving')
+    try {
+      // Save decision + notes on candidate
+      const { error } = await supabase.from('candidates').update({
+        cost_approval_decision: caDecision,
+        cost_approval_notes: caNotes || null,
+        cost_approval_submitted_at: new Date().toISOString(),
+        cost_approval_submitted_by: user!.id,
+      }).eq('id', id!)
+      if (error) throw error
+
+      // Notify all super admins
+      const { data: superAdmins } = await supabase.from('users')
+        .select('id')
+        .eq('role', 'super_admin')
+        .eq('is_active', true)
+      if (superAdmins?.length) {
+        const decisionLabel = caDecision === 'go_ahead' ? 'Go Ahead' : 'Re-work Required'
+        await supabase.from('notifications').insert(
+          superAdmins.map(sa => ({
+            user_id: sa.id,
+            type: 'cost_approval',
+            message: `Cost Approval decision for ${candidate.full_name}: ${decisionLabel}. Submitted by ${user!.full_name}.`,
+            candidate_id: id!,
+          }))
+        )
+      }
+
+      qc.invalidateQueries({ queryKey: ['candidate', id] })
+      setCaSaveStatus('saved')
+      setTimeout(() => setCaSaveStatus('idle'), 3000)
+    } catch (err) {
+      console.error('[submitCostApproval]', err)
+      setCaSaveStatus('error')
+    }
+  }
+
   const toggleInterviewer = useCallback((uid: string) => {
     const curr: string[] = (candidate as any)?.assigned_interviewers ?? []
     const next = curr.includes(uid) ? curr.filter(i => i !== uid) : [...curr, uid]
@@ -273,11 +354,11 @@ export function CandidateProfilePage() {
   })()
 
   // Notes sections — DB config if available, else sensible defaults
-  const NOTES_SECTIONS: { key: string; label: string }[] = (() => {
+  const ALL_NOTES_SECTIONS: { key: string; label: string }[] = (() => {
     const richConfigs = stageConfigsRaw.filter((s: any) => s.hasNotes)
     if (richConfigs.length) {
       return richConfigs.map((s: any) => ({
-        key: s.name.toLowerCase().replace(/[^a-z0-9]/g, '_'),
+        key: stageKeyOf(s.name),
         label: s.name,
       }))
     }
@@ -291,6 +372,23 @@ export function CandidateProfilePage() {
       { key: 'cf_inperson', label: 'CF (In-Person)' },
     ]
   })()
+
+  // Interviewers only see the section for the candidate's current stage.
+  // HR / Admin / Super Admin see all sections.
+  const currentStageKey = stageKeyOf(candidate.current_stage)
+  const NOTES_SECTIONS = isInterviewer
+    ? ALL_NOTES_SECTIONS.filter(s => s.key === currentStageKey)
+    : ALL_NOTES_SECTIONS
+
+  // Determine cost approval context
+  const isInCostApproval = candidate.current_stage === costApprovalStageName
+  const isCAPanel = costApprovalPanelIds.includes(user?.id ?? '')
+  const canSeeCostApproval = isInCostApproval && (canEdit || isCAPanel)
+  const canSubmitCostApproval = canSeeCostApproval && (canEdit || isCAPanel)
+
+  // Interview format guide from the job
+  const jobInterviewFormat: Record<string, string[]> = (candidate as any)?.job?.interview_format ?? {}
+  const currentStageGuide: string[] = jobInterviewFormat[currentStageKey] ?? []
 
   // Stage pill color — DB config → hardcoded map → gray fallback
   const STAGE_COLOURS: Record<string, string> = {
@@ -692,10 +790,36 @@ export function CandidateProfilePage() {
           </div>
           )}
 
-          {/* Interview Notes — hidden from agency */}
-          {!isAgency && (
+          {/* Interview Notes — hidden from agency and from cost approval view */}
+          {!isAgency && !isInCostApproval && (
           <div>
-            <p className="text-sm font-semibold text-gray-700 mb-3 px-1">Interview Notes</p>
+            <p className="text-sm font-semibold text-gray-700 mb-3 px-1">
+              Interview Notes
+              {isInterviewer && NOTES_SECTIONS.length > 0 && (
+                <span className="ml-2 text-xs font-normal text-gray-400">— showing {NOTES_SECTIONS[0]?.label} stage</span>
+              )}
+            </p>
+
+            {/* Interview Format Guide — shown to interviewers for current stage */}
+            {currentStageGuide.length > 0 && (
+              <div className="mb-3 bg-green-50 border border-green-200 rounded-xl px-4 py-3">
+                <div className="flex items-center gap-2 mb-2">
+                  <ClipboardList className="w-3.5 h-3.5 text-green-600 flex-shrink-0" />
+                  <p className="text-xs font-semibold text-green-800 uppercase tracking-wide">
+                    {candidate.current_stage} — Interview Guide
+                  </p>
+                </div>
+                <ol className="space-y-1">
+                  {currentStageGuide.map((q, i) => (
+                    <li key={i} className="text-sm text-green-900 flex gap-2">
+                      <span className="text-green-500 font-mono text-xs mt-0.5 flex-shrink-0">{i + 1}.</span>
+                      {q}
+                    </li>
+                  ))}
+                </ol>
+              </div>
+            )}
+
             <div className="space-y-0">
               {NOTES_SECTIONS.map(({ key, label }, sectionIdx) => {
                 const entries: NoteEntry[] = interviewNotes[key] ?? []
@@ -778,7 +902,136 @@ export function CandidateProfilePage() {
               })}
             </div>
           </div>
-          )} {/* end !isAgency — Interview Notes hidden from agency */}
+          )}
+
+          {/* Cost Approval Section — only shown when candidate is in cost approval stage */}
+          {!isAgency && isInCostApproval && canSeeCostApproval && (
+            <div className="bg-amber-50/40 rounded-xl border border-amber-200 overflow-hidden">
+              {/* Header */}
+              <div className="flex items-center gap-2.5 px-5 py-3.5 border-b border-amber-100 bg-amber-50">
+                <ShieldCheck className="w-4 h-4 text-amber-600 flex-shrink-0" />
+                <div>
+                  <p className="text-sm font-semibold text-amber-900">{costApprovalStageName}</p>
+                  <p className="text-xs text-amber-600">Review candidate history and submit your decision</p>
+                </div>
+              </div>
+
+              {/* Candidate History — read-only notes from all previous stages */}
+              <div className="px-5 py-4 border-b border-amber-100">
+                <div className="flex items-center gap-2 mb-3">
+                  <History className="w-3.5 h-3.5 text-gray-500" />
+                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Candidate History</p>
+                </div>
+                {ALL_NOTES_SECTIONS.map(({ key, label }) => {
+                  const entries: NoteEntry[] = interviewNotes[key] ?? []
+                  if (entries.length === 0) return null
+                  return (
+                    <div key={key} className="mb-3">
+                      <p className="text-xs font-medium text-gray-500 mb-1.5">{label}</p>
+                      <div className="space-y-1.5 pl-3">
+                        {entries.map((e, i) => (
+                          <div key={i} className="bg-white border border-gray-100 rounded-lg px-3 py-2">
+                            <p className="text-sm text-gray-700 whitespace-pre-wrap">{e.text}</p>
+                            <p className="text-xs text-gray-400 mt-1">
+                              <span className="font-medium">{e.author}</span> · {formatRelative(e.timestamp)}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )
+                })}
+                {ALL_NOTES_SECTIONS.every(({ key }) => (interviewNotes[key] ?? []).length === 0) && (
+                  <p className="text-xs text-gray-400 italic">No interview notes recorded yet.</p>
+                )}
+              </div>
+
+              {/* Cost Approval Notes + Decision */}
+              <div className="px-5 py-4 space-y-4">
+                {/* Existing decision badge */}
+                {(candidate as any).cost_approval_decision && (
+                  <div className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium ${
+                    (candidate as any).cost_approval_decision === 'go_ahead'
+                      ? 'bg-green-100 text-green-800 border border-green-200'
+                      : 'bg-red-100 text-red-800 border border-red-200'
+                  }`}>
+                    {(candidate as any).cost_approval_decision === 'go_ahead' ? <Check className="w-3.5 h-3.5" /> : <X className="w-3.5 h-3.5" />}
+                    {(candidate as any).cost_approval_decision === 'go_ahead' ? 'Go Ahead' : 'Re-work Required'}
+                    {(candidate as any).cost_approval_submitted_at && (
+                      <span className="text-xs opacity-60 font-normal">
+                        — {formatRelative((candidate as any).cost_approval_submitted_at)}
+                      </span>
+                    )}
+                  </div>
+                )}
+
+                {canSubmitCostApproval && (
+                  <>
+                    <div>
+                      <p className="text-xs font-semibold text-gray-600 mb-2">Cost Approval Notes</p>
+                      <textarea
+                        rows={3}
+                        value={caNotes}
+                        onChange={e => setCaNotes(e.target.value)}
+                        placeholder="Add notes for cost approval decision…"
+                        className="w-full px-3 py-2 border border-amber-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-amber-400 resize-y"
+                      />
+                    </div>
+
+                    <div>
+                      <p className="text-xs font-semibold text-gray-600 mb-2">Decision</p>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => setCaDecision('go_ahead')}
+                          className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium border-2 transition-all ${
+                            caDecision === 'go_ahead'
+                              ? 'bg-green-600 text-white border-green-600'
+                              : 'bg-white text-green-700 border-green-200 hover:border-green-400'
+                          }`}
+                        >
+                          <Check className="w-4 h-4" /> Go Ahead
+                        </button>
+                        <button
+                          onClick={() => setCaDecision('rework_required')}
+                          className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium border-2 transition-all ${
+                            caDecision === 'rework_required'
+                              ? 'bg-red-600 text-white border-red-600'
+                              : 'bg-white text-red-700 border-red-200 hover:border-red-400'
+                          }`}
+                        >
+                          <X className="w-4 h-4" /> Re-work Required
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-3">
+                      <button
+                        onClick={submitCostApproval}
+                        disabled={!caDecision || caSaveStatus === 'saving'}
+                        className={`flex items-center gap-2 px-5 py-2.5 rounded-lg text-sm font-medium transition-all ${
+                          caSaveStatus === 'saved'
+                            ? 'bg-green-500 text-white'
+                            : !caDecision
+                            ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                            : 'bg-amber-700 hover:bg-amber-800 text-white'
+                        }`}
+                      >
+                        {caSaveStatus === 'saving' && <Loader2 className="w-4 h-4 animate-spin" />}
+                        {caSaveStatus === 'saved' && <Check className="w-4 h-4" />}
+                        {caSaveStatus === 'saved' ? 'Submitted!' : caSaveStatus === 'saving' ? 'Submitting…' : 'Submit Decision'}
+                      </button>
+                      {caSaveStatus === 'error' && (
+                        <p className="text-xs text-red-600">Failed to submit. Please try again.</p>
+                      )}
+                      {!caDecision && (
+                        <p className="text-xs text-gray-400">Select a decision above before submitting</p>
+                      )}
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+          )} {/* end Cost Approval Section */}
 
           {/* Agency Feedback — only shown when source_category = 'agency'
               HR/Admin: Read+Write | Agency: Read-only | Interviewer: Hidden */}

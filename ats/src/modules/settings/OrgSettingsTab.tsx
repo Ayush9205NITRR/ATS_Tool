@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { supabase } from '../../lib/supabaseClient'
 import { useAuthStore } from '../auth/authStore'
-import { Check, Loader2, Mail, User, Building, Plus, X, GripVertical } from 'lucide-react'
+import { Check, Loader2, Mail, User, Building, Plus, X, ShieldCheck } from 'lucide-react'
 import { useStages, useSaveStages, DEFAULT_STAGE_CONFIGS, COLOR_OPTIONS, type StageConfig } from '../../shared/hooks/useStages'
 
 interface Setting { key: string; value: string }
@@ -109,6 +109,9 @@ export function OrgSettingsTab() {
 
       {/* Stage Editor */}
       <StageEditor/>
+
+      {/* Cost Approval Settings */}
+      <CostApprovalSettings/>
 
       {/* Rejection Workflow */}
       <RejectionWorkflow/>
@@ -359,6 +362,145 @@ function StageEditor() {
           ))}
         </div>
       )}
+    </div>
+  )
+}
+
+// ── Cost Approval Settings ────────────────────────────────────
+function CostApprovalSettings() {
+  const qc = useQueryClient()
+  const [stageName, setStageName] = useState<string | null>(null)
+  const [panelIds, setPanelIds]   = useState<string[] | null>(null)
+  const [saved, setSaved]         = useState(false)
+
+  const { data: settings = [] } = useQuery({
+    queryKey: ['app-settings', 'cost-approval'],
+    queryFn: async () => {
+      const { data } = await supabase.from('app_settings')
+        .select('key,value')
+        .in('key', ['cost_approval_stage_name', 'cost_approval_panel_user_ids'])
+      return (data ?? []) as { key: string; value: string }[]
+    },
+    staleTime: 0,
+  })
+
+  const { data: eligibleUsers = [] } = useQuery({
+    queryKey: ['users', 'cost-approval-eligible'],
+    queryFn: async () => {
+      const { data } = await supabase.from('users')
+        .select('id,full_name,role')
+        .in('role', ['super_admin', 'admin', 'hr_team', 'interviewer'])
+        .eq('is_active', true)
+        .order('full_name')
+      return (data ?? []) as { id: string; full_name: string; role: string }[]
+    },
+    staleTime: 60_000,
+  })
+
+  const storedName = settings.find(s => s.key === 'cost_approval_stage_name')?.value ?? 'Cost Approval'
+  const storedIds: string[] = (() => {
+    const raw = settings.find(s => s.key === 'cost_approval_panel_user_ids')?.value
+    if (!raw) return []
+    try { return JSON.parse(raw) } catch { return [] }
+  })()
+
+  const currentName = stageName ?? storedName
+  const currentIds  = panelIds  ?? storedIds
+
+  const save = useMutation({
+    mutationFn: async () => {
+      await supabase.from('app_settings').upsert([
+        { key: 'cost_approval_stage_name',     value: currentName,              updated_at: new Date().toISOString() },
+        { key: 'cost_approval_panel_user_ids',  value: JSON.stringify(currentIds), updated_at: new Date().toISOString() },
+      ], { onConflict: 'key' })
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['app-settings'] })
+      setSaved(true)
+      setTimeout(() => setSaved(false), 2000)
+    },
+  })
+
+  const isDirty = (stageName !== null && stageName !== storedName) ||
+                  (panelIds  !== null && JSON.stringify(panelIds) !== JSON.stringify(storedIds))
+
+  return (
+    <div className="border-t border-gray-100 pt-6 space-y-4">
+      <div className="flex items-center gap-2">
+        <ShieldCheck className="w-4 h-4 text-gray-500" />
+        <div>
+          <h3 className="text-sm font-semibold text-gray-900">Cost Approval Settings</h3>
+          <p className="text-xs text-gray-500 mt-0.5">Configure the cost approval stage name and which users can review it.</p>
+        </div>
+      </div>
+
+      {/* Stage name */}
+      <div className="bg-white border border-gray-200 rounded-xl p-4">
+        <label className="block text-sm font-medium text-gray-700 mb-1">Stage Name</label>
+        <p className="text-xs text-gray-400 mb-2">
+          Candidates moved to this stage will appear in the cost approval panel.
+        </p>
+        <input
+          value={currentName}
+          onChange={e => setStageName(e.target.value)}
+          className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+          placeholder="e.g. Cost Approval"
+        />
+      </div>
+
+      {/* Panel members */}
+      <div className="bg-white border border-gray-200 rounded-xl p-4">
+        <label className="block text-sm font-medium text-gray-700 mb-1">Cost Approval Panel Members</label>
+        <p className="text-xs text-gray-400 mb-3">
+          These users will see candidates in the cost approval stage in their panel and can submit decisions.
+        </p>
+        <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
+          {eligibleUsers.map(u => {
+            const sel = currentIds.includes(u.id)
+            return (
+              <div
+                key={u.id}
+                onClick={() => setPanelIds(prev => {
+                  const ids = prev ?? storedIds
+                  return sel ? ids.filter(i => i !== u.id) : [...ids, u.id]
+                })}
+                className={`flex items-center gap-2.5 px-3 py-2 rounded-lg cursor-pointer transition-colors select-none ${
+                  sel ? 'bg-blue-50 border border-blue-200' : 'hover:bg-gray-50 border border-transparent'
+                }`}
+              >
+                <div className={`w-4 h-4 rounded border-2 flex items-center justify-center flex-shrink-0 transition-all ${
+                  sel ? 'bg-blue-500 border-blue-500' : 'border-gray-300'
+                }`}>
+                  {sel && <svg className="w-2.5 h-2.5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7"/></svg>}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-gray-800">{u.full_name}</p>
+                  <p className="text-xs text-gray-400">{u.role}</p>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+        {currentIds.length > 0 && (
+          <p className="mt-2 text-xs text-blue-700 bg-blue-50 px-3 py-1.5 rounded-lg">
+            {currentIds.length} member{currentIds.length > 1 ? 's' : ''} in cost approval panel
+          </p>
+        )}
+      </div>
+
+      <button
+        onClick={() => save.mutate()}
+        disabled={!isDirty || save.isPending}
+        className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+          saved
+            ? 'bg-green-500 text-white'
+            : isDirty
+            ? 'bg-gray-900 text-white hover:bg-gray-800'
+            : 'bg-gray-100 text-gray-400 cursor-default'
+        }`}
+      >
+        {saved ? <><Check className="w-3.5 h-3.5"/>Saved</> : save.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin"/> : 'Save Cost Approval Settings'}
+      </button>
     </div>
   )
 }
