@@ -308,14 +308,29 @@ export function CandidateProfilePage() {
     if (!caDecision) return
     setCaSaveStatus('saving')
     try {
-      // Save decision + notes on candidate
+      const decisionLabel = caDecision === 'go_ahead' ? 'Go Ahead' : 'Re-work Required'
+
+      // Save into interview_notes.cost_approval (guaranteed to work — JSONB column exists)
+      const existing = (candidate as any)?.interview_notes ?? {}
+      const caEntry = {
+        text: caNotes || '',
+        author: user!.full_name,
+        authorId: user!.id,
+        timestamp: new Date().toISOString(),
+        decision: caDecision,
+      }
       const { error } = await supabase.from('candidates').update({
+        interview_notes: { ...existing, cost_approval: [caEntry] },
+      }).eq('id', id!)
+      if (error) throw error
+
+      // Also try dedicated columns (might not exist if migration not run — ignore errors)
+      await supabase.from('candidates').update({
         cost_approval_decision: caDecision,
         cost_approval_notes: caNotes || null,
         cost_approval_submitted_at: new Date().toISOString(),
         cost_approval_submitted_by: user!.id,
-      }).eq('id', id!)
-      if (error) throw error
+      }).eq('id', id!).then(() => {}, () => {})
 
       // Notify super_admin + admin + hr_team
       const { data: notifyUsers } = await supabase.from('users')
@@ -323,7 +338,6 @@ export function CandidateProfilePage() {
         .in('role', ['super_admin', 'admin', 'hr_team'])
         .eq('is_active', true)
       if (notifyUsers?.length) {
-        const decisionLabel = caDecision === 'go_ahead' ? 'Go Ahead' : 'Re-work Required'
         await supabase.from('notifications').insert(
           notifyUsers.map(u => ({
             user_id: u.id,
@@ -407,7 +421,8 @@ export function CandidateProfilePage() {
   // Determine cost approval context
   const isInCostApproval = candidate.current_stage === costApprovalStageName
   const isCAPanel = costApprovalPanelIds.includes(user?.id ?? '')
-  const hasCostApprovalRecord = !!(candidate as any).cost_approval_decision
+  const interviewNotes = (candidate as any).interview_notes ?? {}
+  const hasCostApprovalRecord = (interviewNotes['cost_approval'] ?? []).length > 0 || !!(candidate as any).cost_approval_decision
   // Show section: currently in CA stage (active), OR decision was already submitted (retrospective view)
   const canSeeCostApproval = (isInCostApproval || hasCostApprovalRecord) && (canEdit || isCAPanel)
   // Only panel members can submit (and only while still in the stage)
@@ -431,7 +446,6 @@ export function CandidateProfilePage() {
     if (cfg?.color) return `${cfg.color} ${cfg.textColor}`
     return STAGE_COLOURS[name] ?? 'bg-gray-100 text-gray-600'
   }
-  const interviewNotes = (candidate as any).interview_notes ?? {}
   const assignedInterviewers: string[] = (candidate as any).assigned_interviewers ?? []
   const assignedHROwners: string[] = (candidate as any)?.assigned_hr_owners?.length > 0
     ? (candidate as any).assigned_hr_owners
@@ -830,9 +844,8 @@ export function CandidateProfilePage() {
                     .filter(s => s !== costApprovalStageName)
                     .map(s => ({ key: stageKeyOf(s), label: s }))
                 : []
-              const hasGeneralNotes = !!(candidate as any).notes
               const hasPrevNotes = prevStages.some(({ key }) => (interviewNotes[key] ?? []).length > 0)
-              if (!hasGeneralNotes && !hasPrevNotes) return null
+              if (!hasPrevNotes) return null
               return (
                 <div className="mb-4 rounded-xl border border-slate-200 overflow-hidden">
                   <div className="flex items-center gap-2 px-4 py-2.5 bg-slate-100/80 border-b border-slate-200">
@@ -841,15 +854,6 @@ export function CandidateProfilePage() {
                     <span className="text-xs text-slate-400">— previous rounds, read-only</span>
                   </div>
                   <div className="divide-y divide-slate-100">
-                    {/* General Notes */}
-                    {(candidate as any).notes && (
-                      <div className="px-4 py-3">
-                        <p className="text-xs font-medium text-slate-400 mb-1.5">General Notes</p>
-                        <p className="text-sm text-slate-700 whitespace-pre-wrap leading-relaxed bg-slate-50 rounded-lg px-3 py-2">
-                          {(candidate as any).notes}
-                        </p>
-                      </div>
-                    )}
                     {/* Previous stage notes in pipeline order */}
                     {prevStages.map(({ key, label }) => {
                       const entries: NoteEntry[] = interviewNotes[key] ?? []
@@ -1015,34 +1019,19 @@ export function CandidateProfilePage() {
                     neutral: 'bg-gray-100 text-gray-600', no: 'bg-red-50 text-red-600', strong_no: 'bg-red-100 text-red-700'
                   }
 
-                  const hasGeneralNotes = !!(candidate as any).notes
-                  const hasAnyData = hasGeneralNotes || HISTORY_STAGES.some(({ key }) =>
+                  const hasStageData = HISTORY_STAGES.some(({ key }) =>
                     (interviewNotes[key] ?? []).length > 0 ||
                     (interviewFeedbacks as any[]).some((fb: any) => stageKeyOf(fb.stage ?? '') === key)
                   )
-                  const hasCostApprovalData = !!(candidate as any).cost_approval_decision
+                  const hasCostApprovalNotes = (interviewNotes['cost_approval'] ?? []).length > 0
+                  const hasCostApprovalData = hasCostApprovalNotes || !!(candidate as any).cost_approval_decision
 
-                  if (!hasAnyData && !hasCostApprovalData) {
+                  if (!hasStageData && !hasCostApprovalData) {
                     return <p className="text-xs text-gray-400 italic">No interview notes or feedback recorded yet.</p>
                   }
 
                   return (
                     <div className="space-y-5">
-                      {/* General Notes */}
-                      {(candidate as any).notes && (
-                        <div>
-                          <div className="flex items-center gap-2 mb-2">
-                            <span className="w-1.5 h-1.5 rounded-full bg-amber-400 flex-shrink-0" />
-                            <p className="text-xs font-bold text-gray-700 uppercase tracking-wider">General Notes</p>
-                          </div>
-                          <div className="pl-4">
-                            <div className="bg-white border border-gray-100 rounded-lg px-3 py-2.5">
-                              <p className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">{(candidate as any).notes}</p>
-                            </div>
-                          </div>
-                        </div>
-                      )}
-
                       {/* Per-stage history: Screening, R1, R2, CF, etc. */}
                       {HISTORY_STAGES.map(({ key, label }) => {
                         const entries: NoteEntry[] = interviewNotes[key] ?? []
@@ -1117,42 +1106,42 @@ export function CandidateProfilePage() {
                         )
                       })}
 
-                      {/* Cost Approval decision — shown in history when already submitted */}
-                      {hasCostApprovalData && (() => {
-                        const submittedBy = allUsers.find(u => u.id === (candidate as any).cost_approval_submitted_by)
-                        const initials = (submittedBy?.full_name ?? '?').split(' ').map((n: string) => n[0]).join('').toUpperCase().slice(0, 2)
-                        const isGoAhead = (candidate as any).cost_approval_decision === 'go_ahead'
+                      {/* Cost Approval decision — from interview_notes.cost_approval */}
+                      {(() => {
+                        const caEntries: any[] = interviewNotes['cost_approval'] ?? []
+                        if (caEntries.length === 0) return null
                         return (
                           <div>
                             <div className="flex items-center gap-2 mb-2">
                               <span className="w-1.5 h-1.5 rounded-full bg-amber-600 flex-shrink-0" />
                               <p className="text-xs font-bold text-amber-800 uppercase tracking-wider">{costApprovalStageName}</p>
                             </div>
-                            <div className="pl-4">
-                              <div className={`border rounded-lg px-3 py-2.5 ${isGoAhead ? 'bg-green-50 border-green-100' : 'bg-red-50 border-red-100'}`}>
-                                <div className="flex items-center gap-2 flex-wrap">
-                                  {submittedBy && (
-                                    <div className={`w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0 ${isGoAhead ? 'bg-green-200' : 'bg-red-200'}`}>
-                                      <span className={`text-xs font-bold ${isGoAhead ? 'text-green-800' : 'text-red-800'}`}>{initials}</span>
-                                    </div>
-                                  )}
-                                  <span className="text-sm font-semibold text-gray-800">{submittedBy?.full_name ?? 'Unknown'}</span>
-                                  {(candidate as any).cost_approval_submitted_at && (
-                                    <>
+                            <div className="pl-4 space-y-2.5">
+                              {caEntries.map((e: any, i: number) => {
+                                const isGoAhead = e.decision === 'go_ahead'
+                                const isRework = e.decision === 'rework_required'
+                                const initials = (e.author ?? '?').split(' ').map((n: string) => n[0]).join('').toUpperCase().slice(0, 2)
+                                return (
+                                  <div key={i} className={`border rounded-lg px-3 py-2.5 ${isGoAhead ? 'bg-green-50 border-green-100' : isRework ? 'bg-red-50 border-red-100' : 'bg-white border-gray-100'}`}>
+                                    <div className="flex items-center gap-2 flex-wrap">
+                                      <div className={`w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0 ${isGoAhead ? 'bg-green-200' : isRework ? 'bg-red-200' : 'bg-gray-200'}`}>
+                                        <span className={`text-xs font-bold ${isGoAhead ? 'text-green-800' : isRework ? 'text-red-800' : 'text-gray-700'}`}>{initials}</span>
+                                      </div>
+                                      <span className="text-sm font-semibold text-gray-800">{e.author}</span>
                                       <span className="text-gray-300">·</span>
-                                      <span className="text-xs text-gray-500">{formatRelative((candidate as any).cost_approval_submitted_at)}</span>
-                                    </>
-                                  )}
-                                  <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${isGoAhead ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-                                    {isGoAhead ? 'Go Ahead' : 'Re-work Required'}
-                                  </span>
-                                </div>
-                                {(candidate as any).cost_approval_notes && (
-                                  <p className="mt-1.5 text-sm text-gray-700 whitespace-pre-wrap">
-                                    {(candidate as any).cost_approval_notes}
-                                  </p>
-                                )}
-                              </div>
+                                      <span className="text-xs text-gray-500">{formatRelative(e.timestamp)}</span>
+                                      {e.decision && (
+                                        <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${isGoAhead ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                                          {isGoAhead ? 'Go Ahead' : 'Re-work Required'}
+                                        </span>
+                                      )}
+                                    </div>
+                                    {e.text && (
+                                      <p className="mt-1.5 text-sm text-gray-700 whitespace-pre-wrap">{e.text}</p>
+                                    )}
+                                  </div>
+                                )
+                              })}
                             </div>
                           </div>
                         )
