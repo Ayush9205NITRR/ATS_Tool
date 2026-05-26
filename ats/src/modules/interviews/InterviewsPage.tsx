@@ -11,7 +11,7 @@ import { useAuthStore } from '../auth/authStore'
 import { formatDateTime } from '../../shared/utils/helpers'
 import { PageHeader } from '../../shared/components/PageHeader'
 
-type FeedbackFilter = 'pending' | 'submitted' | 'cost_approval'
+type FeedbackFilter = 'pending' | 'submitted'
 
 // ─── Airtable-style date filter ──────────────────────────────
 type DateOp =
@@ -85,66 +85,20 @@ export function InterviewsPage() {
   const isInterviewer = hasRole(['interviewer'])
   const [filter, setFilter] = useState<FeedbackFilter>('pending')
 
-  // Fetch cost approval settings
-  const { data: caSettings } = useQuery({
-    queryKey: ['app-settings', 'cost-approval'],
-    queryFn: async () => {
-      const { data } = await supabase.from('app_settings')
-        .select('key,value')
-        .in('key', ['cost_approval_stage_name', 'cost_approval_panel_user_ids'])
-      const rows = (data ?? []) as { key: string; value: string }[]
-      const stageName = rows.find(r => r.key === 'cost_approval_stage_name')?.value ?? 'Cost Approval'
-      const panelIds: string[] = (() => {
-        const raw = rows.find(r => r.key === 'cost_approval_panel_user_ids')?.value
-        if (!raw) return []
-        try { return JSON.parse(raw) } catch { return [] }
-      })()
-      return { stageName, panelIds }
-    },
-    staleTime: 30_000,
-  })
-
-  const costApprovalStageName = caSettings?.stageName ?? 'Cost Approval'
-  const isCAPanel = caSettings?.panelIds?.includes(user?.id ?? '') ?? false
-
-  // Fetch cost approval candidates (for panel members)
-  const { data: caCandidates = [] } = useQuery({
-    queryKey: ['cost-approval-candidates', costApprovalStageName],
-    queryFn: async () => {
-      const { data } = await supabase
-        .from('candidates')
-        .select('id, full_name, current_stage, interview_date, job_id, cost_approval_decision, cost_approval_submitted_at')
-        .eq('current_stage', costApprovalStageName)
-        .eq('status', 'active')
-      const jobIds = [...new Set((data ?? []).map((c: any) => c.job_id).filter(Boolean))]
-      const jobsMap: Record<string, string> = {}
-      if (jobIds.length) {
-        const { data: jobs } = await supabase.from('jobs').select('id,title').in('id', jobIds)
-        ;(jobs ?? []).forEach((j: any) => { jobsMap[j.id] = j.title })
-      }
-      return (data ?? []).map((c: any) => ({
-        ...c,
-        job: c.job_id ? { id: c.job_id, title: jobsMap[c.job_id] ?? null } : null,
-      }))
-    },
-    enabled: isCAPanel,
-    staleTime: 0,
-  })
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
-  const [jobFilter, setJobFilter]     = useState<string>('')
-  const [dateOp,    setDateOp]        = useState<DateOp>('any')
-  const [dateA,     setDateA]         = useState<string>('')
-  const [dateB,     setDateB]         = useState<string>('')
-  const [dateOpen,  setDateOpen]      = useState(false)
-  const dateRef = useRef<HTMLDivElement>(null)
-
-  // Cost approval settings
+  // Fetch cost approval settings (reads from the cost_approval JSON key, same as CandidateProfilePage)
   const { data: costApprovalSettings } = useQuery({
     queryKey: ['app-settings', 'cost_approval'],
     queryFn: async () => {
-      const { data } = await supabase.from('app_settings').select('value').eq('key', 'cost_approval').maybeSingle()
+      const { data } = await supabase.from('app_settings')
+        .select('value').eq('key', 'cost_approval').maybeSingle()
       if (!data?.value) return null
-      try { return JSON.parse(data.value) as { stage_name: string; reviewer_ids: string[] } } catch { return null }
+      try {
+        const parsed = JSON.parse(data.value)
+        return {
+          stage_name: (parsed.stage_name ?? 'Cost Approval') as string,
+          reviewer_ids: (parsed.reviewer_ids ?? []) as string[],
+        }
+      } catch { return null }
     },
     staleTime: 30_000,
   })
@@ -171,6 +125,14 @@ export function InterviewsPage() {
     enabled: isCostApprovalReviewer && !!costApprovalSettings?.stage_name,
     staleTime: 0,
   })
+
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [jobFilter, setJobFilter]     = useState<string>('')
+  const [dateOp,    setDateOp]        = useState<DateOp>('any')
+  const [dateA,     setDateA]         = useState<string>('')
+  const [dateB,     setDateB]         = useState<string>('')
+  const [dateOpen,  setDateOpen]      = useState(false)
+  const dateRef = useRef<HTMLDivElement>(null)
 
   // Close the date popover on outside click
   useEffect(() => {
@@ -335,80 +297,9 @@ export function InterviewsPage() {
         title={isInterviewer ? 'My Interviews' : 'Reviews'}
         subtitle={isInterviewer
           ? `${data?.all.length ?? 0} assigned · ${pendingCount} pending feedback`
-          : `${costApprovalCandidates.length} candidates awaiting cost approval`
+          : `${pendingCount} pending feedback · ${submittedCount} submitted`
         }
       />
-
-      {/* Cost Approval Section — for configured reviewers */}
-      {isCostApprovalReviewer && costApprovalCandidates.length > 0 && (
-        <div className="mb-6">
-          <div className="flex items-center gap-2 mb-3">
-            <span className="text-xs font-semibold text-amber-700 bg-amber-100 px-2.5 py-1 rounded-full uppercase tracking-wide">
-              Cost Approval
-            </span>
-            <span className="text-xs text-gray-400">{costApprovalCandidates.length} candidate{costApprovalCandidates.length !== 1 ? 's' : ''}</span>
-          </div>
-          <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-gray-100 bg-gray-50 text-xs text-gray-500 uppercase tracking-wide">
-                  <th className="text-left px-4 py-3 font-medium">Candidate</th>
-                  <th className="text-left px-4 py-3 font-medium">Job</th>
-                  <th className="text-left px-4 py-3 font-medium">Decision</th>
-                  <th className="text-left px-4 py-3 font-medium">Added</th>
-                  <th className="px-4 py-3 font-medium text-right">Action</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-50">
-                {costApprovalCandidates.map((c: any) => (
-                  <tr key={c.id} className="hover:bg-gray-50/40 transition-colors">
-                    <td className="px-4 py-3">
-                      <button onClick={() => navigate(`/candidates/${c.id}`)}
-                        className="font-medium text-blue-600 hover:underline text-left text-sm">
-                        {c.full_name}
-                      </button>
-                    </td>
-                    <td className="px-4 py-3 text-xs text-gray-600">
-                      {c.jobTitle ?? <span className="text-gray-300">—</span>}
-                    </td>
-                    <td className="px-4 py-3">
-                      {c.cost_approval_decision ? (
-                        <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
-                          c.cost_approval_decision === 'go_ahead'
-                            ? 'bg-green-100 text-green-700'
-                            : 'bg-orange-100 text-orange-700'
-                        }`}>
-                          {c.cost_approval_decision === 'go_ahead' ? '✅ Go Ahead' : '🔁 Re-work'}
-                        </span>
-                      ) : (
-                        <span className="text-xs text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full font-medium">
-                          Pending
-                        </span>
-                      )}
-                    </td>
-                    <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">
-                      {new Date(c.created_at).toLocaleDateString()}
-                    </td>
-                    <td className="px-4 py-3 text-right">
-                      <button onClick={() => navigate(`/candidates/${c.id}`)}
-                        className="text-xs px-3 py-1.5 bg-amber-50 border border-amber-200 hover:bg-amber-100 text-amber-700 rounded-lg font-medium transition-colors">
-                        Review
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
-      {isCostApprovalReviewer && costApprovalCandidates.length === 0 && !isInterviewer && (
-        <div className="bg-white rounded-xl border border-gray-200 flex flex-col items-center justify-center py-16 text-gray-400">
-          <CheckCircle className="w-8 h-8 mb-2 text-green-400"/>
-          <p className="text-sm font-medium text-gray-600">No candidates awaiting cost approval</p>
-        </div>
-      )}
 
       {/* Interviewer section — only show for interviewers */}
       {isInterviewer && <>
@@ -439,20 +330,6 @@ export function InterviewsPage() {
               }`}>{submittedCount}</span>
             )}
           </button>
-          {isCAPanel && (
-            <button onClick={() => { setFilter('cost_approval'); setSelectedIds(new Set()) }}
-              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-                filter === 'cost_approval' ? 'bg-white shadow-sm text-gray-900' : 'text-gray-500 hover:text-gray-700'
-              }`}>
-              <ShieldCheck className="w-3.5 h-3.5"/>
-              {costApprovalStageName}
-              {(caCandidates as any[]).length > 0 && (
-                <span className={`text-xs px-1.5 py-0.5 rounded-full font-semibold ${
-                  filter === 'cost_approval' ? 'bg-amber-100 text-amber-700' : 'bg-gray-200 text-gray-500'
-                }`}>{(caCandidates as any[]).length}</span>
-              )}
-            </button>
-          )}
         </div>
 
         {/* Bulk submit */}
@@ -598,74 +475,12 @@ export function InterviewsPage() {
         </div>
       </div>
 
-      {/* Cost Approval Panel view */}
-      {filter === 'cost_approval' && isCAPanel && (
-        <div>
-          {(caCandidates as any[]).length === 0 ? (
-            <div className="bg-white rounded-xl border border-gray-200 flex flex-col items-center justify-center py-16 text-gray-400">
-              <ShieldCheck className="w-8 h-8 mb-2 text-amber-400"/>
-              <p className="text-sm font-medium text-gray-600">No candidates pending cost approval</p>
-            </div>
-          ) : (
-            <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-amber-100 bg-amber-50 text-xs text-amber-700 uppercase tracking-wide">
-                    <th className="text-left px-4 py-3 font-medium">Candidate</th>
-                    <th className="text-left px-4 py-3 font-medium">Job</th>
-                    <th className="text-left px-4 py-3 font-medium">Decision</th>
-                    <th className="px-4 py-3 font-medium text-right">Action</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-50">
-                  {(caCandidates as any[]).map((c: any) => (
-                    <tr key={c.id} className="hover:bg-amber-50/30 transition-colors">
-                      <td className="px-4 py-3">
-                        <button onClick={() => navigate(`/candidates/${c.id}`)}
-                          className="font-medium text-blue-600 hover:underline text-left text-sm">
-                          {c.full_name}
-                        </button>
-                      </td>
-                      <td className="px-4 py-3 text-xs text-gray-600">
-                        {c.job?.title ?? <span className="text-gray-300">—</span>}
-                      </td>
-                      <td className="px-4 py-3">
-                        {c.cost_approval_decision ? (
-                          <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
-                            c.cost_approval_decision === 'go_ahead'
-                              ? 'bg-green-100 text-green-700'
-                              : 'bg-red-100 text-red-700'
-                          }`}>
-                            {c.cost_approval_decision === 'go_ahead' ? 'Go Ahead' : 'Re-work Required'}
-                          </span>
-                        ) : (
-                          <span className="text-xs text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full border border-amber-200">
-                            Pending Review
-                          </span>
-                        )}
-                      </td>
-                      <td className="px-4 py-3 text-right">
-                        <button onClick={() => navigate(`/candidates/${c.id}`)}
-                          className="text-xs px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg font-medium transition-colors flex items-center gap-1.5 ml-auto">
-                          <ShieldCheck className="w-3 h-3"/>
-                          Review
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-      )}
-
       {/* Regular interview feedback view */}
-      {filter !== 'cost_approval' && isLoading ? (
+      {isLoading ? (
         <div className="flex justify-center py-16">
           <Loader2 className="w-6 h-6 animate-spin text-blue-500"/>
         </div>
-      ) : filter !== 'cost_approval' && displayed.length === 0 ? (
+      ) : displayed.length === 0 ? (
         <div className="bg-white rounded-xl border border-gray-200 flex flex-col items-center justify-center py-16 text-gray-400">
           {filter === 'pending' ? (
             <>
@@ -677,7 +492,7 @@ export function InterviewsPage() {
             <p className="text-sm">No feedback submitted yet.</p>
           )}
         </div>
-      ) : filter !== 'cost_approval' ? (
+      ) : (
         <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
           <table className="w-full text-sm">
             <thead>
@@ -795,7 +610,125 @@ export function InterviewsPage() {
             )}
           </div>
         </div>
-      ) : null}
+      )}
+
+      {/* ── Cost Approval — below interview section ── */}
+      {isCostApprovalReviewer && (
+        <div className="mt-6 space-y-4">
+          <div className="flex items-center gap-2">
+            <ShieldCheck className="w-4 h-4 text-amber-600"/>
+            <p className="text-sm font-semibold text-gray-900">Cost Approval</p>
+            <span className="text-xs text-gray-400 ml-1">
+              {costApprovalCandidates.length} candidate{costApprovalCandidates.length !== 1 ? 's' : ''}
+            </span>
+          </div>
+
+          {costApprovalCandidates.length === 0 ? (
+            <div className="bg-white rounded-xl border border-gray-200 flex flex-col items-center justify-center py-12 text-gray-400">
+              <CheckCircle className="w-8 h-8 mb-2 text-green-400"/>
+              <p className="text-sm font-medium text-gray-600">No candidates awaiting cost approval</p>
+            </div>
+          ) : (
+            <div className="grid gap-4 sm:grid-cols-2">
+              {/* Go Ahead group */}
+              {(() => {
+                const group = costApprovalCandidates.filter((c: any) => c.cost_approval_decision === 'go_ahead')
+                if (!group.length) return null
+                return (
+                  <div className="bg-white rounded-xl border border-green-200 overflow-hidden">
+                    <div className="flex items-center gap-2 px-4 py-3 bg-green-50 border-b border-green-100">
+                      <CheckCircle className="w-4 h-4 text-green-600"/>
+                      <p className="text-sm font-semibold text-green-800">Go Ahead</p>
+                      <span className="ml-auto text-xs text-green-600 bg-green-100 px-2 py-0.5 rounded-full">{group.length}</span>
+                    </div>
+                    <div className="divide-y divide-gray-50">
+                      {group.map((c: any) => (
+                        <div key={c.id} className="flex items-center justify-between px-4 py-3 hover:bg-gray-50/40 transition-colors">
+                          <div className="min-w-0">
+                            <button onClick={() => navigate(`/candidates/${c.id}`)}
+                              className="text-sm font-medium text-gray-900 hover:text-blue-600 transition-colors text-left truncate block max-w-[160px]">
+                              {c.full_name}
+                            </button>
+                            <p className="text-xs text-gray-400 mt-0.5 truncate">{c.jobTitle ?? '—'}</p>
+                          </div>
+                          <button onClick={() => navigate(`/candidates/${c.id}`)}
+                            className="flex-shrink-0 text-xs px-3 py-1.5 border border-gray-200 hover:border-green-300 hover:text-green-700 text-gray-500 rounded-lg transition-colors ml-3">
+                            View
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )
+              })()}
+
+              {/* Re-work Required group */}
+              {(() => {
+                const group = costApprovalCandidates.filter((c: any) => c.cost_approval_decision === 'rework_required')
+                if (!group.length) return null
+                return (
+                  <div className="bg-white rounded-xl border border-orange-200 overflow-hidden">
+                    <div className="flex items-center gap-2 px-4 py-3 bg-orange-50 border-b border-orange-100">
+                      <X className="w-4 h-4 text-orange-600"/>
+                      <p className="text-sm font-semibold text-orange-800">Re-work Required</p>
+                      <span className="ml-auto text-xs text-orange-600 bg-orange-100 px-2 py-0.5 rounded-full">{group.length}</span>
+                    </div>
+                    <div className="divide-y divide-gray-50">
+                      {group.map((c: any) => (
+                        <div key={c.id} className="flex items-center justify-between px-4 py-3 hover:bg-gray-50/40 transition-colors">
+                          <div className="min-w-0">
+                            <button onClick={() => navigate(`/candidates/${c.id}`)}
+                              className="text-sm font-medium text-gray-900 hover:text-blue-600 transition-colors text-left truncate block max-w-[160px]">
+                              {c.full_name}
+                            </button>
+                            <p className="text-xs text-gray-400 mt-0.5 truncate">{c.jobTitle ?? '—'}</p>
+                          </div>
+                          <button onClick={() => navigate(`/candidates/${c.id}`)}
+                            className="flex-shrink-0 text-xs px-3 py-1.5 border border-gray-200 hover:border-orange-300 hover:text-orange-700 text-gray-500 rounded-lg transition-colors ml-3">
+                            View
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )
+              })()}
+
+              {/* Pending group */}
+              {(() => {
+                const group = costApprovalCandidates.filter((c: any) => !c.cost_approval_decision)
+                if (!group.length) return null
+                return (
+                  <div className="bg-white rounded-xl border border-amber-200 overflow-hidden sm:col-span-2">
+                    <div className="flex items-center gap-2 px-4 py-3 bg-amber-50 border-b border-amber-100">
+                      <Loader2 className="w-4 h-4 text-amber-600"/>
+                      <p className="text-sm font-semibold text-amber-800">Awaiting Decision</p>
+                      <span className="ml-auto text-xs text-amber-600 bg-amber-100 px-2 py-0.5 rounded-full">{group.length}</span>
+                    </div>
+                    <div className="divide-y divide-gray-50">
+                      {group.map((c: any) => (
+                        <div key={c.id} className="flex items-center justify-between px-4 py-3 hover:bg-gray-50/40 transition-colors">
+                          <div className="min-w-0">
+                            <button onClick={() => navigate(`/candidates/${c.id}`)}
+                              className="text-sm font-medium text-gray-900 hover:text-blue-600 transition-colors text-left truncate block max-w-[200px]">
+                              {c.full_name}
+                            </button>
+                            <p className="text-xs text-gray-400 mt-0.5 truncate">{c.jobTitle ?? '—'}</p>
+                          </div>
+                          <button onClick={() => navigate(`/candidates/${c.id}`)}
+                            className="flex-shrink-0 text-xs px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg font-medium transition-colors ml-3 flex items-center gap-1.5">
+                            <ShieldCheck className="w-3 h-3"/> Review
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )
+              })()}
+            </div>
+          )}
+        </div>
+      )}
       </>}
     </div>
   )

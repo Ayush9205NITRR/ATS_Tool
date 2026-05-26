@@ -14,7 +14,7 @@ import { Button } from '../../shared/components/Button'
 import { useAuthStore } from '../auth/authStore'
 import { formatDateTime, formatDate, formatRelative, labelOf } from '../../shared/utils/helpers'
 import { supabase } from '../../lib/supabaseClient'
-import { INTERVIEW_STAGES, type NoteEntry, type CostApprovalSettings } from '../../types/database.types'
+import { INTERVIEW_STAGES, type NoteEntry } from '../../types/database.types'
 import { useStages as useStagesHook } from '../../shared/hooks/useStages'
 import { useAgencies } from '../../shared/hooks/useAgencies'
 
@@ -111,17 +111,6 @@ export function CandidateProfilePage() {
       return (data ?? []) as { id: string; full_name: string; role: string }[]
     },
     staleTime: 60_000,
-  })
-
-  // Cost approval settings from app_settings
-  const { data: costApprovalSettings } = useQuery({
-    queryKey: ['app-settings', 'cost_approval'],
-    queryFn: async () => {
-      const { data } = await supabase.from('app_settings').select('value').eq('key', 'cost_approval').maybeSingle()
-      if (!data?.value) return null
-      try { return JSON.parse(data.value) as CostApprovalSettings } catch { return null }
-    },
-    staleTime: 30_000,
   })
 
   // Job templates — fetch screening_template + interview_templates for this job
@@ -537,11 +526,6 @@ export function CandidateProfilePage() {
     : ((candidate as any).hr_owner ? [(candidate as any).hr_owner] : [])
 
   const feedbackSubmitted = !!myFeedback?.submitted_at
-
-  // Cost approval — determine visibility
-  const isCostApprovalStage = !!(costApprovalSettings?.stage_name && candidate.current_stage === costApprovalSettings.stage_name)
-  const isCostApprovalReviewer = !!(costApprovalSettings && user && costApprovalSettings.reviewer_ids.includes(user.id))
-  const canViewCostApproval = isCostApprovalStage && (isCostApprovalReviewer || canEdit)
 
   // Google Drive preview: convert share URL to embedded preview
   const drivePreviewUrl = candidate.resume_url
@@ -1330,214 +1314,6 @@ export function CandidateProfilePage() {
             </div>
           )}
         </div>
-      </div>
-    </div>
-  )
-}
-
-// ── Cost Approval Panel ─────────────────────────────────────────
-function CostApprovalPanel({ candidateId, candidateName, candidateSource, candidateCreatedAt, interviewNotes, costApprovalDecision, costApprovalNotes, isReviewer, user, onRefresh }: {
-  candidateId: string
-  candidateName: string
-  candidateSource: string
-  candidateCreatedAt: string
-  interviewNotes: Record<string, any>
-  costApprovalDecision: string | null
-  costApprovalNotes: NoteEntry[]
-  isReviewer: boolean
-  user: { id: string; full_name: string; role: string }
-  onRefresh: () => void
-}) {
-  const [noteText, setNoteText] = useState('')
-  const [decision, setDecision] = useState<'go_ahead' | 'rework_required' | null>(null)
-  const [submitting, setSubmitting] = useState(false)
-  const [submitted, setSubmitted] = useState(false)
-
-  const stageProgression = Object.entries(interviewNotes)
-    .filter(([, entries]) => Array.isArray(entries) && (entries as any[]).length > 0)
-    .map(([key]) => key.replace(/_+/g, ' ').replace(/\b\w/g, c => c.toUpperCase()).trim())
-
-  const submitDecision = async () => {
-    if (!decision) return
-    setSubmitting(true)
-    const newNote: NoteEntry | null = noteText.trim() ? {
-      text: noteText.trim(),
-      author: user.full_name,
-      authorId: user.id,
-      timestamp: new Date().toISOString(),
-    } : null
-    const updatedNotes = newNote ? [...costApprovalNotes, newNote] : costApprovalNotes
-
-    const { error } = await supabase.from('candidates').update({
-      cost_approval_decision: decision,
-      cost_approval_notes: updatedNotes,
-    }).eq('id', candidateId)
-
-    if (error) {
-      console.error('[cost approval submit]', error)
-      setSubmitting(false)
-      return
-    }
-
-    // Notify super admins
-    const { data: superAdmins } = await supabase.from('users').select('id').eq('role', 'super_admin').eq('is_active', true)
-    if (superAdmins?.length) {
-      const { error: notifErr } = await supabase.from('notifications').insert(superAdmins.map(u => ({
-        user_id: u.id,
-        type: 'cost_approval',
-        title: decision === 'go_ahead' ? `✅ Go Ahead — ${candidateName}` : `🔁 Re-work Required — ${candidateName}`,
-        body: `${user.full_name} submitted "${decision === 'go_ahead' ? 'Go Ahead' : 'Re-work Required'}" for ${candidateName}`,
-        metadata: { candidate_id: candidateId, decision, reviewer_id: user.id },
-      })))
-      if (notifErr) console.error('[notification insert]', notifErr)
-    }
-
-    setNoteText('')
-    setDecision(null)
-    setSubmitted(true)
-    setSubmitting(false)
-    onRefresh()
-  }
-
-  // Also allow saving just a note without decision
-  const saveNoteOnly = async () => {
-    if (!noteText.trim()) return
-    setSubmitting(true)
-    const newNote: NoteEntry = {
-      text: noteText.trim(),
-      author: user.full_name,
-      authorId: user.id,
-      timestamp: new Date().toISOString(),
-    }
-    const { error } = await supabase.from('candidates').update({
-      cost_approval_notes: [...costApprovalNotes, newNote],
-    }).eq('id', candidateId)
-    if (error) console.error('[cost approval note]', error)
-    else {
-      setNoteText('')
-      onRefresh()
-    }
-    setSubmitting(false)
-  }
-
-  return (
-    <div className="bg-amber-50/40 rounded-xl border-2 border-amber-200 overflow-hidden">
-      {/* Header */}
-      <div className="px-5 py-3.5 bg-amber-50 border-b border-amber-200">
-        <div className="flex items-center justify-between">
-          <p className="text-sm font-semibold text-amber-900">Cost Approval</p>
-          {costApprovalDecision && (
-            <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${
-              costApprovalDecision === 'go_ahead'
-                ? 'bg-green-100 text-green-700 border border-green-200'
-                : 'bg-orange-100 text-orange-700 border border-orange-200'
-            }`}>
-              {costApprovalDecision === 'go_ahead' ? '✅ Go Ahead' : '🔁 Re-work Required'}
-            </span>
-          )}
-        </div>
-      </div>
-
-      {/* Candidate Journey */}
-      <div className="px-5 py-4 border-b border-amber-100">
-        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Candidate Journey</p>
-        <div className="space-y-2">
-          <div className="flex gap-2 text-sm">
-            <span className="text-gray-400 w-16 text-xs flex-shrink-0 pt-0.5">Added</span>
-            <span className="text-gray-700">{formatDate(candidateCreatedAt)}</span>
-          </div>
-          <div className="flex gap-2 text-sm">
-            <span className="text-gray-400 w-16 text-xs flex-shrink-0 pt-0.5">Source</span>
-            <span className="text-gray-700">{candidateSource}</span>
-          </div>
-          {stageProgression.length > 0 && (
-            <div className="flex gap-2 text-sm">
-              <span className="text-gray-400 w-16 text-xs flex-shrink-0 pt-1">Stages</span>
-              <div className="flex flex-wrap gap-1">
-                {stageProgression.map(s => (
-                  <span key={s} className="text-xs bg-white text-gray-600 px-2 py-0.5 rounded-full border border-gray-200">{s}</span>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* Cost Approval Notes — always visible to admin/super_admin/hr */}
-      <div className="px-5 py-4">
-        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Approval Notes</p>
-
-        {costApprovalNotes.length > 0 ? (
-          <div className="space-y-2 mb-4">
-            {costApprovalNotes.map((note, i) => (
-              <div key={i} className="bg-white rounded-lg px-3 py-2.5 border border-amber-100">
-                <p className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">{note.text}</p>
-                <p className="text-xs text-gray-400 mt-1.5">
-                  <span className="font-medium text-gray-500">{note.author}</span> · {formatRelative(note.timestamp)}
-                </p>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <p className="text-xs text-gray-400 italic mb-4">No approval notes yet.</p>
-        )}
-
-        {/* Reviewer input — write notes + submit decision */}
-        {isReviewer && !submitted && (
-          <div className="space-y-3 border-t border-amber-100 pt-4">
-            <textarea rows={3} value={noteText} onChange={e => setNoteText(e.target.value)}
-              placeholder="Add notes for cost approval decision…"
-              className="w-full px-3 py-2 border border-amber-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-amber-300 resize-y"/>
-
-            {/* Save note without decision */}
-            {noteText.trim() && (
-              <button onClick={saveNoteOnly} disabled={submitting}
-                className="text-xs text-amber-700 hover:text-amber-900 flex items-center gap-1 transition-colors">
-                <Send className="w-3 h-3"/> Save note
-              </button>
-            )}
-
-            {/* Decision */}
-            <div>
-              <p className="text-xs font-medium text-gray-600 mb-2">Decision</p>
-              <div className="flex gap-2">
-                <button onClick={() => setDecision('go_ahead')}
-                  className={`flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium border-2 transition-all ${
-                    decision === 'go_ahead'
-                      ? 'border-green-500 bg-green-50 text-green-700'
-                      : 'border-gray-200 text-gray-600 hover:border-green-300 hover:bg-green-50/50'
-                  }`}>
-                  <Check className="w-4 h-4"/> Go Ahead
-                </button>
-                <button onClick={() => setDecision('rework_required')}
-                  className={`flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium border-2 transition-all ${
-                    decision === 'rework_required'
-                      ? 'border-orange-500 bg-orange-50 text-orange-700'
-                      : 'border-gray-200 text-gray-600 hover:border-orange-300 hover:bg-orange-50/50'
-                  }`}>
-                  <X className="w-4 h-4"/> Re-work Required
-                </button>
-              </div>
-            </div>
-
-            <button onClick={submitDecision} disabled={!decision || submitting}
-              className="w-full px-4 py-2.5 bg-amber-600 hover:bg-amber-700 disabled:bg-gray-200 disabled:text-gray-400 text-white text-sm font-semibold rounded-lg transition-colors flex items-center justify-center gap-2">
-              {submitting ? <Loader2 className="w-4 h-4 animate-spin"/> : <CheckCircle className="w-4 h-4"/>}
-              Submit Decision
-            </button>
-            {!decision && <p className="text-xs text-gray-400 text-center">Select a decision above before submitting</p>}
-          </div>
-        )}
-
-        {/* After submission confirmation */}
-        {submitted && (
-          <div className="border-t border-amber-100 pt-4">
-            <div className="flex items-center gap-2 text-green-700">
-              <CheckCircle className="w-5 h-5"/>
-              <p className="text-sm font-semibold">Decision submitted successfully</p>
-            </div>
-          </div>
-        )}
       </div>
     </div>
   )
