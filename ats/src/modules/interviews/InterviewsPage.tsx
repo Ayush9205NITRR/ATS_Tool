@@ -780,7 +780,7 @@ export function InterviewsPage() {
             </tbody>
           </table>
 
-          {/* Footer */}
+    {/* Footer */}
           <div className="px-4 py-2 bg-gray-50 border-t border-gray-100 flex items-center justify-between">
             <p className="text-xs text-gray-400">
               {filter === 'pending'
