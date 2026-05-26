@@ -9,16 +9,30 @@ import phonenumbers
 
 
 def extract_all_fields(text: str) -> dict:
-    """Master extraction function — returns all fields with best-effort values."""
-    result = {}
+    """
+    Master extraction — tries Gemini LLM first, falls back to regex.
+    LLM is used when GEMINI_API_KEY env var is set on the server.
+    """
+    from extractors.llm_extractor import extract_fields_with_llm
+    llm_result = extract_fields_with_llm(text)
+    if llm_result:
+        # Fill any missing LLM fields with regex (belt-and-suspenders)
+        if not llm_result.get("email"):
+            llm_result["email"] = extract_email(text) or ""
+        if not llm_result.get("phone"):
+            llm_result["phone"] = extract_phone(text)
+        if not llm_result.get("linkedin_url"):
+            llm_result["linkedin_url"] = extract_linkedin(text)
+        return llm_result
 
+    # Regex-only fallback (when no API key is configured)
+    result = {}
     result["email"] = extract_email(text) or ""
     result["phone"] = extract_phone(text)
     result["linkedin_url"] = extract_linkedin(text)
     result["full_name"] = extract_name(text, result.get("email", ""))
     result["current_company"] = extract_current_company(text)
     result["current_designation"] = extract_current_designation(text)
-
     return result
 
 

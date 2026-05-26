@@ -11,3 +11,5 @@ services:
         value: "3.11.0"
       - key: PIP_NO_CACHE_DIR
         value: "1"
+      - key: GEMINI_API_KEY
+        sync: false
