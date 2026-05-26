@@ -22,7 +22,7 @@ const ROLE_LABELS: Record<string, string> = {
   hr_team: 'HR Team', interviewer: 'Interviewer', agency: 'Agency',
 }
 
-function NotificationBell() {
+function NotificationBell({ upward = false }: { upward?: boolean }) {
   const { user } = useAuthStore()
   const qc = useQueryClient()
   const [open, setOpen] = useState(false)
@@ -35,8 +35,8 @@ function NotificationBell() {
       return (data ?? []) as { id: string; title: string; body: string | null; read_at: string | null; created_at: string; metadata: any }[]
     },
     enabled: !!user,
-    staleTime: 30_000,
-    refetchInterval: 60_000,
+    staleTime: 0,
+    refetchInterval: 30_000,
   })
 
   const unread = notifications.filter(n => !n.read_at).length
@@ -78,7 +78,7 @@ function NotificationBell() {
       {open && (
         <>
           <div className="fixed inset-0 z-40" onClick={() => setOpen(false)}/>
-          <div className="absolute right-0 top-full mt-2 w-80 bg-white border border-zinc-200 rounded-xl shadow-lg z-50 overflow-hidden">
+          <div className={`absolute w-80 bg-white border border-zinc-200 rounded-xl shadow-lg z-50 overflow-hidden ${upward ? 'left-0 bottom-full mb-2' : 'right-0 top-full mt-2'}`}>
             <div className="flex items-center justify-between px-4 py-2.5 border-b border-zinc-100">
               <p className="text-sm font-semibold text-zinc-800">Notifications</p>
               {unread > 0 && (
@@ -161,7 +161,7 @@ export function AppShell() {
               <p className="text-sm font-medium text-zinc-900 truncate leading-tight">{user.full_name}</p>
               <p className="text-xs text-zinc-400 truncate leading-tight mt-0.5">{ROLE_LABELS[user.role] ?? user.role}</p>
             </div>
-            {['super_admin', 'admin', 'hr_team'].includes(user.role) && <NotificationBell />}
+            {['super_admin', 'admin', 'hr_team'].includes(user.role) && <NotificationBell upward />}
             <button
               onClick={signOut}
               className="text-zinc-300 hover:text-zinc-600 transition-colors p-1 rounded-lg hover:bg-zinc-100"
