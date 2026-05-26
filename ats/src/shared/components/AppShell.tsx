@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { NavLink, Outlet } from 'react-router-dom'
-import { LayoutDashboard, Users, Briefcase, Upload, ClipboardList, Settings, Menu, LogOut, X, Bell } from 'lucide-react'
+import { LayoutDashboard, Users, Briefcase, Upload, ClipboardList, Settings, Menu, LogOut, X, Bell, ShieldCheck } from 'lucide-react'
 import { useAuthStore } from '../../modules/auth/authStore'
 import { initialsOf } from '../utils/helpers'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
@@ -10,9 +10,10 @@ const NAV = [
   { to: '/dashboard',  label: 'Dashboard',     icon: LayoutDashboard, roles: ['super_admin','admin','hr_team','interviewer','agency'] },
   { to: '/candidates', label: 'Candidates',     icon: Users,           roles: ['super_admin','admin','hr_team'] },
   { to: '/candidates', label: 'My Submissions', icon: Users,           roles: ['agency'] },
-  { to: '/interviews', label: 'My Interviews',  icon: ClipboardList,   roles: ['interviewer'] },
-  { to: '/interviews', label: 'Reviews',        icon: ClipboardList,   roles: ['admin','super_admin','hr_team'] },
-  { to: '/jobs',       label: 'Jobs',           icon: Briefcase,       roles: ['super_admin','admin','hr_team'] },
+  { to: '/interviews',     label: 'My Interviews',  icon: ClipboardList, roles: ['interviewer'] },
+  { to: '/interviews',     label: 'Reviews',        icon: ClipboardList, roles: ['admin','super_admin','hr_team'] },
+  { to: '/cost-approval',  label: 'Cost Approval',  icon: ShieldCheck,   roles: ['super_admin','admin','hr_team','interviewer'] },
+  { to: '/jobs',           label: 'Jobs',           icon: Briefcase,     roles: ['super_admin','admin','hr_team'] },
   { to: '/upload',     label: 'Upload',         icon: Upload,          roles: ['super_admin','admin','hr_team','agency'] },
   { to: '/settings',   label: 'Settings',       icon: Settings,        roles: ['super_admin'] },
 ]

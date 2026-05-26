@@ -88,7 +88,6 @@ export function CandidateProfilePage() {
   const [caComment, setCaComment]     = useState('')
   const [caSavingComment, setCaSavingComment] = useState(false)
   const [caEditMode, setCaEditMode]   = useState(false)
-  const [activeTab, setActiveTab]     = useState<'profile' | 'cost_approval'>('profile')
   // Latch: once cost approval section is shown for this candidate, keep it shown
   // even during brief cache-refetch windows where conditions might flicker false.
   const costApprovalShownForId = useRef<string | null>(null)
@@ -399,10 +398,13 @@ export function CandidateProfilePage() {
     const { error } = await supabase.from('candidates').update({
       interview_notes: newNotes,
     }).eq('id', id!)
-    if (!error) {
+    if (error) {
+      console.error('[submitCAComment]', error)
+    } else {
       const cached = qc.getQueryData<any>(['candidate', id])
       if (cached) qc.setQueryData(['candidate', id], { ...cached, interview_notes: newNotes })
       setCaComment('')
+      qc.invalidateQueries({ queryKey: ['candidate', id] })
     }
     setCaSavingComment(false)
   }
@@ -628,44 +630,7 @@ export function CandidateProfilePage() {
         </div>
       </div>
 
-      {/* Tab navigation */}
-      {canSeeCostApprovalLatched && (
-        <div className="flex items-center gap-1 border-b border-gray-200 mb-5">
-          <button
-            onClick={() => setActiveTab('profile')}
-            className={`px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors ${
-              activeTab === 'profile'
-                ? 'border-indigo-600 text-indigo-700'
-                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-            }`}
-          >
-            Profile
-          </button>
-          <button
-            onClick={() => setActiveTab('cost_approval')}
-            className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors ${
-              activeTab === 'cost_approval'
-                ? 'border-indigo-600 text-indigo-700'
-                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-            }`}
-          >
-            Cost Approval
-            {hasCAResult && (
-              <span className={`text-xs px-2 py-0.5 rounded-full font-semibold ${
-                caResultGoAhead ? 'bg-green-100 text-green-700' : 'bg-orange-100 text-orange-700'
-              }`}>
-                {caResultGoAhead ? 'Go Ahead' : 'Re-work'}
-              </span>
-            )}
-            {!hasCAResult && (isInCostApproval || hasReachedOrPassedCA) && (
-              <span className="w-1.5 h-1.5 rounded-full bg-amber-400 flex-shrink-0"/>
-            )}
-          </button>
-        </div>
-      )}
-
-      {/* Main layout — Profile tab */}
-      {activeTab === 'profile' && (
+      {/* Main layout */}
       <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
 
         {/* ── Left sidebar — seamless, no stacked cards ── */}
@@ -966,6 +931,215 @@ export function CandidateProfilePage() {
           </div>
           )}
 
+          {/* ── Cost Approval — inline after General Notes ── */}
+          {!isAgency && canSeeCostApprovalLatched && (
+            <div className={`rounded-xl border overflow-hidden bg-white ${
+              hasCAResult ? caResultGoAhead ? 'border-green-200' : 'border-orange-200' : 'border-amber-200'
+            }`}>
+              {/* Header */}
+              <div className={`px-4 py-3 border-b flex items-center justify-between ${
+                hasCAResult ? caResultGoAhead ? 'bg-green-50 border-green-100' : 'bg-orange-50 border-orange-100' : 'bg-amber-50/40 border-amber-100'
+              }`}>
+                <div className="flex items-center gap-2">
+                  <ShieldCheck className={`w-4 h-4 flex-shrink-0 ${hasCAResult ? caResultGoAhead ? 'text-green-600' : 'text-orange-500' : 'text-amber-500'}`}/>
+                  <p className="text-sm font-semibold text-gray-800">Cost Approval</p>
+                  {!hasCAResult && (isInCostApproval || hasReachedOrPassedCA) && (
+                    <span className="text-xs text-amber-600">· Awaiting decision</span>
+                  )}
+                </div>
+                {hasCAResult && (
+                  <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${caResultGoAhead ? 'bg-green-100 text-green-700' : 'bg-orange-100 text-orange-700'}`}>
+                    {caResultGoAhead ? '✓ Go Ahead' : '↺ Re-work Required'}
+                  </span>
+                )}
+              </div>
+
+              {/* Interview History Table */}
+              <div className="border-b border-gray-100 overflow-x-auto">
+                <table className="w-full">
+                  <thead>
+                    <tr className="bg-gray-50/60">
+                      <th className="text-left px-4 py-2 text-[10px] font-semibold text-gray-400 uppercase tracking-wide">Stage</th>
+                      <th className="text-left px-4 py-2 text-[10px] font-semibold text-gray-400 uppercase tracking-wide">By</th>
+                      <th className="text-left px-4 py-2 text-[10px] font-semibold text-gray-400 uppercase tracking-wide">Date</th>
+                      <th className="text-left px-4 py-2 text-[10px] font-semibold text-gray-400 uppercase tracking-wide">Notes</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-50">
+                    {ALL_NOTES_SECTIONS.filter(s => s.key !== stageKeyOf(costApprovalStageName)).map(({ key, label }) => {
+                      const entries: NoteEntry[] = interviewNotes[key] ?? []
+                      const stageFeedback = interviewFeedbacks.filter((f: any) => stageKeyOf(f.stage ?? '') === key)
+                      const noteAuthors = [...new Set(entries.map(e => e.author))]
+                      const feedbackAuthors = stageFeedback.map((f: any) => {
+                        const u = allUsers.find(u => u.id === f.interviewer_id)
+                        return u?.full_name ?? null
+                      }).filter(Boolean) as string[]
+                      const allAuthors = [...new Set([...noteAuthors, ...feedbackAuthors])]
+                      const firstTs = entries[0]?.timestamp ?? stageFeedback[0]?.submitted_at ?? null
+                      const stageReached = reachedStageKeys.has(key)
+                      return (
+                        <tr key={key} className={stageReached ? '' : 'opacity-30'}>
+                          <td className="px-4 py-2.5 align-top">
+                            <span className={`text-xs font-medium px-2 py-0.5 rounded whitespace-nowrap ${stageReached ? 'bg-indigo-50 text-indigo-700' : 'bg-gray-100 text-gray-500'}`}>
+                              {label}
+                            </span>
+                          </td>
+                          <td className="px-4 py-2.5 align-top">
+                            {allAuthors.length > 0 ? (
+                              <div className="space-y-1">
+                                {allAuthors.map((author, i) => (
+                                  <div key={i} className="flex items-center gap-1">
+                                    <span className="w-4 h-4 rounded-full bg-slate-200 text-slate-600 text-[9px] font-bold flex items-center justify-center flex-shrink-0">
+                                      {author.charAt(0).toUpperCase()}
+                                    </span>
+                                    <span className="text-xs text-gray-600 whitespace-nowrap">{author}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            ) : <span className="text-xs text-gray-300">—</span>}
+                          </td>
+                          <td className="px-4 py-2.5 align-top text-xs text-gray-500 whitespace-nowrap">
+                            {firstTs ? formatDate(firstTs) : <span className="text-gray-300">—</span>}
+                          </td>
+                          <td className="px-4 py-2.5 align-top max-w-[180px]">
+                            {entries.length > 0 ? (
+                              <div className="space-y-1">
+                                {entries.map((e, i) => (
+                                  <p key={i} className="text-xs text-gray-600 leading-relaxed line-clamp-3 whitespace-pre-wrap">{e.text}</p>
+                                ))}
+                              </div>
+                            ) : <span className="text-xs text-gray-300 italic">No notes</span>}
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Decision result */}
+              {hasCAResult && !caEditMode && (
+                <div className={`px-4 py-3 border-b ${caResultGoAhead ? 'bg-green-50/20 border-green-100' : 'bg-orange-50/20 border-orange-100'}`}>
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <p className="text-xs text-gray-500">
+                        By <span className="font-medium text-gray-700">{caResultAuthor}</span>
+                        {caResultTs && <span className="text-gray-400"> · {formatRelative(caResultTs)}</span>}
+                      </p>
+                      {caResultNotes && <p className="text-sm text-gray-700 mt-1.5 whitespace-pre-wrap leading-relaxed">{caResultNotes}</p>}
+                    </div>
+                    {canSubmitCostApproval && (
+                      <button
+                        onClick={() => { setCaEditMode(true); setCaDecision(caResultDecision as any); setCaNotes(caResultNotes) }}
+                        className="flex-shrink-0 flex items-center gap-1 text-xs text-gray-400 hover:text-gray-600 transition-colors"
+                      >
+                        <Pencil className="w-3 h-3"/> Edit
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Submit / edit form — CA panel only */}
+              {showCAForm && (
+                <div className="px-4 py-3 border-b border-gray-100 space-y-3">
+                  {caEditMode && <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Edit Decision</p>}
+                  <textarea
+                    rows={2}
+                    value={caNotes}
+                    onChange={e => setCaNotes(e.target.value)}
+                    placeholder="Notes (optional)"
+                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-slate-300 resize-y"
+                  />
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      onClick={() => setCaDecision('go_ahead')}
+                      className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold border-2 transition-all ${
+                        caDecision === 'go_ahead' ? 'bg-green-600 text-white border-green-600' : 'bg-white text-green-700 border-green-200 hover:border-green-400'
+                      }`}
+                    >
+                      <Check className="w-3.5 h-3.5"/> Go Ahead
+                    </button>
+                    <button
+                      onClick={() => setCaDecision('rework_required')}
+                      className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold border-2 transition-all ${
+                        caDecision === 'rework_required' ? 'bg-orange-600 text-white border-orange-600' : 'bg-white text-orange-700 border-orange-200 hover:border-orange-400'
+                      }`}
+                    >
+                      <X className="w-3.5 h-3.5"/> Re-work
+                    </button>
+                  </div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <button
+                      onClick={submitCostApproval}
+                      disabled={!caDecision || caSaveStatus === 'saving'}
+                      className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                        caSaveStatus === 'saved' ? 'bg-green-500 text-white'
+                        : !caDecision ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                        : 'bg-slate-800 hover:bg-slate-700 text-white'
+                      }`}
+                    >
+                      {caSaveStatus === 'saving' && <Loader2 className="w-3.5 h-3.5 animate-spin"/>}
+                      {caSaveStatus === 'saved' ? <><Check className="w-3.5 h-3.5"/> Submitted!</> : caSaveStatus === 'saving' ? 'Submitting…' : 'Submit Decision'}
+                    </button>
+                    {caEditMode && (
+                      <button onClick={() => setCaEditMode(false)} className="px-3 py-2 border border-gray-200 text-gray-500 text-sm rounded-lg hover:bg-gray-50">Cancel</button>
+                    )}
+                    {caSaveStatus === 'error' && <p className="text-xs text-red-600">Failed. Try again.</p>}
+                  </div>
+                </div>
+              )}
+
+              {/* Discussion / Comments chat */}
+              <div className="px-4 py-3.5">
+                <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-3">Discussion</p>
+                <div className="space-y-3 max-h-64 overflow-y-auto">
+                  {(interviewNotes['cost_approval_comments'] ?? []).length === 0 && (
+                    <p className="text-xs text-gray-400 italic">No comments yet.</p>
+                  )}
+                  {(interviewNotes['cost_approval_comments'] ?? []).map((c: any, i: number) => {
+                    const isMe = c.authorId === user?.id
+                    return (
+                      <div key={i} className={`flex items-end gap-2 ${isMe ? 'flex-row-reverse' : ''}`}>
+                        <div className={`w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0 text-[10px] font-bold ${isMe ? 'bg-indigo-600 text-white' : 'bg-gray-200 text-gray-600'}`}>
+                          {(c.author ?? '?').charAt(0).toUpperCase()}
+                        </div>
+                        <div className={`flex flex-col gap-0.5 max-w-[78%] ${isMe ? 'items-end' : 'items-start'}`}>
+                          <div className={`px-3 py-2 rounded-2xl text-sm leading-snug ${isMe ? 'bg-indigo-600 text-white rounded-br-sm' : 'bg-gray-100 text-gray-800 rounded-bl-sm'}`}>
+                            {c.text}
+                          </div>
+                          <p className="text-[10px] text-gray-400 px-1">
+                            {!isMe && <span className="font-medium text-gray-500 mr-1">{c.author}</span>}
+                            {formatRelative(c.timestamp)}
+                          </p>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+                {(canEdit || isCAPanel) && (
+                  <div className="flex gap-2 items-end mt-3">
+                    <textarea
+                      rows={2}
+                      value={caComment}
+                      onChange={e => setCaComment(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) submitCAComment() }}
+                      placeholder="Add a comment… (Ctrl+Enter to send)"
+                      className="flex-1 px-3 py-2 border border-gray-200 rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-300 resize-none"
+                    />
+                    <button
+                      onClick={submitCAComment}
+                      disabled={!caComment.trim() || caSavingComment}
+                      className="flex-shrink-0 h-8 w-8 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-200 flex items-center justify-center transition-colors"
+                    >
+                      {caSavingComment ? <Loader2 className="w-3 h-3 text-white animate-spin"/> : <Send className="w-3 h-3 text-white"/>}
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
           {/* Interview Notes — always visible for non-agency */}
           {!isAgency && (
           <div>
@@ -1170,283 +1344,6 @@ export function CandidateProfilePage() {
           )}
         </div>
       </div>
-      )} {/* end profile tab */}
-
-      {/* ── Cost Approval Tab ── */}
-      {activeTab === 'cost_approval' && canSeeCostApprovalLatched && (
-        <div className="space-y-6 max-w-5xl">
-
-          {/* Interview History Table */}
-          <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-            <div className="px-5 py-4 border-b border-gray-100 flex items-center gap-2.5">
-              <ClipboardList className="w-4 h-4 text-gray-400 flex-shrink-0"/>
-              <div>
-                <p className="text-sm font-semibold text-gray-800">Candidate Interview History</p>
-                <p className="text-xs text-gray-400 mt-0.5">All rounds before cost approval decision</p>
-              </div>
-            </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="bg-gray-50/60 border-b border-gray-100">
-                    <th className="text-left px-5 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wide w-32">Stage</th>
-                    <th className="text-left px-5 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wide w-44">Conducted By</th>
-                    <th className="text-left px-5 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wide w-32">Date</th>
-                    <th className="text-left px-5 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wide">Notes</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-50">
-                  {ALL_NOTES_SECTIONS.filter(s => s.key !== stageKeyOf(costApprovalStageName)).map(({ key, label }) => {
-                    const entries: NoteEntry[] = interviewNotes[key] ?? []
-                    const stageFeedback = interviewFeedbacks.filter((f: any) => stageKeyOf(f.stage ?? '') === key)
-                    const noteAuthors = [...new Set(entries.map(e => e.author))]
-                    const feedbackAuthors = stageFeedback.map((f: any) => {
-                      const u = allUsers.find(u => u.id === f.interviewer_id)
-                      return u?.full_name ?? null
-                    }).filter(Boolean)
-                    const allAuthors = [...new Set([...noteAuthors, ...feedbackAuthors])]
-                    const firstTs = entries[0]?.timestamp ?? stageFeedback[0]?.submitted_at ?? null
-                    const stageReached = reachedStageKeys.has(key)
-                    return (
-                      <tr key={key} className={`${stageReached ? '' : 'opacity-30'}`}>
-                        <td className="px-5 py-4 align-top">
-                          <span className={`text-xs font-semibold px-2.5 py-1 rounded-md ${stageReached ? 'bg-indigo-50 text-indigo-700' : 'bg-gray-100 text-gray-500'}`}>
-                            {label}
-                          </span>
-                        </td>
-                        <td className="px-5 py-4 align-top">
-                          {allAuthors.length > 0 ? (
-                            <div className="space-y-1.5">
-                              {allAuthors.map((author, i) => (
-                                <div key={i} className="flex items-center gap-1.5">
-                                  <span className="w-5 h-5 rounded-full bg-slate-200 text-slate-600 text-[10px] font-bold flex items-center justify-center flex-shrink-0">
-                                    {(author as string).charAt(0).toUpperCase()}
-                                  </span>
-                                  <span className="text-xs text-gray-600">{author}</span>
-                                </div>
-                              ))}
-                            </div>
-                          ) : (
-                            <span className="text-xs text-gray-300">—</span>
-                          )}
-                        </td>
-                        <td className="px-5 py-4 align-top">
-                          <span className="text-xs text-gray-500">
-                            {firstTs ? formatDate(firstTs) : <span className="text-gray-300">—</span>}
-                          </span>
-                        </td>
-                        <td className="px-5 py-4 align-top max-w-xs">
-                          {entries.length > 0 ? (
-                            <div className="space-y-2">
-                              {entries.map((e, i) => (
-                                <div key={i}>
-                                  <p className="text-xs text-gray-700 leading-relaxed line-clamp-4 whitespace-pre-wrap">{e.text}</p>
-                                  {entries.length > 1 && (
-                                    <p className="text-xs text-gray-400 mt-0.5">{e.author} · {formatRelative(e.timestamp)}</p>
-                                  )}
-                                </div>
-                              ))}
-                            </div>
-                          ) : (
-                            <span className="text-xs text-gray-300 italic">No notes</span>
-                          )}
-                        </td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          {/* Decision Panel */}
-          <div className={`rounded-xl border-2 overflow-hidden ${
-            hasCAResult
-              ? caResultGoAhead ? 'border-green-300' : 'border-orange-300'
-              : 'border-amber-200'
-          }`}>
-            {/* Decision result — when submitted */}
-            {hasCAResult && !caEditMode && (
-              <div className={`px-6 py-5 ${caResultGoAhead ? 'bg-green-50' : 'bg-orange-50'}`}>
-                <div className="flex items-start justify-between gap-4">
-                  <div className="flex-1">
-                    <div className={`inline-flex items-center gap-2.5 px-5 py-2.5 rounded-xl text-base font-bold shadow-sm ${
-                      caResultGoAhead ? 'bg-green-600 text-white' : 'bg-orange-600 text-white'
-                    }`}>
-                      {caResultGoAhead ? <CheckCircle className="w-5 h-5"/> : <X className="w-5 h-5"/>}
-                      {caResultGoAhead ? 'Go Ahead' : 'Re-work Required'}
-                    </div>
-                    <p className="text-sm text-gray-600 mt-3">
-                      Decision by <span className="font-semibold text-gray-800">{caResultAuthor}</span>
-                      {caResultTs && <span className="text-gray-400"> · {formatRelative(caResultTs)}</span>}
-                    </p>
-                    {caResultNotes && (
-                      <p className="mt-2 text-sm text-gray-700 whitespace-pre-wrap leading-relaxed bg-white/70 rounded-lg px-4 py-3 border border-gray-100 mt-3">
-                        {caResultNotes}
-                      </p>
-                    )}
-                  </div>
-                  {canSubmitCostApproval && (
-                    <button
-                      onClick={() => { setCaEditMode(true); setCaDecision(caResultDecision as any); setCaNotes(caResultNotes) }}
-                      className="flex-shrink-0 flex items-center gap-1.5 px-3 py-1.5 border border-gray-200 bg-white rounded-lg text-xs text-gray-600 hover:text-gray-800 hover:border-gray-300 transition-all"
-                    >
-                      <Pencil className="w-3 h-3"/> Edit Decision
-                    </button>
-                  )}
-                </div>
-              </div>
-            )}
-
-            {/* Awaiting decision — no result yet */}
-            {!hasCAResult && !showCAForm && (
-              <div className="px-6 py-6 bg-amber-50/30 flex items-center gap-4">
-                <div className="w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center flex-shrink-0">
-                  <ShieldCheck className="w-5 h-5 text-amber-600"/>
-                </div>
-                <div>
-                  <p className="text-sm font-semibold text-gray-800">Awaiting Cost Approval Decision</p>
-                  <p className="text-xs text-gray-500 mt-0.5">The cost approval panel has not yet submitted a decision.</p>
-                </div>
-              </div>
-            )}
-
-            {/* Submit / Edit form — CA panel members only */}
-            {showCAForm && (
-              <div className={`px-6 py-5 space-y-4 ${caEditMode ? 'bg-white border-t border-gray-100' : 'bg-white'}`}>
-                {caEditMode && (
-                  <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Edit Decision</p>
-                )}
-                {!caEditMode && (
-                  <p className="text-sm font-medium text-gray-700">Submit your cost approval decision</p>
-                )}
-                <div>
-                  <p className="text-xs text-gray-500 mb-1.5">Notes <span className="text-gray-300">(optional)</span></p>
-                  <textarea
-                    rows={3}
-                    value={caNotes}
-                    onChange={e => setCaNotes(e.target.value)}
-                    placeholder="Add context for your decision…"
-                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-slate-300 resize-y"
-                  />
-                </div>
-                <div className="flex flex-wrap gap-3">
-                  <button
-                    onClick={() => setCaDecision('go_ahead')}
-                    className={`flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold border-2 transition-all ${
-                      caDecision === 'go_ahead'
-                        ? 'bg-green-600 text-white border-green-600 shadow-sm'
-                        : 'bg-white text-green-700 border-green-200 hover:border-green-400'
-                    }`}
-                  >
-                    <Check className="w-4 h-4"/> Go Ahead
-                  </button>
-                  <button
-                    onClick={() => setCaDecision('rework_required')}
-                    className={`flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold border-2 transition-all ${
-                      caDecision === 'rework_required'
-                        ? 'bg-orange-600 text-white border-orange-600 shadow-sm'
-                        : 'bg-white text-orange-700 border-orange-200 hover:border-orange-400'
-                    }`}
-                  >
-                    <X className="w-4 h-4"/> Re-work Required
-                  </button>
-                </div>
-                <div className="flex items-center gap-3 flex-wrap">
-                  <button
-                    onClick={submitCostApproval}
-                    disabled={!caDecision || caSaveStatus === 'saving'}
-                    className={`flex items-center gap-2 px-6 py-2.5 rounded-lg text-sm font-semibold transition-all ${
-                      caSaveStatus === 'saved'
-                        ? 'bg-green-500 text-white'
-                        : !caDecision
-                        ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
-                        : 'bg-slate-800 hover:bg-slate-700 text-white'
-                    }`}
-                  >
-                    {caSaveStatus === 'saving' && <Loader2 className="w-4 h-4 animate-spin"/>}
-                    {caSaveStatus === 'saved' ? <><Check className="w-4 h-4"/> Submitted!</>
-                      : caSaveStatus === 'saving' ? 'Submitting…'
-                      : 'Submit Decision'}
-                  </button>
-                  {caEditMode && (
-                    <button
-                      onClick={() => { setCaEditMode(false) }}
-                      className="px-4 py-2.5 border border-gray-200 text-gray-500 text-sm rounded-lg hover:bg-gray-50"
-                    >
-                      Cancel
-                    </button>
-                  )}
-                  {caSaveStatus === 'error' && <p className="text-xs text-red-600">Failed. Try again.</p>}
-                  {!caDecision && <p className="text-xs text-gray-400">Select a decision above to continue</p>}
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* Discussion / Comments — chat style */}
-          <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-            <div className="px-5 py-3.5 border-b border-gray-100">
-              <p className="text-sm font-semibold text-gray-800">Discussion</p>
-              <p className="text-xs text-gray-400 mt-0.5">Visible to HR, admins, and cost approval panel members</p>
-            </div>
-
-            <div className="px-5 py-4 space-y-4 max-h-96 overflow-y-auto">
-              {(interviewNotes['cost_approval_comments'] ?? []).length === 0 && (
-                <p className="text-sm text-gray-400 italic text-center py-6">No comments yet. Start the discussion.</p>
-              )}
-              {(interviewNotes['cost_approval_comments'] ?? []).map((c: any, i: number) => {
-                const isMe = c.authorId === user?.id
-                return (
-                  <div key={i} className={`flex items-end gap-2.5 ${isMe ? 'flex-row-reverse' : ''}`}>
-                    <div className={`w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0 text-xs font-bold ${
-                      isMe ? 'bg-indigo-600 text-white' : 'bg-gray-200 text-gray-600'
-                    }`}>
-                      {(c.author ?? '?').charAt(0).toUpperCase()}
-                    </div>
-                    <div className={`flex flex-col gap-1 max-w-[72%] ${isMe ? 'items-end' : 'items-start'}`}>
-                      <div className={`px-4 py-2.5 rounded-2xl text-sm leading-relaxed ${
-                        isMe
-                          ? 'bg-indigo-600 text-white rounded-br-sm'
-                          : 'bg-gray-100 text-gray-800 rounded-bl-sm'
-                      }`}>
-                        {c.text}
-                      </div>
-                      <p className="text-xs text-gray-400 px-1">
-                        {!isMe && <span className="font-medium text-gray-500 mr-1">{c.author}</span>}
-                        {formatRelative(c.timestamp)}
-                      </p>
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
-
-            {(canEdit || isCAPanel) && (
-              <div className="px-5 py-3.5 border-t border-gray-100 bg-gray-50/30">
-                <div className="flex gap-2 items-end">
-                  <textarea
-                    rows={2}
-                    value={caComment}
-                    onChange={e => setCaComment(e.target.value)}
-                    onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) submitCAComment() }}
-                    placeholder="Add a comment… (Ctrl+Enter to send)"
-                    className="flex-1 px-3 py-2 border border-gray-200 rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-300 resize-none"
-                  />
-                  <button
-                    onClick={submitCAComment}
-                    disabled={!caComment.trim() || caSavingComment}
-                    className="flex-shrink-0 h-9 w-9 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-200 flex items-center justify-center transition-colors self-end"
-                  >
-                    {caSavingComment ? <Loader2 className="w-3.5 h-3.5 text-white animate-spin"/> : <Send className="w-3.5 h-3.5 text-white"/>}
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
-
-        </div>
-      )} {/* end cost approval tab */}
 
     </div>
   )
