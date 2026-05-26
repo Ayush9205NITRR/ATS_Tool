@@ -141,31 +141,42 @@ export function BulkResumeUpload() {
     setProgress({ current: 0, total: rows.length })
     setStep('processing')
 
-    for (let i = 0; i < rows.length; i++) {
+    const CONCURRENCY = 4
+    let completed = 0
+
+    for (let batchStart = 0; batchStart < rows.length; batchStart += CONCURRENCY) {
       if (cancelRef.current) break
-      setProcessedRows(prev => prev.map((r, idx) => idx === i ? { ...r, status: 'parsing' } : r))
 
-      try {
-        const parsed = await parseResumeFromUrl(rows[i].csv.resume_url)
+      const batchIndices = Array.from(
+        { length: Math.min(CONCURRENCY, rows.length - batchStart) },
+        (_, k) => batchStart + k
+      )
 
-        let status: RowStatus = 'parsed'
-        let error: string | undefined
+      // Mark entire batch as parsing at once
+      setProcessedRows(prev => prev.map((r, idx) =>
+        batchIndices.includes(idx) ? { ...r, status: 'parsing' } : r
+      ))
 
-        if (parsed.email) {
-          const dup = await checkDuplicateByEmail(parsed.email)
-          if (dup.exists) {
-            status = 'duplicate'
-            error = `Duplicate: ${dup.candidateName} (${parsed.email})`
+      await Promise.all(batchIndices.map(async (i) => {
+        try {
+          const parsed = await parseResumeFromUrl(rows[i].csv.resume_url)
+          let status: RowStatus = 'parsed'
+          let error: string | undefined
+          if (parsed.email) {
+            const dup = await checkDuplicateByEmail(parsed.email)
+            if (dup.exists) {
+              status = 'duplicate'
+              error = `Duplicate: ${dup.candidateName} (${parsed.email})`
+            }
           }
+          rows[i] = { ...rows[i], status, data: parsed, error }
+        } catch (err: any) {
+          rows[i] = { ...rows[i], status: 'failed', error: err.message || 'Parse failed' }
         }
-
-        rows[i] = { ...rows[i], status, data: parsed, error }
-      } catch (err: any) {
-        rows[i] = { ...rows[i], status: 'failed', error: err.message || 'Parse failed' }
-      }
-
-      setProcessedRows([...rows])
-      setProgress({ current: i + 1, total: rows.length })
+        completed++
+        setProcessedRows([...rows])
+        setProgress({ current: completed, total: rows.length })
+      }))
     }
 
     setStep('review')
