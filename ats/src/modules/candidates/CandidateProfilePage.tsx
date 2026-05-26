@@ -317,16 +317,16 @@ export function CandidateProfilePage() {
       }).eq('id', id!)
       if (error) throw error
 
-      // Notify all super admins
-      const { data: superAdmins } = await supabase.from('users')
+      // Notify super_admin + admin + hr_team
+      const { data: notifyUsers } = await supabase.from('users')
         .select('id')
-        .eq('role', 'super_admin')
+        .in('role', ['super_admin', 'admin', 'hr_team'])
         .eq('is_active', true)
-      if (superAdmins?.length) {
+      if (notifyUsers?.length) {
         const decisionLabel = caDecision === 'go_ahead' ? 'Go Ahead' : 'Re-work Required'
         await supabase.from('notifications').insert(
-          superAdmins.map(sa => ({
-            user_id: sa.id,
+          notifyUsers.map(u => ({
+            user_id: u.id,
             type: 'cost_approval',
             message: `Cost Approval decision for ${candidate.full_name}: ${decisionLabel}. Submitted by ${user!.full_name}.`,
             candidate_id: id!,
@@ -399,8 +399,9 @@ export function CandidateProfilePage() {
   // Determine cost approval context
   const isInCostApproval = candidate.current_stage === costApprovalStageName
   const isCAPanel = costApprovalPanelIds.includes(user?.id ?? '')
+  // HR / Admin / Super Admin can SEE cost approval — but ONLY panel users can SUBMIT
   const canSeeCostApproval = isInCostApproval && (canEdit || isCAPanel)
-  const canSubmitCostApproval = canSeeCostApproval && (canEdit || isCAPanel)
+  const canSubmitCostApproval = isInCostApproval && isCAPanel
 
   // Interview format guide from the job
   // Screening template → HR only | Interview stage templates → interviewer sees only their current stage
@@ -942,128 +943,154 @@ export function CandidateProfilePage() {
                 </div>
               </div>
 
-              {/* Candidate History — read-only notes + interviewer feedback per stage */}
+              {/* Candidate History — compact "who · when | notes" per stage */}
               <div className="px-5 py-4 border-b border-amber-100">
-                <div className="flex items-center gap-2 mb-3">
+                <div className="flex items-center gap-2 mb-4">
                   <History className="w-3.5 h-3.5 text-gray-500" />
                   <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Candidate History</p>
-                  {(candidate as any).interview_date && (
-                    <span className="text-xs text-gray-400 ml-auto">
-                      Interview Date: <span className="font-medium text-gray-600">{formatDateTime((candidate as any).interview_date)}</span>
-                    </span>
-                  )}
                 </div>
 
-                {ALL_NOTES_SECTIONS.map(({ key, label }) => {
-                  const entries: NoteEntry[] = interviewNotes[key] ?? []
-                  // Find submitted feedback records for this stage
-                  const stageFeedback = (interviewFeedbacks as any[]).filter(
-                    (fb: any) => stageKeyOf(fb.stage ?? '') === key
+                {(() => {
+                  const recLabel: Record<string, string> = {
+                    strong_yes: 'Strong Yes', yes: 'Yes', neutral: 'Neutral', no: 'No', strong_no: 'Strong No'
+                  }
+                  const recColor: Record<string, string> = {
+                    strong_yes: 'bg-green-100 text-green-700', yes: 'bg-green-50 text-green-600',
+                    neutral: 'bg-gray-100 text-gray-600', no: 'bg-red-50 text-red-600', strong_no: 'bg-red-100 text-red-700'
+                  }
+
+                  const hasAnyData = ALL_NOTES_SECTIONS.some(({ key }) =>
+                    (interviewNotes[key] ?? []).length > 0 ||
+                    (interviewFeedbacks as any[]).some((fb: any) => stageKeyOf(fb.stage ?? '') === key)
                   )
-                  if (entries.length === 0 && stageFeedback.length === 0) return null
+                  const hasCostApprovalData = !!(candidate as any).cost_approval_decision
+
+                  if (!hasAnyData && !hasCostApprovalData) {
+                    return <p className="text-xs text-gray-400 italic">No interview notes or feedback recorded yet.</p>
+                  }
 
                   return (
-                    <div key={key} className="mb-4">
-                      <p className="text-xs font-semibold text-gray-600 mb-2 uppercase tracking-wide">{label}</p>
+                    <div className="space-y-5">
+                      {ALL_NOTES_SECTIONS.map(({ key, label }) => {
+                        const entries: NoteEntry[] = interviewNotes[key] ?? []
+                        const stageFeedback = (interviewFeedbacks as any[]).filter(
+                          (fb: any) => stageKeyOf(fb.stage ?? '') === key
+                        )
+                        if (entries.length === 0 && stageFeedback.length === 0) return null
 
-                      {/* Formal feedback submissions — highlighted with interviewer name */}
-                      {stageFeedback.length > 0 && (
-                        <div className="space-y-2 mb-2 pl-3">
-                          {stageFeedback.map((fb: any) => {
-                            const reviewer = allUsers.find(u => u.id === fb.interviewer_id)
-                            const recLabel: Record<string, string> = {
-                              strong_yes: 'Strong Yes', yes: 'Yes', neutral: 'Neutral', no: 'No', strong_no: 'Strong No'
-                            }
-                            const recColor: Record<string, string> = {
-                              strong_yes: 'text-green-700 bg-green-50', yes: 'text-green-600 bg-green-50',
-                              neutral: 'text-gray-600 bg-gray-100', no: 'text-red-600 bg-red-50', strong_no: 'text-red-700 bg-red-50'
-                            }
-                            return (
-                              <div key={fb.id} className="bg-indigo-50 border border-indigo-200 rounded-lg px-4 py-3">
-                                {/* Interviewer name + date — highlighted */}
-                                <div className="flex items-center justify-between mb-2">
-                                  <div className="flex items-center gap-2">
-                                    <div className="w-6 h-6 rounded-full bg-indigo-200 flex items-center justify-center flex-shrink-0">
-                                      <span className="text-xs font-bold text-indigo-700">
-                                        {(reviewer?.full_name ?? '?').charAt(0).toUpperCase()}
-                                      </span>
+                        return (
+                          <div key={key}>
+                            {/* Stage label */}
+                            <div className="flex items-center gap-2 mb-2">
+                              <span className="w-1.5 h-1.5 rounded-full bg-amber-400 flex-shrink-0" />
+                              <p className="text-xs font-bold text-gray-700 uppercase tracking-wider">{label}</p>
+                            </div>
+
+                            <div className="pl-4 space-y-2.5">
+                              {/* Formal feedback — interviewer identity + recommendation + notes */}
+                              {stageFeedback.map((fb: any) => {
+                                const reviewer = allUsers.find(u => u.id === fb.interviewer_id)
+                                const initials = (reviewer?.full_name ?? '?').split(' ').map((n: string) => n[0]).join('').toUpperCase().slice(0, 2)
+                                return (
+                                  <div key={fb.id} className="bg-indigo-50/60 border border-indigo-100 rounded-lg px-3 py-2.5">
+                                    {/* who · when · recommendation */}
+                                    <div className="flex items-center gap-2 flex-wrap">
+                                      <div className="w-6 h-6 rounded-full bg-indigo-200 flex items-center justify-center flex-shrink-0">
+                                        <span className="text-xs font-bold text-indigo-700">{initials}</span>
+                                      </div>
+                                      <span className="text-sm font-semibold text-indigo-900">{reviewer?.full_name ?? 'Unknown'}</span>
+                                      {fb.submitted_at && (
+                                        <>
+                                          <span className="text-gray-300">·</span>
+                                          <span className="text-xs text-gray-500">{formatDateTime(fb.submitted_at)}</span>
+                                        </>
+                                      )}
+                                      {fb.recommendation && (
+                                        <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${recColor[fb.recommendation] ?? 'bg-gray-100 text-gray-600'}`}>
+                                          {recLabel[fb.recommendation] ?? fb.recommendation}
+                                        </span>
+                                      )}
                                     </div>
-                                    <span className="text-sm font-semibold text-indigo-900">
-                                      {reviewer?.full_name ?? 'Unknown'}
-                                    </span>
-                                    {fb.recommendation && (
-                                      <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${recColor[fb.recommendation] ?? 'bg-gray-100 text-gray-600'}`}>
-                                        {recLabel[fb.recommendation] ?? fb.recommendation}
-                                      </span>
+                                    {/* notes */}
+                                    {(fb.strengths || fb.concerns) && (
+                                      <div className="mt-1.5 text-sm text-gray-700 space-y-0.5">
+                                        {fb.strengths && (
+                                          <p><span className="text-xs font-medium text-green-700">Strengths:</span> {fb.strengths}</p>
+                                        )}
+                                        {fb.concerns && (
+                                          <p><span className="text-xs font-medium text-red-600">Concerns:</span> {fb.concerns}</p>
+                                        )}
+                                      </div>
                                     )}
                                   </div>
-                                  {fb.submitted_at && (
-                                    <span className="text-xs text-indigo-500">
-                                      {formatDateTime(fb.submitted_at)}
-                                    </span>
-                                  )}
+                                )
+                              })}
+
+                              {/* Interview notes — who · when | notes */}
+                              {entries.map((e, i) => (
+                                <div key={i} className="bg-white border border-gray-100 rounded-lg px-3 py-2.5">
+                                  {/* who · when */}
+                                  <div className="flex items-center gap-1.5 mb-1">
+                                    <span className="text-xs font-semibold text-gray-700">{e.author}</span>
+                                    <span className="text-gray-300">·</span>
+                                    <span className="text-xs text-gray-400">{formatRelative(e.timestamp)}</span>
+                                  </div>
+                                  {/* notes */}
+                                  <p className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">{e.text}</p>
                                 </div>
-                                {/* Strengths / Concerns */}
-                                {fb.strengths && (
-                                  <p className="text-sm text-gray-700 mb-1">
-                                    <span className="text-xs font-medium text-green-700">Strengths:</span> {fb.strengths}
-                                  </p>
-                                )}
-                                {fb.concerns && (
-                                  <p className="text-sm text-gray-700">
-                                    <span className="text-xs font-medium text-red-600">Concerns:</span> {fb.concerns}
+                              ))}
+                            </div>
+                          </div>
+                        )
+                      })}
+
+                      {/* Cost Approval decision — shown in history when already submitted */}
+                      {hasCostApprovalData && (() => {
+                        const submittedBy = allUsers.find(u => u.id === (candidate as any).cost_approval_submitted_by)
+                        const initials = (submittedBy?.full_name ?? '?').split(' ').map((n: string) => n[0]).join('').toUpperCase().slice(0, 2)
+                        const isGoAhead = (candidate as any).cost_approval_decision === 'go_ahead'
+                        return (
+                          <div>
+                            <div className="flex items-center gap-2 mb-2">
+                              <span className="w-1.5 h-1.5 rounded-full bg-amber-600 flex-shrink-0" />
+                              <p className="text-xs font-bold text-amber-800 uppercase tracking-wider">{costApprovalStageName}</p>
+                            </div>
+                            <div className="pl-4">
+                              <div className={`border rounded-lg px-3 py-2.5 ${isGoAhead ? 'bg-green-50 border-green-100' : 'bg-red-50 border-red-100'}`}>
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  {submittedBy && (
+                                    <div className={`w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0 ${isGoAhead ? 'bg-green-200' : 'bg-red-200'}`}>
+                                      <span className={`text-xs font-bold ${isGoAhead ? 'text-green-800' : 'text-red-800'}`}>{initials}</span>
+                                    </div>
+                                  )}
+                                  <span className="text-sm font-semibold text-gray-800">{submittedBy?.full_name ?? 'Unknown'}</span>
+                                  {(candidate as any).cost_approval_submitted_at && (
+                                    <>
+                                      <span className="text-gray-300">·</span>
+                                      <span className="text-xs text-gray-500">{formatRelative((candidate as any).cost_approval_submitted_at)}</span>
+                                    </>
+                                  )}
+                                  <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${isGoAhead ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                                    {isGoAhead ? 'Go Ahead' : 'Re-work Required'}
+                                  </span>
+                                </div>
+                                {(candidate as any).cost_approval_notes && (
+                                  <p className="mt-1.5 text-sm text-gray-700 whitespace-pre-wrap">
+                                    {(candidate as any).cost_approval_notes}
                                   </p>
                                 )}
                               </div>
-                            )
-                          })}
-                        </div>
-                      )}
-
-                      {/* Interview notes */}
-                      {entries.length > 0 && (
-                        <div className="space-y-1.5 pl-3">
-                          {entries.map((e, i) => (
-                            <div key={i} className="bg-white border border-gray-100 rounded-lg px-3 py-2.5">
-                              <p className="text-sm text-gray-700 whitespace-pre-wrap">{e.text}</p>
-                              <p className="text-xs text-gray-400 mt-1.5 flex items-center gap-1.5">
-                                <span className="font-semibold text-gray-600">{e.author}</span>
-                                <span>·</span>
-                                <span>{formatRelative(e.timestamp)}</span>
-                              </p>
                             </div>
-                          ))}
-                        </div>
-                      )}
+                          </div>
+                        )
+                      })()}
                     </div>
                   )
-                })}
-
-                {ALL_NOTES_SECTIONS.every(({ key }) => (interviewNotes[key] ?? []).length === 0) &&
-                 (interviewFeedbacks as any[]).length === 0 && (
-                  <p className="text-xs text-gray-400 italic">No interview notes or feedback recorded yet.</p>
-                )}
+                })()}
               </div>
 
               {/* Cost Approval Notes + Decision */}
               <div className="px-5 py-4 space-y-4">
-                {/* Existing decision badge */}
-                {(candidate as any).cost_approval_decision && (
-                  <div className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium ${
-                    (candidate as any).cost_approval_decision === 'go_ahead'
-                      ? 'bg-green-100 text-green-800 border border-green-200'
-                      : 'bg-red-100 text-red-800 border border-red-200'
-                  }`}>
-                    {(candidate as any).cost_approval_decision === 'go_ahead' ? <Check className="w-3.5 h-3.5" /> : <X className="w-3.5 h-3.5" />}
-                    {(candidate as any).cost_approval_decision === 'go_ahead' ? 'Go Ahead' : 'Re-work Required'}
-                    {(candidate as any).cost_approval_submitted_at && (
-                      <span className="text-xs opacity-60 font-normal">
-                        — {formatRelative((candidate as any).cost_approval_submitted_at)}
-                      </span>
-                    )}
-                  </div>
-                )}
-
                 {canSubmitCostApproval && (
                   <>
                     <div>
