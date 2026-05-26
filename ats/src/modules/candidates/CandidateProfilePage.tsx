@@ -463,19 +463,19 @@ export function CandidateProfilePage() {
     ? ALL_NOTES_SECTIONS.filter(s => s.key === 'screening')
     : ALL_NOTES_SECTIONS.filter(s => reachedStageKeys.has(s.key))
 
-  // Determine cost approval context
-  const isInCostApproval = candidate.current_stage === costApprovalStageName
+  // Determine cost approval context — use stageKeyOf for robust comparison (handles case differences)
+  const isInCostApproval = stageKeyOf(candidate.current_stage) === stageKeyOf(costApprovalStageName)
   const isCAPanel = costApprovalPanelIds.includes(user?.id ?? '')
   const interviewNotes = (candidate as any).interview_notes ?? {}
   const hasCostApprovalRecord = (interviewNotes['cost_approval'] ?? []).length > 0 || !!(candidate as any).cost_approval_decision
   // True when candidate is at or past the cost approval stage in the pipeline
-  const costApprovalPipelineIdx = stages.indexOf(costApprovalStageName)
+  const costApprovalPipelineIdx = stages.findIndex(s => stageKeyOf(s) === stageKeyOf(costApprovalStageName))
   const currentStageIdx = stages.indexOf(candidate.current_stage)
   const hasPassedCostApproval = costApprovalPipelineIdx >= 0 && currentStageIdx >= costApprovalPipelineIdx
-  // Show section: at/past CA stage OR decision already submitted
-  const canSeeCostApproval = (hasPassedCostApproval || hasCostApprovalRecord) && (canEdit || isCAPanel)
-  // Panel can submit/re-submit whenever at/past the CA stage OR no decision recorded yet
-  const canSubmitCostApproval = isCAPanel && (hasPassedCostApproval || hasCostApprovalRecord)
+  // Show section: currently in CA stage, OR at/past it in pipeline, OR decision already submitted
+  const canSeeCostApproval = (isInCostApproval || hasPassedCostApproval || hasCostApprovalRecord) && (canEdit || isCAPanel)
+  // Panel can submit/re-submit whenever at/past the CA stage OR has an existing record
+  const canSubmitCostApproval = isCAPanel && (isInCostApproval || hasPassedCostApproval || hasCostApprovalRecord)
 
   // Interview format guide from the job (per-stage questionnaire templates)
   // Screening template is HR-only; other stages shown to interviewers for their current stage
@@ -857,8 +857,8 @@ export function CandidateProfilePage() {
             )}
           </div>
 
-          {/* General Notes — hidden from agency; hidden when cost approval section consolidates it */}
-          {!isAgency && !canSeeCostApproval && (
+          {/* General Notes — always visible (except agency) */}
+          {!isAgency && (
           <div>
             <div className="flex items-center justify-between mb-2 px-1">
               <p className="text-sm font-semibold text-gray-700">General Notes</p>
@@ -880,8 +880,8 @@ export function CandidateProfilePage() {
           </div>
           )}
 
-          {/* Interview Notes — hidden from agency and from cost approval view */}
-          {!isAgency && !isInCostApproval && (
+          {/* Interview Notes — always visible (except agency; hidden for interviewer during cost approval) */}
+          {!isAgency && !(isInterviewer && isInCostApproval) && (
           <div>
             <p className="text-sm font-semibold text-gray-700 mb-3 px-1">Interview Notes</p>
 
@@ -1068,17 +1068,17 @@ export function CandidateProfilePage() {
                     strong_yes: 'bg-green-100 text-green-700', yes: 'bg-green-50 text-green-600',
                     neutral: 'bg-gray-100 text-gray-600', no: 'bg-red-50 text-red-600', strong_no: 'bg-red-100 text-red-700'
                   }
-                  const hasGeneralNotes = !!(candidate as any).notes
                   const hasStageData = HISTORY_STAGES.some(({ key }) =>
                     (interviewNotes[key] ?? []).length > 0 ||
                     (interviewFeedbacks as any[]).some((fb: any) => stageKeyOf(fb.stage ?? '') === key)
                   )
-                  if (!hasGeneralNotes && !hasStageData) {
+                  if (!hasStageData) {
                     return <p className="text-xs text-gray-400 italic">No interview notes or feedback recorded yet.</p>
                   }
                   return (
                     <div className="space-y-5">
-                      {(candidate as any).notes && (
+                      {/* General Notes shown standalone above — not repeated here */}
+                      {false && (candidate as any).notes && (
                         <div>
                           <div className="flex items-center gap-2 mb-2">
                             <span className="w-1.5 h-1.5 rounded-full bg-amber-400 flex-shrink-0" />
@@ -1202,10 +1202,13 @@ export function CandidateProfilePage() {
                 )}
               </div>
 
-              {/* Comments — HR / Admin / Super Admin can add */}
-              {canEdit && (
+              {/* Comments — visible to all (canEdit + CA panel); only canEdit can add */}
+              {(canEdit || isCAPanel) && (
                 <div className="px-5 py-4 border-b border-amber-100 space-y-3">
-                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Comments</p>
+                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                    Comments
+                    {!canEdit && <span className="ml-1.5 text-gray-300 font-normal normal-case">(read-only)</span>}
+                  </p>
                   {(interviewNotes['cost_approval_comments'] ?? []).length === 0 && (
                     <p className="text-xs text-gray-400 italic">No comments yet.</p>
                   )}
@@ -1219,22 +1222,24 @@ export function CandidateProfilePage() {
                       <p className="text-sm text-gray-700 whitespace-pre-wrap">{c.text}</p>
                     </div>
                   ))}
-                  <div className="flex gap-2 items-end">
-                    <textarea
-                      rows={2}
-                      value={caComment}
-                      onChange={e => setCaComment(e.target.value)}
-                      placeholder="Add a comment…"
-                      className="flex-1 px-3 py-2 border border-amber-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-amber-400 resize-y"
-                    />
-                    <button
-                      onClick={submitCAComment}
-                      disabled={!caComment.trim() || caSavingComment}
-                      className="flex-shrink-0 w-8 h-8 rounded-lg bg-amber-700 hover:bg-amber-800 disabled:bg-gray-200 flex items-center justify-center transition-colors self-end"
-                    >
-                      {caSavingComment ? <Loader2 className="w-3.5 h-3.5 text-white animate-spin" /> : <Send className="w-3.5 h-3.5 text-white" />}
-                    </button>
-                  </div>
+                  {canEdit && (
+                    <div className="flex gap-2 items-end">
+                      <textarea
+                        rows={2}
+                        value={caComment}
+                        onChange={e => setCaComment(e.target.value)}
+                        placeholder="Add a comment…"
+                        className="flex-1 px-3 py-2 border border-amber-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-amber-400 resize-y"
+                      />
+                      <button
+                        onClick={submitCAComment}
+                        disabled={!caComment.trim() || caSavingComment}
+                        className="flex-shrink-0 w-8 h-8 rounded-lg bg-amber-700 hover:bg-amber-800 disabled:bg-gray-200 flex items-center justify-center transition-colors self-end"
+                      >
+                        {caSavingComment ? <Loader2 className="w-3.5 h-3.5 text-white animate-spin" /> : <Send className="w-3.5 h-3.5 text-white" />}
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
 
