@@ -210,31 +210,34 @@ def extract_name(text: str, email: str = "") -> str:
 
 def _is_likely_name_line(line: str) -> bool:
     """Check if a line likely contains just a name."""
-    # Skip if it contains common non-name indicators
     skip_indicators = [
         "@", "http", "www.", "phone", "tel:", "mobile", "address",
         "resume", "curriculum", "vitae", "objective", "summary",
         "experience", "education", "skill", "project",
-        "|", "•", "●", "■",
+        "|", "•", "●", "■", "+91", "linkedin", "github",
     ]
     line_lower = line.lower()
     if any(ind in line_lower for ind in skip_indicators):
         return False
 
-    # Name lines are typically short (2-5 words, < 50 chars)
+    # Names need at least 2 words (first + last name minimum)
     words = line.split()
-    if len(words) < 1 or len(words) > 5:
+    if len(words) < 2 or len(words) > 5:
         return False
     if len(line) > 60:
         return False
 
-    # Should contain mostly letters
-    alpha_ratio = sum(1 for c in line if c.isalpha() or c.isspace()) / max(len(line), 1)
-    if alpha_ratio < 0.8:
+    # Each word must be at least 2 chars
+    if any(len(w) < 2 for w in words):
         return False
 
-    # At least one word should start with uppercase
-    if not any(w[0].isupper() for w in words if w):
+    # Should contain mostly letters
+    alpha_ratio = sum(1 for c in line if c.isalpha() or c.isspace()) / max(len(line), 1)
+    if alpha_ratio < 0.85:
+        return False
+
+    # First word must start with uppercase
+    if not words[0][0].isupper():
         return False
 
     return True
@@ -266,12 +269,21 @@ def _is_valid_name(name: str) -> bool:
         if alpha_chars < len(word) * 0.7:
             return False
 
+    # Must be at least 4 chars total (avoids "ile", "Mr" etc.)
+    if len(name) < 4:
+        return False
+
+    # Must have at least 2 words
+    if len(words) < 2:
+        return False
+
     # Not a common non-name word
     NON_NAMES = {
         "resume", "curriculum", "vitae", "objective", "summary",
         "experience", "education", "skills", "projects", "profile",
         "contact", "address", "phone", "email", "linkedin",
         "professional", "personal", "details", "information",
+        "mr", "mrs", "ms", "dr", "sir", "prof",
     }
     if name.lower() in NON_NAMES or words[0].lower() in NON_NAMES:
         return False
@@ -354,9 +366,7 @@ def extract_current_company(text: str) -> Optional[str]:
 
             # Check if this line looks like a company name
             cleaned = line.strip(" |•●■–-.,")
-            # Remove date ranges from the line
-            cleaned = re.sub(r"\s*[\(]?\s*\d{4}\s*[\-–]\s*(?:\d{4}|present|current|till\s*date)\s*[\)]?\s*$", "", cleaned, flags=re.IGNORECASE)
-            cleaned = re.sub(r"^\s*\d{4}\s*[\-–]\s*(?:\d{4}|present|current|till\s*date)\s*[|:\-]\s*", "", cleaned, flags=re.IGNORECASE)
+            cleaned = _strip_date_ranges(cleaned)
 
             if cleaned and _is_valid_company(cleaned):
                 return cleaned[:80]
@@ -399,7 +409,7 @@ def extract_current_designation(text: str) -> Optional[str]:
     for pattern in label_patterns:
         match = re.search(pattern, text, re.IGNORECASE)
         if match:
-            title = match.group(1).strip().strip(".,;")
+            title = _clean_designation(match.group(1).strip().strip(".,;"))
             if title and len(title) > 2 and len(title) < 80:
                 return title
 
@@ -420,15 +430,13 @@ def extract_current_designation(text: str) -> Optional[str]:
         lines = [l.strip() for l in exp_section.split("\n") if l.strip()]
         for line in lines[:8]:
             cleaned = line.strip(" |•●■–-.,")
-            # Remove dates
-            cleaned = re.sub(r"\s*[\(]?\s*\d{4}\s*[\-–]\s*(?:\d{4}|present|current|till\s*date)\s*[\)]?\s*$", "", cleaned, flags=re.IGNORECASE)
-            cleaned = re.sub(r"^\s*\d{4}\s*[\-–]\s*(?:\d{4}|present|current|till\s*date)\s*[|:\-]\s*", "", cleaned, flags=re.IGNORECASE)
+            cleaned = _strip_date_ranges(cleaned)
 
             for pattern in TITLE_KEYWORDS:
                 match = re.search(pattern, cleaned, re.IGNORECASE)
                 if match:
-                    title = match.group(0).strip()
-                    if len(title) > 3:
+                    title = _clean_designation(match.group(0).strip())
+                    if title and len(title) > 3:
                         return title[:80]
 
     return None
@@ -437,6 +445,51 @@ def extract_current_designation(text: str) -> Optional[str]:
 # ═══════════════════════════════════════════════════════════════════
 # UTILITY FUNCTIONS
 # ═══════════════════════════════════════════════════════════════════
+
+_MONTH = r"(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)"
+_END_DATE = rf"(?:{_MONTH}\s+\d{{4}}|present|current|ongoing|till\s*date)"
+
+def _strip_date_ranges(text: str) -> str:
+    """Remove all date range patterns (year-based and month-name-based) from a string."""
+    # "Jan 2025 – Oct 2025" / "Jan 2025 - present"
+    text = re.sub(
+        rf"\s*[,|]?\s*{_MONTH}\s+\d{{4}}\s*[-–]\s*{_END_DATE}",
+        "", text, flags=re.IGNORECASE
+    )
+    # Standalone "Jan 2025" at end
+    text = re.sub(rf"\s*[,|]?\s*{_MONTH}\s+\d{{4}}\s*$", "", text, flags=re.IGNORECASE)
+    # "2024 – 2025" / "2024 – present"
+    text = re.sub(
+        r"\s*[\(]?\s*\d{4}\s*[-–]\s*(?:\d{4}|present|current|till\s*date|ongoing)\s*[\)]?",
+        "", text, flags=re.IGNORECASE
+    )
+    return text.strip(" |•●■–-.,")
+
+
+def _clean_designation(title: str) -> str:
+    """Remove sentence fragments from a designation string."""
+    # Cut at conjunctions that signal a sentence, not a title
+    cut_pattern = re.compile(
+        r"\s+(?:where|while|and\s+I|in\s+which|to\s+(?:work|help|support|contribute|manage)|"
+        r"working|reporting|based|located)\b",
+        re.IGNORECASE
+    )
+    m = cut_pattern.search(title)
+    if m:
+        title = title[:m.start()]
+
+    # Strip trailing "at <Company>" or "with <Company>"
+    title = re.sub(r"\s+(?:at|with|for|in)\s+\S.*$", "", title, flags=re.IGNORECASE)
+
+    title = title.strip(" .,;:-–")
+
+    # Reject if it still looks like a sentence (> 6 words or contains lowercase-start words mid-string)
+    words = title.split()
+    if len(words) > 7:
+        return ""
+    return title
+
+
 def _extract_section(text: str, section_names: list[str]) -> Optional[str]:
     """Extract a section of the resume by its header name."""
     # Build pattern to find section header
