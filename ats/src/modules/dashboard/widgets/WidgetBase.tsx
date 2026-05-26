@@ -1,7 +1,3 @@
-// ============================================================
-// WIDGET BASE — card shell every widget renders inside
-// Handles loading, error, and empty states consistently.
-// ============================================================
 import { Loader2, AlertCircle } from 'lucide-react'
 
 interface Props {
@@ -14,20 +10,21 @@ interface Props {
 
 export function WidgetBase({ title, children, loading, error, action }: Props) {
   return (
-    <div className="bg-white rounded-xl border border-gray-200 p-5 flex flex-col gap-4">
+    <div className="bg-white rounded-2xl shadow-card p-5 flex flex-col gap-4">
       <div className="flex items-center justify-between">
-        <h3 className="text-sm font-semibold text-gray-700">{title}</h3>
+        <h3 className="text-sm font-semibold text-zinc-700">{title}</h3>
         {action}
       </div>
 
       {loading && (
-        <div className="flex items-center justify-center py-8">
-          <Loader2 className="w-5 h-5 text-blue-500 animate-spin" />
+        <div className="space-y-3 py-2">
+          <div className="h-7 w-20 bg-zinc-100 rounded-lg animate-pulse" />
+          <div className="h-3 w-28 bg-zinc-100 rounded animate-pulse" />
         </div>
       )}
 
       {error && !loading && (
-        <div className="flex items-center gap-2 text-red-600 py-4">
+        <div className="flex items-center gap-2 text-red-500 py-2">
           <AlertCircle className="w-4 h-4 flex-shrink-0" />
           <p className="text-sm">{error}</p>
         </div>

@@ -81,7 +81,7 @@ export function DashboardPage() {
 
       {/* Customize panel */}
       {customizing && (
-        <div className="bg-white border border-gray-200 rounded-xl p-4">
+        <div className="bg-white rounded-2xl shadow-card p-4">
           <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Toggle Widgets</p>
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2">
             {available.map(w => {

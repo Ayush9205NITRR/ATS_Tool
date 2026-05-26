@@ -1,5 +1,5 @@
 // ============================================================
-// DATABASE TYPES v3 — mirrors Supabase schema exactly.
+// DATABASE TYPES v4 — mirrors Supabase schema exactly.
 // ============================================================
 
 export type Role = 'super_admin' | 'admin' | 'hr_team' | 'interviewer' | 'agency'
@@ -8,11 +8,19 @@ export type CandidateStatus = 'active' | 'rejected' | 'hired' | 'withdrawn'
 export type JobStatus = 'draft' | 'open' | 'paused' | 'closed'
 export type EmploymentType = 'full_time' | 'part_time' | 'contract' | 'internship'
 export type Recommendation = 'strong_yes' | 'yes' | 'neutral' | 'no' | 'strong_no'
+export type CostApprovalDecision = 'go_ahead' | 'rework_required'
 
 export const INTERVIEW_STAGES = [
   'Applied', 'Screening', 'R1', 'Case Study', 'R2', 'R3',
   'CF (Virtual)', 'CF (In-Person)', 'Offer', 'Hired', 'Rejected'
 ] as const
+
+export interface NoteEntry {
+  text: string
+  author: string
+  authorId: string
+  timestamp: string
+}
 
 export interface Agency {
   id: string
@@ -48,6 +56,8 @@ export interface Job {
   created_by: string
   created_at: string
   updated_at: string
+  screening_template: string[]
+  interview_templates: Record<string, string[]>
 }
 
 export interface InterviewNotes {
@@ -86,6 +96,8 @@ export interface Candidate {
   uploaded_by: string
   created_at: string
   updated_at: string
+  cost_approval_decision: CostApprovalDecision | null
+  cost_approval_notes: NoteEntry[]
 }
 
 export interface InterviewFeedback {
@@ -114,4 +126,20 @@ export interface CandidateWithJob extends Candidate {
 
 export interface FeedbackWithInterviewer extends InterviewFeedback {
   interviewer?: Pick<User, 'id' | 'full_name' | 'avatar_url'>
+}
+
+export interface Notification {
+  id: string
+  user_id: string
+  type: string
+  title: string
+  body: string | null
+  metadata: Record<string, any>
+  read_at: string | null
+  created_at: string
+}
+
+export interface CostApprovalSettings {
+  stage_name: string
+  reviewer_ids: string[]
 }

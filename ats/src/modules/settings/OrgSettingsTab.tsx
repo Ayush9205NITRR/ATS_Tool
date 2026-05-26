@@ -1,6 +1,6 @@
 // Org Settings Tab — Super Admin only
 // Controls org email, sender name, rejection workflow
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { supabase } from '../../lib/supabaseClient'
 import { useAuthStore } from '../auth/authStore'
