@@ -239,6 +239,8 @@ export function BulkResumeUpload() {
           interview_date: null,
           archived_at: null,
           archived_by: null,
+          cost_approval_decision: null,
+          cost_approval_notes: [],
         }
       })
       return candidateService.bulkCreate(payloads, user?.role, user?.id)

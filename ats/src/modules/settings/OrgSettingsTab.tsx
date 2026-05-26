@@ -1,6 +1,6 @@
 // Org Settings Tab — Super Admin only
 // Controls org email, sender name, rejection workflow
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { supabase } from '../../lib/supabaseClient'
 import { useAuthStore } from '../auth/authStore'
@@ -109,6 +109,9 @@ export function OrgSettingsTab() {
 
       {/* Stage Editor */}
       <StageEditor/>
+
+      {/* Cost Approval Settings */}
+      <CostApprovalSettingsSection/>
 
       {/* Rejection Workflow */}
       <RejectionWorkflow/>
@@ -359,6 +362,129 @@ function StageEditor() {
           ))}
         </div>
       )}
+    </div>
+  )
+}
+
+// ── Cost Approval Settings ────────────────────────────────────
+function CostApprovalSettingsSection() {
+  const qc = useQueryClient()
+  const { stageConfigs } = useStages()
+
+  const { data: settings } = useQuery({
+    queryKey: ['app-settings', 'cost_approval'],
+    queryFn: async () => {
+      const { data } = await supabase.from('app_settings').select('value').eq('key', 'cost_approval').maybeSingle()
+      if (!data?.value) return { stage_name: '', reviewer_ids: [] as string[] }
+      try { return JSON.parse(data.value) as { stage_name: string; reviewer_ids: string[] } } catch { return { stage_name: '', reviewer_ids: [] as string[] } }
+    },
+    staleTime: 30_000,
+  })
+
+  const { data: allUsers = [] } = useQuery({
+    queryKey: ['all-users-for-cost-approval'],
+    queryFn: async () => {
+      const { data } = await supabase.from('users').select('id,full_name,email,role').eq('is_active', true).order('full_name')
+      return (data ?? []) as { id: string; full_name: string; email: string; role: string }[]
+    },
+    staleTime: 60_000,
+  })
+
+  const [stageName, setStageName] = useState('')
+  const [reviewerIds, setReviewerIds] = useState<string[]>([])
+  const [saved, setSaved] = useState(false)
+  const [initialized, setInitialized] = useState(false)
+
+  useEffect(() => {
+    if (settings && !initialized) {
+      setStageName(settings.stage_name)
+      setReviewerIds(settings.reviewer_ids)
+      setInitialized(true)
+    }
+  }, [settings, initialized])
+
+  const save = async () => {
+    const { error } = await supabase.from('app_settings').upsert({
+      key: 'cost_approval',
+      value: JSON.stringify({ stage_name: stageName, reviewer_ids: reviewerIds }),
+      updated_at: new Date().toISOString(),
+    }, { onConflict: 'key' })
+    if (error) { console.error('[cost approval save]', error); return }
+    qc.invalidateQueries({ queryKey: ['app-settings', 'cost_approval'] })
+    setSaved(true)
+    setTimeout(() => setSaved(false), 2000)
+  }
+
+  const toggleReviewer = (uid: string) =>
+    setReviewerIds(prev => prev.includes(uid) ? prev.filter(id => id !== uid) : [...prev, uid])
+
+  return (
+    <div className="border-t border-gray-100 pt-6 space-y-4">
+      <div>
+        <h3 className="text-sm font-semibold text-gray-900">Cost Approval Workflow</h3>
+        <p className="text-xs text-gray-500 mt-0.5">
+          Configure which pipeline stage triggers cost approval and who can review candidates in that stage.
+          You can rename the stage above in Pipeline Stages.
+        </p>
+      </div>
+
+      <div className="bg-white border border-gray-200 rounded-xl p-4 space-y-4">
+        {/* Stage Name */}
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">Cost Approval Stage</label>
+          <p className="text-xs text-gray-400 mb-2">Select the pipeline stage that triggers cost approval review</p>
+          <select value={stageName} onChange={e => setStageName(e.target.value)}
+            className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white">
+            <option value="">— Select stage —</option>
+            {stageConfigs.map(s => (
+              <option key={s.name} value={s.name}>{s.name}</option>
+            ))}
+          </select>
+        </div>
+
+        {/* Reviewers */}
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">
+            Reviewers
+            {reviewerIds.length > 0 && (
+              <span className="ml-2 text-xs font-normal text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full">
+                {reviewerIds.length} selected
+              </span>
+            )}
+          </label>
+          <p className="text-xs text-gray-400 mb-2">These users will see candidates in the cost approval stage and can submit Go Ahead / Re-work decisions</p>
+          <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
+            {allUsers.filter(u => u.role !== 'agency').map(u => {
+              const sel = reviewerIds.includes(u.id)
+              return (
+                <div key={u.id} onClick={() => toggleReviewer(u.id)}
+                  className={`flex items-center gap-2.5 px-3 py-2 rounded-lg cursor-pointer transition-colors select-none ${
+                    sel ? 'bg-blue-50 border border-blue-200' : 'hover:bg-gray-50 border border-transparent'
+                  }`}>
+                  <div className={`w-4 h-4 rounded border-2 flex items-center justify-center flex-shrink-0 transition-all ${
+                    sel ? 'bg-blue-500 border-blue-500' : 'border-gray-300'
+                  }`}>
+                    {sel && <svg className="w-2.5 h-2.5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7"/></svg>}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm text-gray-800">{u.full_name}</p>
+                    <p className="text-xs text-gray-400">{u.email} · {u.role.replace('_', ' ')}</p>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+
+        <button onClick={save} disabled={!stageName}
+          className={`flex items-center gap-1.5 px-4 py-2 text-sm rounded-lg font-medium transition-all ${
+            saved ? 'bg-green-500 text-white'
+              : !stageName ? 'bg-gray-100 text-gray-400 cursor-default'
+              : 'bg-gray-900 text-white hover:bg-gray-800'
+          }`}>
+          {saved ? <><Check className="w-3.5 h-3.5"/>Saved</> : 'Save settings'}
+        </button>
+      </div>
     </div>
   )
 }

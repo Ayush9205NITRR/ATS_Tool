@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Plus, Briefcase, Loader2, ChevronDown, ChevronRight, Pencil, Users, Calendar, DollarSign, Target, Hash, Layers, ExternalLink } from 'lucide-react'
+import { Plus, Briefcase, Loader2, ChevronDown, ChevronRight, Pencil, Users, Calendar, DollarSign, Target, Hash, Layers, ExternalLink, X } from 'lucide-react'
 import { jobService } from './jobService'
 import { supabase } from '../../lib/supabaseClient'
 import { PageHeader } from '../../shared/components/PageHeader'
@@ -50,6 +50,9 @@ const STATUS_COLOUR: Record<string,string> = {
   closed:'bg-red-100 text-red-600 border border-red-200',
 }
 
+const TEMPLATE_STAGES = ['R1', 'Case Study', 'R2', 'R3', 'CF (Virtual)', 'CF (In-Person)']
+const toStageKey = (name: string) => name.toLowerCase().replace(/[^a-z0-9]/g, '_')
+
 function JobForm({ job, onClose }: { job?: any; onClose: () => void }) {
   const { user } = useAuthStore()
   const qc = useQueryClient()
@@ -59,6 +62,13 @@ function JobForm({ job, onClose }: { job?: any; onClose: () => void }) {
   // HR assignment (multi)
   const [hrIds, setHrIds]                 = useState<string[]>(job?.assigned_hrs ?? [])
   const [assignAllCandidates, setAssignAllCandidates] = useState<boolean>(false)
+
+  // Templates
+  const [screeningTemplate, setScreeningTemplate] = useState<string[]>(job?.screening_template ?? [])
+  const [interviewTemplates, setInterviewTemplates] = useState<Record<string, string[]>>(job?.interview_templates ?? {})
+  const [newScreeningQ, setNewScreeningQ] = useState('')
+  const [activeTemplateStage, setActiveTemplateStage] = useState(TEMPLATE_STAGES[0])
+  const [newInterviewQ, setNewInterviewQ] = useState('')
 
   const { data: agencyUsers = [] } = useQuery({
     queryKey: ['agency-users'],
@@ -101,6 +111,8 @@ function JobForm({ job, onClose }: { job?: any; onClose: () => void }) {
         target_date: d.target_date||null, required_skills: skills,
         requisition_id: d.requisition_id||null,
         jd_link: (d as any).jd_link||null,
+        screening_template: screeningTemplate,
+        interview_templates: interviewTemplates,
         show_to_agency: showToAllAgencies || agencyIds.length > 0,
         allowed_agency_ids: showToAllAgencies ? [] : agencyIds,
         assigned_hrs: hrIds,
@@ -263,6 +275,84 @@ function JobForm({ job, onClose }: { job?: any; onClose: () => void }) {
             ✓ On save, {hrIds.length} HR{hrIds.length > 1 ? 's' : ''} will be assigned to every candidate of this job.
           </p>
         )}
+      </div>
+
+      {/* Screening Format */}
+      <div className="border border-indigo-200 rounded-xl p-4 bg-indigo-50/20">
+        <p className="text-sm font-medium text-gray-700 mb-1">Screening Format</p>
+        <p className="text-xs text-gray-400 mb-3">Questions / format for the screening stage. Visible to interviewers on candidate profiles.</p>
+        {screeningTemplate.length > 0 && (
+          <ol className="space-y-1.5 mb-3 list-decimal list-inside">
+            {screeningTemplate.map((q, i) => (
+              <li key={i} className="text-sm text-gray-700 bg-white rounded-lg px-3 py-2 border border-indigo-100 flex items-center justify-between gap-2">
+                <span className="flex-1">{q}</span>
+                <button type="button" onClick={() => setScreeningTemplate(p => p.filter((_, j) => j !== i))}
+                  className="text-gray-300 hover:text-red-500 flex-shrink-0 transition-colors"><X className="w-3.5 h-3.5"/></button>
+              </li>
+            ))}
+          </ol>
+        )}
+        <div className="flex gap-2">
+          <input value={newScreeningQ} onChange={e => setNewScreeningQ(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); if (newScreeningQ.trim()) { setScreeningTemplate(p => [...p, newScreeningQ.trim()]); setNewScreeningQ('') } } }}
+            placeholder="Add a screening question…" className={inputCls}/>
+          <button type="button" onClick={() => { if (newScreeningQ.trim()) { setScreeningTemplate(p => [...p, newScreeningQ.trim()]); setNewScreeningQ('') } }}
+            disabled={!newScreeningQ.trim()}
+            className="px-3 py-2 bg-indigo-600 text-white text-sm rounded-lg hover:bg-indigo-700 disabled:opacity-40 flex-shrink-0 transition-colors">
+            <Plus className="w-4 h-4"/>
+          </button>
+        </div>
+      </div>
+
+      {/* Interview Format — per-stage templates */}
+      <div className="border border-indigo-200 rounded-xl p-4 bg-indigo-50/20">
+        <p className="text-sm font-medium text-gray-700 mb-1">Interview Format</p>
+        <p className="text-xs text-gray-400 mb-3">Questions / format for each interview round. Interviewers see only the questions for their assigned stage.</p>
+        <div className="flex flex-wrap gap-1 mb-3">
+          {TEMPLATE_STAGES.map(s => {
+            const key = toStageKey(s)
+            const count = (interviewTemplates[key] ?? []).length
+            return (
+              <button type="button" key={s} onClick={() => setActiveTemplateStage(s)}
+                className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${
+                  activeTemplateStage === s
+                    ? 'bg-indigo-600 text-white border-indigo-600'
+                    : 'bg-white text-gray-600 border-gray-200 hover:border-indigo-300'
+                }`}>
+                {s}{count > 0 && <span className="ml-1 opacity-70">({count})</span>}
+              </button>
+            )
+          })}
+        </div>
+        {(() => {
+          const key = toStageKey(activeTemplateStage)
+          const qs = interviewTemplates[key] ?? []
+          return (
+            <div>
+              {qs.length > 0 && (
+                <ol className="space-y-1.5 mb-3 list-decimal list-inside">
+                  {qs.map((q, i) => (
+                    <li key={i} className="text-sm text-gray-700 bg-white rounded-lg px-3 py-2 border border-indigo-100 flex items-center justify-between gap-2">
+                      <span className="flex-1">{q}</span>
+                      <button type="button" onClick={() => setInterviewTemplates(p => ({ ...p, [key]: qs.filter((_, j) => j !== i) }))}
+                        className="text-gray-300 hover:text-red-500 flex-shrink-0 transition-colors"><X className="w-3.5 h-3.5"/></button>
+                    </li>
+                  ))}
+                </ol>
+              )}
+              <div className="flex gap-2">
+                <input value={newInterviewQ} onChange={e => setNewInterviewQ(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); if (newInterviewQ.trim()) { setInterviewTemplates(p => ({ ...p, [key]: [...(p[key]??[]), newInterviewQ.trim()] })); setNewInterviewQ('') } } }}
+                  placeholder={`Add ${activeTemplateStage} question…`} className={inputCls}/>
+                <button type="button" onClick={() => { if (newInterviewQ.trim()) { setInterviewTemplates(p => ({ ...p, [key]: [...(p[key]??[]), newInterviewQ.trim()] })); setNewInterviewQ('') } }}
+                  disabled={!newInterviewQ.trim()}
+                  className="px-3 py-2 bg-indigo-600 text-white text-sm rounded-lg hover:bg-indigo-700 disabled:opacity-40 flex-shrink-0 transition-colors">
+                  <Plus className="w-4 h-4"/>
+                </button>
+              </div>
+            </div>
+          )
+        })()}
       </div>
 
       {/* Agency Visibility — required field, not optional */}

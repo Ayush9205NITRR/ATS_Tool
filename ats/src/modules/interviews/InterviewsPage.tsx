@@ -79,9 +79,10 @@ const STAGE_COLOURS: Record<string, string> = {
 }
 
 export function InterviewsPage() {
-  const { user } = useAuthStore()
+  const { user, hasRole } = useAuthStore()
   const navigate = useNavigate()
   const qc = useQueryClient()
+  const isInterviewer = hasRole(['interviewer'])
   const [filter, setFilter] = useState<FeedbackFilter>('pending')
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [jobFilter, setJobFilter]     = useState<string>('')
@@ -90,6 +91,40 @@ export function InterviewsPage() {
   const [dateB,     setDateB]         = useState<string>('')
   const [dateOpen,  setDateOpen]      = useState(false)
   const dateRef = useRef<HTMLDivElement>(null)
+
+  // Cost approval settings
+  const { data: costApprovalSettings } = useQuery({
+    queryKey: ['app-settings', 'cost_approval'],
+    queryFn: async () => {
+      const { data } = await supabase.from('app_settings').select('value').eq('key', 'cost_approval').maybeSingle()
+      if (!data?.value) return null
+      try { return JSON.parse(data.value) as { stage_name: string; reviewer_ids: string[] } } catch { return null }
+    },
+    staleTime: 30_000,
+  })
+
+  const isCostApprovalReviewer = !!user && !!costApprovalSettings &&
+    (costApprovalSettings.reviewer_ids.includes(user.id) || user.role === 'super_admin')
+
+  const { data: costApprovalCandidates = [] } = useQuery({
+    queryKey: ['cost-approval-candidates', costApprovalSettings?.stage_name],
+    queryFn: async () => {
+      const { data } = await supabase.from('candidates')
+        .select('id, full_name, current_stage, job_id, cost_approval_decision, created_at')
+        .eq('current_stage', costApprovalSettings!.stage_name)
+        .eq('status', 'active')
+        .order('created_at', { ascending: false })
+      const jobIds = [...new Set((data ?? []).map((c: any) => c.job_id).filter(Boolean))]
+      const jobsMap: Record<string, string> = {}
+      if (jobIds.length) {
+        const { data: jobs } = await supabase.from('jobs').select('id,title').in('id', jobIds)
+        jobs?.forEach((j: any) => { jobsMap[j.id] = j.title })
+      }
+      return (data ?? []).map((c: any) => ({ ...c, jobTitle: c.job_id ? jobsMap[c.job_id] ?? null : null }))
+    },
+    enabled: isCostApprovalReviewer && !!costApprovalSettings?.stage_name,
+    staleTime: 0,
+  })
 
   // Close the date popover on outside click
   useEffect(() => {
@@ -251,10 +286,86 @@ export function InterviewsPage() {
   return (
     <div>
       <PageHeader
-        title="My Interviews"
-        subtitle={`${data?.all.length ?? 0} assigned · ${pendingCount} pending feedback`}
+        title={isInterviewer ? 'My Interviews' : 'Reviews'}
+        subtitle={isInterviewer
+          ? `${data?.all.length ?? 0} assigned · ${pendingCount} pending feedback`
+          : `${costApprovalCandidates.length} candidates awaiting cost approval`
+        }
       />
 
+      {/* Cost Approval Section — for configured reviewers */}
+      {isCostApprovalReviewer && costApprovalCandidates.length > 0 && (
+        <div className="mb-6">
+          <div className="flex items-center gap-2 mb-3">
+            <span className="text-xs font-semibold text-amber-700 bg-amber-100 px-2.5 py-1 rounded-full uppercase tracking-wide">
+              Cost Approval
+            </span>
+            <span className="text-xs text-gray-400">{costApprovalCandidates.length} candidate{costApprovalCandidates.length !== 1 ? 's' : ''}</span>
+          </div>
+          <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-gray-100 bg-gray-50 text-xs text-gray-500 uppercase tracking-wide">
+                  <th className="text-left px-4 py-3 font-medium">Candidate</th>
+                  <th className="text-left px-4 py-3 font-medium">Job</th>
+                  <th className="text-left px-4 py-3 font-medium">Decision</th>
+                  <th className="text-left px-4 py-3 font-medium">Added</th>
+                  <th className="px-4 py-3 font-medium text-right">Action</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-50">
+                {costApprovalCandidates.map((c: any) => (
+                  <tr key={c.id} className="hover:bg-gray-50/40 transition-colors">
+                    <td className="px-4 py-3">
+                      <button onClick={() => navigate(`/candidates/${c.id}`)}
+                        className="font-medium text-blue-600 hover:underline text-left text-sm">
+                        {c.full_name}
+                      </button>
+                    </td>
+                    <td className="px-4 py-3 text-xs text-gray-600">
+                      {c.jobTitle ?? <span className="text-gray-300">—</span>}
+                    </td>
+                    <td className="px-4 py-3">
+                      {c.cost_approval_decision ? (
+                        <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
+                          c.cost_approval_decision === 'go_ahead'
+                            ? 'bg-green-100 text-green-700'
+                            : 'bg-orange-100 text-orange-700'
+                        }`}>
+                          {c.cost_approval_decision === 'go_ahead' ? '✅ Go Ahead' : '🔁 Re-work'}
+                        </span>
+                      ) : (
+                        <span className="text-xs text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full font-medium">
+                          Pending
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">
+                      {new Date(c.created_at).toLocaleDateString()}
+                    </td>
+                    <td className="px-4 py-3 text-right">
+                      <button onClick={() => navigate(`/candidates/${c.id}`)}
+                        className="text-xs px-3 py-1.5 bg-amber-50 border border-amber-200 hover:bg-amber-100 text-amber-700 rounded-lg font-medium transition-colors">
+                        Review
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {isCostApprovalReviewer && costApprovalCandidates.length === 0 && !isInterviewer && (
+        <div className="bg-white rounded-xl border border-gray-200 flex flex-col items-center justify-center py-16 text-gray-400">
+          <CheckCircle className="w-8 h-8 mb-2 text-green-400"/>
+          <p className="text-sm font-medium text-gray-600">No candidates awaiting cost approval</p>
+        </div>
+      )}
+
+      {/* Interviewer section — only show for interviewers */}
+      {isInterviewer && <>
       {/* Filter toggle */}
       <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
         <div className="flex items-center gap-1 bg-gray-100 p-1 rounded-xl">
@@ -562,6 +673,7 @@ export function InterviewsPage() {
           </div>
         </div>
       )}
+      </>}
     </div>
   )
 }
