@@ -270,7 +270,7 @@ export function CandidateProfilePage() {
         error = result.error
       } else {
         const result = await supabase.from('interview_feedback')
-          .insert({ candidate_id: id!, interviewer_id: user!.id })
+          .insert({ candidate_id: id!, interviewer_id: user!.id, submitted_at: new Date().toISOString() })
         error = result.error
       }
 
@@ -370,8 +370,9 @@ export function CandidateProfilePage() {
           notifyUsers.map(u => ({
             user_id: u.id,
             type: 'cost_approval',
-            message: `Cost Approval decision for ${candidate.full_name}: ${decisionLabel}. Submitted by ${user!.full_name}.`,
-            candidate_id: id!,
+            title: `Cost Approval: ${candidate.full_name}`,
+            body: `Decision: ${decisionLabel} · by ${user!.full_name}`,
+            metadata: { candidate_id: id! },
           }))
         )
       }
@@ -451,23 +452,28 @@ export function CandidateProfilePage() {
     ]
   })()
 
-  // Interviewers: only their current stage. HR: only sections with existing notes + screening. Admin/Super: all.
+  // Stage-based notes: show sections for stages the candidate has actually reached
+  // (pipeline order up to and including current stage, excluding cost approval stage)
+  const currentStageIdx = stages.indexOf(candidate.current_stage)
+  const reachedStageKeys = new Set(
+    stages
+      .slice(0, currentStageIdx >= 0 ? currentStageIdx + 1 : stages.length)
+      .filter(s => s !== costApprovalStageName)
+      .map(stageKeyOf)
+  )
+
   const visibleNotesSections = (() => {
     if (isInterviewer) {
+      // Interviewers see ONLY their current stage
       const key = stageKeyOf(candidate.current_stage)
       const match = ALL_NOTES_SECTIONS.find(s => s.key === key)
       return match ? [match] : []
     }
-    if (isHR) {
-      // HR sees screening (their domain) + any section that already has notes
-      return ALL_NOTES_SECTIONS.filter(s =>
-        s.key === 'screening' || (interviewNotes[s.key] ?? []).length > 0
-      )
-    }
-    return ALL_NOTES_SECTIONS
+    // HR and admin/super: show reached stages only (progressive reveal as candidate advances)
+    return ALL_NOTES_SECTIONS.filter(s => reachedStageKeys.has(s.key))
   })()
 
-  // Template questions: HR only gets screening questionnaire; interviewers get their stage; admins get all
+  // Template questions per stage — HR only sees screening questionnaire
   const getTemplateQuestions = (sectionKey: string): string[] => {
     if (isHR && sectionKey !== 'screening') return []
     if (!jobTemplates) return []
@@ -475,13 +481,15 @@ export function CandidateProfilePage() {
     return ((jobTemplates.interview_templates as Record<string, string[]>) ?? {})[sectionKey] ?? []
   }
 
+  // interviewNotes must be declared before visibleNotesSections (HR branch uses it)
+  const interviewNotes = (candidate as any).interview_notes ?? {}
+
   // History stages: every pipeline stage except cost approval itself
   const HISTORY_STAGES: { key: string; label: string }[] = stages
     .filter(s => s !== costApprovalStageName)
     .map(s => ({ key: stageKeyOf(s), label: s }))
 
   // Cost approval context
-  const interviewNotes = (candidate as any).interview_notes ?? {}
   const isInCostApproval = candidate.current_stage === costApprovalStageName
   const isCAPanel = costApprovalPanelIds.includes(user?.id ?? '')
   const hasCostApprovalRecord = (interviewNotes['cost_approval'] ?? []).length > 0 || !!(candidate as any).cost_approval_decision
@@ -917,7 +925,7 @@ export function CandidateProfilePage() {
           <div>
             <p className="text-sm font-semibold text-gray-700 mb-3 px-1">Interview Notes</p>
 
-            {/* ── Interviewer: Knowledge Base (previous rounds, read-only) ── */}
+            {/* ── Interviewer: Knowledge Base (all previous rounds, always visible) ── */}
             {isInterviewer && (() => {
               const currentIdx = stages.indexOf(candidate.current_stage)
               const prevStages = currentIdx > 0
@@ -925,8 +933,6 @@ export function CandidateProfilePage() {
                     .filter(s => s !== costApprovalStageName)
                     .map(s => ({ key: stageKeyOf(s), label: s }))
                 : []
-              const hasPrevNotes = prevStages.some(({ key }) => (interviewNotes[key] ?? []).length > 0)
-              if (!hasPrevNotes) return null
               return (
                 <div className="mb-4 rounded-xl border border-slate-200 overflow-hidden">
                   <div className="flex items-center gap-2 px-4 py-2.5 bg-slate-100/80 border-b border-slate-200">
@@ -934,28 +940,34 @@ export function CandidateProfilePage() {
                     <p className="text-xs font-semibold text-slate-600 uppercase tracking-wide">Knowledge Base</p>
                     <span className="text-xs text-slate-400">— previous rounds, read-only</span>
                   </div>
-                  <div className="divide-y divide-slate-100">
-                    {/* Previous stage notes in pipeline order */}
-                    {prevStages.map(({ key, label }) => {
-                      const entries: NoteEntry[] = interviewNotes[key] ?? []
-                      if (entries.length === 0) return null
-                      return (
-                        <div key={key} className="px-4 py-3">
-                          <p className="text-xs font-medium text-slate-400 mb-1.5">{label}</p>
-                          <div className="space-y-1.5">
-                            {entries.map((e, i) => (
-                              <div key={i} className="bg-white border border-slate-100 rounded-lg px-3 py-2.5">
-                                <p className="text-sm text-slate-700 whitespace-pre-wrap leading-relaxed">{e.text}</p>
-                                <p className="text-xs text-slate-400 mt-1">
-                                  <span className="font-medium text-slate-500">{e.author}</span> · {formatRelative(e.timestamp)}
-                                </p>
+                  {prevStages.length === 0 ? (
+                    <p className="text-xs text-slate-400 italic px-4 py-3">No previous rounds yet.</p>
+                  ) : (
+                    <div className="divide-y divide-slate-100">
+                      {prevStages.map(({ key, label }) => {
+                        const entries: NoteEntry[] = interviewNotes[key] ?? []
+                        return (
+                          <div key={key} className="px-4 py-3">
+                            <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1.5">{label}</p>
+                            {entries.length === 0 ? (
+                              <p className="text-xs text-slate-300 italic">No notes.</p>
+                            ) : (
+                              <div className="space-y-1.5">
+                                {entries.map((e, i) => (
+                                  <div key={i} className="bg-white border border-slate-100 rounded-lg px-3 py-2.5">
+                                    <p className="text-sm text-slate-700 whitespace-pre-wrap leading-relaxed">{e.text}</p>
+                                    <p className="text-xs text-slate-400 mt-1">
+                                      <span className="font-medium text-slate-500">{e.author}</span> · {formatRelative(e.timestamp)}
+                                    </p>
+                                  </div>
+                                ))}
                               </div>
-                            ))}
+                            )}
                           </div>
-                        </div>
-                      )
-                    })}
-                  </div>
+                        )
+                      })}
+                    </div>
+                  )}
                 </div>
               )
             })()}
@@ -975,17 +987,21 @@ export function CandidateProfilePage() {
                       {entries.length > 0 && <span className="text-xs text-gray-400">{entries.length}</span>}
                     </div>
 
-                    {/* Template questions — format for this stage */}
-                    {templateQs.length > 0 && (
-                      <div className="pl-3.5 pb-2">
-                        <p className="text-xs text-indigo-600 font-medium mb-1.5">Format / Questions</p>
-                        <ol className="space-y-1 list-decimal list-inside">
-                          {templateQs.map((q, qi) => (
-                            <li key={qi} className="text-xs text-indigo-700 bg-indigo-50/60 rounded px-2.5 py-1.5 leading-relaxed">{q}</li>
-                          ))}
-                        </ol>
-                      </div>
-                    )}
+                    {/* Questionnaire for this stage */}
+                    <div className="pl-3.5 pb-2">
+                      {templateQs.length > 0 ? (
+                        <>
+                          <p className="text-xs text-indigo-600 font-semibold mb-1.5 uppercase tracking-wide">Interview Format</p>
+                          <ol className="space-y-1 list-decimal list-inside">
+                            {templateQs.map((q, qi) => (
+                              <li key={qi} className="text-xs text-indigo-700 bg-indigo-50/60 rounded px-2.5 py-1.5 leading-relaxed">{q}</li>
+                            ))}
+                          </ol>
+                        </>
+                      ) : canEdit ? (
+                        <p className="text-xs text-gray-300 italic">No questionnaire set — add one in Job Settings → Interview Format.</p>
+                      ) : null}
+                    </div>
 
                     {/* Existing entries */}
                     {entries.length > 0 && (
@@ -1113,23 +1129,46 @@ export function CandidateProfilePage() {
                 </div>
               )}
 
-              {/* Re-work: show interview history for context */}
-              {hasCAResult && !caResultGoAhead && !caEditMode && (() => {
+              {/* CTC + custom fields relevant to cost decision */}
+              {(() => {
+                const customData = (candidate as any).custom_data ?? {}
+                const ctcFields = (customFields as any[]).filter(f =>
+                  /ctc|salary|compensation|package/i.test(f.field_label) && customData[f.field_name]
+                )
+                if (!ctcFields.length) return null
+                return (
+                  <div className="px-5 py-3 border-b border-gray-100 bg-gray-50/50">
+                    <div className="flex flex-wrap gap-4">
+                      {ctcFields.map((f: any) => (
+                        <div key={f.id}>
+                          <p className="text-xs text-gray-400">{f.field_label}</p>
+                          <p className="text-sm font-semibold text-gray-800">{customData[f.field_name]}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )
+              })()}
+
+              {/* Interview History (Knowledge Base) — always visible in cost approval */}
+              {!caEditMode && (() => {
                 const historyStages = ALL_NOTES_SECTIONS.filter(s => s.key !== stageKeyOf(costApprovalStageName))
                 const stagesWithNotes = historyStages.filter(s => (interviewNotes[s.key] ?? []).length > 0)
                 if (!stagesWithNotes.length) return null
+                const borderCls = !hasCAResult ? 'border-amber-100 bg-amber-50/20' : caResultGoAhead ? 'border-green-100 bg-green-50/10' : 'border-orange-100 bg-orange-50/20'
+                const labelCls = !hasCAResult ? 'text-amber-700' : caResultGoAhead ? 'text-green-700' : 'text-orange-700'
                 return (
-                  <div className="px-5 py-4 border-b border-orange-100 bg-orange-50/30">
-                    <p className="text-xs font-semibold text-orange-700 uppercase tracking-wide mb-3">Interview History</p>
+                  <div className={`px-5 py-4 border-b ${borderCls}`}>
+                    <p className={`text-xs font-semibold uppercase tracking-wide mb-3 ${labelCls}`}>Interview History</p>
                     <div className="space-y-3">
                       {stagesWithNotes.map(({ key, label }) => {
                         const entries: NoteEntry[] = interviewNotes[key] ?? []
                         return (
                           <div key={key}>
-                            <p className="text-xs font-medium text-orange-600 mb-1.5">{label}</p>
+                            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">{label}</p>
                             <div className="space-y-1.5">
                               {entries.map((e, i) => (
-                                <div key={i} className="bg-white rounded-lg px-3 py-2.5 border border-orange-100">
+                                <div key={i} className="bg-white rounded-lg px-3 py-2.5 border border-gray-200">
                                   <p className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">{e.text}</p>
                                   <p className="text-xs text-gray-400 mt-1">
                                     <span className="font-medium text-gray-500">{e.author}</span> · {formatRelative(e.timestamp)}
