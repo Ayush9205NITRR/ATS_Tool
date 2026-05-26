@@ -53,7 +53,7 @@ export function UploadPage() {
       </div>
 
       {/* Mode Tabs */}
-      <div className="bg-white rounded-2xl border border-gray-200 p-1.5 shadow-sm">
+      <div className="bg-white rounded-2xl shadow-card p-1.5">
         <div className="grid grid-cols-2 md:grid-cols-4 gap-1">
           {MODES.map(m => {
             const Icon = m.icon
@@ -67,17 +67,17 @@ export function UploadPage() {
                   active
                     ? isViolet
                       ? 'bg-violet-600 shadow-sm'
-                      : 'bg-blue-600 shadow-sm'
+                      : 'bg-indigo-600 shadow-sm'
                     : 'hover:bg-gray-50'
                 }`}
               >
                 <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${
                   active
                     ? 'bg-white/20'
-                    : isViolet ? 'bg-violet-50' : 'bg-blue-50'
+                    : isViolet ? 'bg-violet-50' : 'bg-indigo-50'
                 }`}>
                   <Icon className={`w-4 h-4 ${
-                    active ? 'text-white' : isViolet ? 'text-violet-500' : 'text-blue-500'
+                    active ? 'text-white' : isViolet ? 'text-violet-500' : 'text-indigo-500'
                   }`} />
                 </div>
                 <div className="min-w-0">
@@ -106,7 +106,7 @@ export function UploadPage() {
       )}
 
       {/* Content */}
-      <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+      <div className="bg-white rounded-2xl shadow-card overflow-hidden">
         {mode === 'single'        && <div className="p-6"><SingleEntryForm /></div>}
         {mode === 'bulk'          && <div className="p-6"><CsvUploader /></div>}
         {mode === 'resume-single' && <SingleResumeUpload />}

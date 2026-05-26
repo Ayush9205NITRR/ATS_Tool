@@ -1,14 +1,45 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 @layer base {
-  * {
-    box-sizing: border-box;
-  }
-  body {
-    @apply text-gray-900 bg-gray-50;
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  *, *::before, *::after { box-sizing: border-box; }
+
+  html {
     -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+
+  body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    background-color: #F8FAFC;
+    color: #18181B;
+  }
+
+  input, textarea, select, button { font-family: inherit; }
+}
+
+@layer utilities {
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: #E4E4E7 transparent;
+  }
+  .scrollbar-thin::-webkit-scrollbar { width: 4px; height: 4px; }
+  .scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
+  .scrollbar-thin::-webkit-scrollbar-thumb { background: #D4D4D8; border-radius: 999px; }
+
+  .animate-fade-in { animation: fadeIn 0.12s ease-out both; }
+  .animate-slide-up { animation: slideUp 0.15s ease-out both; }
+
+  @keyframes fadeIn {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+  }
+  @keyframes slideUp {
+    from { opacity: 0; transform: translateY(6px); }
+    to   { opacity: 1; transform: translateY(0); }
   }
 }
