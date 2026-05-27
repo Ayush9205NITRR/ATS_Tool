@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { NavLink, Outlet } from 'react-router-dom'
-import { LayoutDashboard, Users, Briefcase, Upload, ClipboardList, Settings, Menu, LogOut, X, Bell } from 'lucide-react'
+import { LayoutDashboard, Users, Briefcase, Upload, ClipboardList, Settings, Menu, LogOut, X, Bell, ShieldCheck } from 'lucide-react'
 import { useAuthStore } from '../../modules/auth/authStore'
 import { initialsOf } from '../utils/helpers'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
@@ -10,9 +10,9 @@ const NAV = [
   { to: '/dashboard',  label: 'Dashboard',     icon: LayoutDashboard, roles: ['super_admin','admin','hr_team','interviewer','agency'] },
   { to: '/candidates', label: 'Candidates',     icon: Users,           roles: ['super_admin','admin','hr_team'] },
   { to: '/candidates', label: 'My Submissions', icon: Users,           roles: ['agency'] },
-  { to: '/interviews', label: 'My Interviews',  icon: ClipboardList,   roles: ['interviewer'] },
-  { to: '/interviews', label: 'Reviews',        icon: ClipboardList,   roles: ['admin','super_admin','hr_team'] },
-  { to: '/jobs',       label: 'Jobs',           icon: Briefcase,       roles: ['super_admin','admin','hr_team'] },
+  { to: '/interviews',     label: 'My Interviews',  icon: ClipboardList, roles: ['interviewer'] },
+  { to: '/cost-approval',  label: 'Cost Approval',  icon: ShieldCheck,   roles: ['super_admin','admin','hr_team','interviewer'] },
+  { to: '/jobs',           label: 'Jobs',           icon: Briefcase,     roles: ['super_admin','admin','hr_team'] },
   { to: '/upload',     label: 'Upload',         icon: Upload,          roles: ['super_admin','admin','hr_team','agency'] },
   { to: '/settings',   label: 'Settings',       icon: Settings,        roles: ['super_admin'] },
 ]
@@ -30,9 +30,10 @@ function NotificationBell({ upward = false }: { upward?: boolean }) {
   const { data: notifications = [] } = useQuery({
     queryKey: ['notifications', user?.id],
     queryFn: async () => {
-      const { data } = await supabase.from('notifications').select('*')
+      const { data } = await supabase.from('notifications')
+        .select('id, message, read_at, created_at')
         .eq('user_id', user!.id).order('created_at', { ascending: false }).limit(20)
-      return (data ?? []) as { id: string; title: string; body: string | null; read_at: string | null; created_at: string; metadata: any }[]
+      return (data ?? []) as { id: string; message: string; read_at: string | null; created_at: string }[]
     },
     enabled: !!user,
     staleTime: 0,
@@ -94,8 +95,7 @@ function NotificationBell({ upward = false }: { upward?: boolean }) {
                   <div className="flex items-start gap-2">
                     {!n.read_at && <div className="w-1.5 h-1.5 rounded-full bg-indigo-500 mt-1.5 flex-shrink-0"/>}
                     <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium text-zinc-800">{n.title}</p>
-                      {n.body && <p className="text-xs text-zinc-500 mt-0.5 line-clamp-2">{n.body}</p>}
+                      <p className="text-sm text-zinc-700 leading-snug">{n.message}</p>
                       <p className="text-xs text-zinc-400 mt-1">{timeAgo(n.created_at)}</p>
                     </div>
                   </div>

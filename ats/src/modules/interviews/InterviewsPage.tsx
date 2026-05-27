@@ -5,7 +5,7 @@
 import { useMemo, useState, useRef, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Loader2, CheckCircle, Clock, Briefcase, Calendar, X, ChevronDown, ShieldCheck } from 'lucide-react'
+import { Loader2, CheckCircle, Clock, Briefcase, Calendar, X, ChevronDown } from 'lucide-react'
 import { supabase } from '../../lib/supabaseClient'
 import { useAuthStore } from '../auth/authStore'
 import { formatDateTime } from '../../shared/utils/helpers'
@@ -84,47 +84,6 @@ export function InterviewsPage() {
   const qc = useQueryClient()
   const isInterviewer = hasRole(['interviewer'])
   const [filter, setFilter] = useState<FeedbackFilter>('pending')
-
-  // Fetch cost approval settings (reads from the cost_approval JSON key, same as CandidateProfilePage)
-  const { data: costApprovalSettings } = useQuery({
-    queryKey: ['app-settings', 'cost_approval'],
-    queryFn: async () => {
-      const { data } = await supabase.from('app_settings')
-        .select('value').eq('key', 'cost_approval').maybeSingle()
-      if (!data?.value) return null
-      try {
-        const parsed = JSON.parse(data.value)
-        return {
-          stage_name: (parsed.stage_name ?? 'Cost Approval') as string,
-          reviewer_ids: (parsed.reviewer_ids ?? []) as string[],
-        }
-      } catch { return null }
-    },
-    staleTime: 30_000,
-  })
-
-  const isCostApprovalReviewer = !!user && !!costApprovalSettings &&
-    (costApprovalSettings.reviewer_ids.includes(user.id) || user.role === 'super_admin')
-
-  const { data: costApprovalCandidates = [] } = useQuery({
-    queryKey: ['cost-approval-candidates', costApprovalSettings?.stage_name],
-    queryFn: async () => {
-      const { data } = await supabase.from('candidates')
-        .select('id, full_name, current_stage, job_id, cost_approval_decision, created_at, interview_notes, custom_data')
-        .eq('current_stage', costApprovalSettings!.stage_name)
-        .eq('status', 'active')
-        .order('created_at', { ascending: false })
-      const jobIds = [...new Set((data ?? []).map((c: any) => c.job_id).filter(Boolean))]
-      const jobsMap: Record<string, string> = {}
-      if (jobIds.length) {
-        const { data: jobs } = await supabase.from('jobs').select('id,title').in('id', jobIds)
-        jobs?.forEach((j: any) => { jobsMap[j.id] = j.title })
-      }
-      return (data ?? []).map((c: any) => ({ ...c, jobTitle: c.job_id ? jobsMap[c.job_id] ?? null : null }))
-    },
-    enabled: isCostApprovalReviewer && !!costApprovalSettings?.stage_name,
-    staleTime: 0,
-  })
 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [jobFilter, setJobFilter]     = useState<string>('')
@@ -612,132 +571,8 @@ export function InterviewsPage() {
         </div>
       )}
 
-      {/* ── Cost Approval — below interview section ── */}
-      {isCostApprovalReviewer && (
-        <div className="mt-6 space-y-4">
-          <div className="flex items-center gap-2">
-            <ShieldCheck className="w-4 h-4 text-amber-600"/>
-            <p className="text-sm font-semibold text-gray-900">Cost Approval</p>
-            <span className="text-xs text-gray-400 ml-1">
-              {costApprovalCandidates.length} candidate{costApprovalCandidates.length !== 1 ? 's' : ''}
-            </span>
-          </div>
-
-          {costApprovalCandidates.length === 0 ? (
-            <div className="bg-white rounded-xl border border-gray-200 flex flex-col items-center justify-center py-12 text-gray-400">
-              <CheckCircle className="w-8 h-8 mb-2 text-green-400"/>
-              <p className="text-sm font-medium text-gray-600">No candidates awaiting cost approval</p>
-            </div>
-          ) : (
-            <CostApprovalGroups candidates={costApprovalCandidates} navigate={navigate} />
-          )}
-        </div>
-      )}
       </>}
     </div>
   )
 }
 
-// ── Cost Approval Groups ─────────────────────────────────────────
-function stageKey(name: string) { return name.toLowerCase().replace(/[^a-z0-9]/g, '_') }
-
-function CandidateCACard({ c, navigate }: { c: any; navigate: (p: string) => void }) {
-  const [expanded, setExpanded] = useState(false)
-  const iNotes: Record<string, any[]> = c.interview_notes ?? {}
-  const customData: Record<string, string> = c.custom_data ?? {}
-  const stagesWithNotes = Object.entries(iNotes)
-    .filter(([k, v]) => k !== 'cost_approval' && k !== 'cost_approval_comments' && Array.isArray(v) && v.length > 0)
-
-  const ctcEntries = Object.entries(customData).filter(([k]) => /ctc|salary|compensation|package/i.test(k))
-
-  return (
-    <div className="border-b border-gray-100 last:border-0">
-      {/* Card header */}
-      <div className="flex items-start justify-between px-4 py-3.5 gap-3">
-        <div className="flex-1 min-w-0">
-          <button onClick={() => navigate(`/candidates/${c.id}`)}
-            className="text-sm font-semibold text-gray-900 hover:text-blue-600 transition-colors text-left block">
-            {c.full_name}
-          </button>
-          <p className="text-xs text-gray-400 mt-0.5">{c.jobTitle ?? '—'}</p>
-          {ctcEntries.length > 0 && (
-            <div className="flex flex-wrap gap-3 mt-1.5">
-              {ctcEntries.map(([k, v]) => (
-                <span key={k} className="text-xs text-gray-600">
-                  <span className="text-gray-400">{k.replace(/_/g, ' ')}: </span>{v}
-                </span>
-              ))}
-            </div>
-          )}
-        </div>
-        <div className="flex items-center gap-2 flex-shrink-0">
-          {stagesWithNotes.length > 0 && (
-            <button onClick={() => setExpanded(e => !e)}
-              className="text-xs text-gray-400 hover:text-gray-600 flex items-center gap-1 transition-colors">
-              <ChevronDown className={`w-3.5 h-3.5 transition-transform ${expanded ? 'rotate-180' : ''}`}/>
-              {expanded ? 'Hide' : 'History'}
-            </button>
-          )}
-          <button onClick={() => navigate(`/candidates/${c.id}`)}
-            className="text-xs px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg font-medium transition-colors flex items-center gap-1.5">
-            <ShieldCheck className="w-3 h-3"/> Review
-          </button>
-        </div>
-      </div>
-
-      {/* Knowledge Base — expandable */}
-      {expanded && stagesWithNotes.length > 0 && (
-        <div className="px-4 pb-4 space-y-3 bg-slate-50/50 border-t border-slate-100">
-          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide pt-3">Interview History</p>
-          {stagesWithNotes.map(([key, entries]) => (
-            <div key={key}>
-              <p className="text-xs font-medium text-slate-400 mb-1 capitalize">{key.replace(/_/g, ' ')}</p>
-              <div className="space-y-1.5">
-                {entries.map((e: any, i: number) => (
-                  <div key={i} className="bg-white rounded-lg px-3 py-2.5 border border-slate-200">
-                    <p className="text-sm text-slate-700 whitespace-pre-wrap leading-relaxed">{e.text}</p>
-                    <p className="text-xs text-slate-400 mt-1">
-                      <span className="font-medium text-slate-500">{e.author}</span>
-                      {e.timestamp && ` · ${new Date(e.timestamp).toLocaleDateString()}`}
-                    </p>
-                  </div>
-                ))}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}
-
-function CostApprovalGroups({ candidates, navigate }: { candidates: any[]; navigate: (p: string) => void }) {
-  const groups = [
-    { key: 'go_ahead',        label: 'Go Ahead',          border: 'border-green-200',  header: 'bg-green-50 border-green-100',  icon: <CheckCircle className="w-4 h-4 text-green-600"/>,  badge: 'bg-green-100 text-green-700',  span: '' },
-    { key: 'rework_required', label: 'Re-work Required',  border: 'border-orange-200', header: 'bg-orange-50 border-orange-100', icon: <X className="w-4 h-4 text-orange-600"/>,           badge: 'bg-orange-100 text-orange-700', span: '' },
-    { key: null,              label: 'Awaiting Decision', border: 'border-amber-200',  header: 'bg-amber-50 border-amber-100',  icon: <ShieldCheck className="w-4 h-4 text-amber-600"/>,  badge: 'bg-amber-100 text-amber-700',  span: 'sm:col-span-2' },
-  ]
-
-  return (
-    <div className="grid gap-4 sm:grid-cols-2">
-      {groups.map(({ key, label, border, header, icon, badge, span }) => {
-        const group = key
-          ? candidates.filter((c: any) => c.cost_approval_decision === key)
-          : candidates.filter((c: any) => !c.cost_approval_decision)
-        if (!group.length) return null
-        return (
-          <div key={label} className={`bg-white rounded-xl border overflow-hidden ${border} ${span}`}>
-            <div className={`flex items-center gap-2 px-4 py-3 border-b ${header}`}>
-              {icon}
-              <p className="text-sm font-semibold text-gray-800">{label}</p>
-              <span className={`ml-auto text-xs px-2 py-0.5 rounded-full font-medium ${badge}`}>{group.length}</span>
-            </div>
-            {group.map((c: any) => (
-              <CandidateCACard key={c.id} c={c} navigate={navigate} />
-            ))}
-          </div>
-        )
-      })}
-    </div>
-  )
-}

@@ -10,7 +10,8 @@ const CandidateProfile = lazy(() => import('../modules/candidates/CandidateProfi
 const JobsPage         = lazy(() => import('../modules/jobs/JobsPage').then(m => ({ default: m.JobsPage })))
 const UploadPage       = lazy(() => import('../modules/upload/UploadPage').then(m => ({ default: m.UploadPage })))
 const InterviewsPage   = lazy(() => import('../modules/interviews/InterviewsPage').then(m => ({ default: m.InterviewsPage })))
-const SettingsPage     = lazy(() => import('../modules/settings/SettingsPage'))
+const SettingsPage       = lazy(() => import('../modules/settings/SettingsPage'))
+const CostApprovalPage   = lazy(() => import('../modules/candidates/CostApprovalPage').then(m => ({ default: m.CostApprovalPage })))
 
 function PageLoader() {
   return <div className="flex items-center justify-center py-24"><div className="w-6 h-6 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" /></div>
@@ -34,6 +35,9 @@ export function AppRouter() {
             {/* Interviewer */}
             <Route path="/interviews" element={
               <AuthGuard roles={['interviewer','admin','super_admin','hr_team']}><InterviewsPage /></AuthGuard>
+            } />
+            <Route path="/cost-approval" element={
+              <AuthGuard roles={['interviewer','admin','super_admin','hr_team']}><CostApprovalPage /></AuthGuard>
             } />
 
             {/* Admin + HR Team + Super Admin */}
