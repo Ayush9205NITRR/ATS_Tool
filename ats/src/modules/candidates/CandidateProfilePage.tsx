@@ -1026,6 +1026,32 @@ export function CandidateProfilePage() {
             )}
           </div>
 
+          {/* Interview Schedule — shown for interviewers (hidden in left sidebar for them) */}
+          {isInterviewer && (
+            <div className={`rounded-xl border px-4 py-3 flex items-center gap-3 ${
+              (candidate as any).interview_date
+                ? 'border-blue-100 bg-blue-50/60'
+                : 'border-gray-100 bg-gray-50/40'
+            }`}>
+              <div className="w-8 h-8 rounded-lg bg-blue-100 flex items-center justify-center flex-shrink-0">
+                <ClipboardList className="w-4 h-4 text-blue-600"/>
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-0.5">Your Interview</p>
+                {(candidate as any).interview_date ? (
+                  <p className="text-sm font-medium text-gray-900">{formatDateTime((candidate as any).interview_date)}</p>
+                ) : (
+                  <p className="text-sm text-gray-400 italic">Not scheduled yet</p>
+                )}
+              </div>
+              <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${
+                feedbackSubmitted ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'
+              }`}>
+                {feedbackSubmitted ? 'Feedback Submitted' : 'Pending Feedback'}
+              </span>
+            </div>
+          )}
+
           {/* General Notes — always visible (except agency) */}
           {!isAgency && (
           <div>
@@ -1425,75 +1451,78 @@ export function CandidateProfilePage() {
             </>
           )}
 
-          {/* ── Stage Decision — visible to admin/HR/interviewer ── */}
-          {canAddNotes && !isAgency && (
-            <div className="rounded-xl border border-gray-200 bg-gray-50/60 px-5 py-4 space-y-3">
-              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Decision</p>
-              {actionError && (
-                <div className="bg-red-50 border border-red-200 rounded-lg px-3 py-2 flex items-start gap-2">
-                  <XCircle className="w-4 h-4 text-red-500 flex-shrink-0 mt-0.5"/>
-                  <p className="text-xs text-red-700">{actionError}</p>
-                </div>
-              )}
-              <div className="flex flex-wrap items-center gap-2">
-                {(() => {
-                  const idx = stages.indexOf((candidate as any).current_stage)
-                  const nextStage = idx >= 0 && idx < stages.length - 1 ? stages[idx + 1] : null
-                  const isRejected = (candidate as any).status === 'rejected'
-                  return (
-                    <>
-                      {nextStage && !isRejected && (
-                        <button
-                          onClick={() => applyStageDecision('next_round')}
-                          disabled={stageDecisionSaving}
-                          className="flex items-center gap-1.5 px-3.5 py-2 bg-green-600 hover:bg-green-700 disabled:bg-gray-300 text-white text-sm font-medium rounded-lg transition-colors">
-                          {stageDecisionSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin"/> : <ChevronRight className="w-3.5 h-3.5"/>}
-                          Select for Next Round
-                        </button>
-                      )}
-                      {isRejected ? (
-                        <span className="flex items-center gap-1.5 px-3.5 py-2 bg-red-100 text-red-700 text-sm font-medium rounded-lg">
-                          <XCircle className="w-3.5 h-3.5"/> Rejected
-                        </span>
-                      ) : (
-                        <button
-                          onClick={() => applyStageDecision('reject')}
-                          disabled={stageDecisionSaving}
-                          className="flex items-center gap-1.5 px-3.5 py-2 bg-white border border-red-300 hover:bg-red-50 disabled:bg-gray-100 text-red-600 text-sm font-medium rounded-lg transition-colors">
-                          {stageDecisionSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin"/> : <XCircle className="w-3.5 h-3.5"/>}
-                          Reject
-                        </button>
-                      )}
-                    </>
-                  )
-                })()}
-              </div>
+          {/* ── Decision + Feedback — visible to admin/HR/interviewer ── */}
+          {canAddNotes && !isAgency && (() => {
+            const stageIdx   = stages.indexOf((candidate as any).current_stage)
+            const nextStage  = stageIdx >= 0 && stageIdx < stages.length - 1 ? stages[stageIdx + 1] : null
+            const isRejected = (candidate as any).status === 'rejected'
+            const isBusy     = stageDecisionSaving || submitFeedback.isPending
 
-              {/* Submit feedback button for interviewers */}
-              {isInterviewer && (
-                <div className={`pt-2 border-t border-gray-200 flex items-center gap-4 ${feedbackSubmitted ? 'opacity-70' : ''}`}>
-                  {feedbackSubmitted ? (
-                    <div className="flex items-center gap-2">
-                      <CheckCircle className="w-4 h-4 text-green-600"/>
-                      <p className="text-sm text-green-700 font-medium">Feedback submitted</p>
-                    </div>
-                  ) : (
-                    <>
-                      <p className="text-xs text-gray-500 flex-1">Add notes above, then submit.</p>
-                      {feedbackErr && <p className="text-xs text-red-600">{feedbackErr}</p>}
-                      <button onClick={() => submitFeedback.mutate()} disabled={submitFeedback.isPending}
-                        className="flex-shrink-0 px-4 py-2 bg-slate-800 hover:bg-slate-700 disabled:bg-gray-300 text-white text-sm font-medium rounded-lg transition-colors flex items-center gap-2">
-                        {submitFeedback.isPending
-                          ? <><Loader2 className="w-4 h-4 animate-spin"/>Submitting…</>
-                          : <><CheckCircle className="w-4 h-4"/>Submit Feedback</>
-                        }
-                      </button>
-                    </>
+            const handleNext = async () => {
+              if (isInterviewer && !feedbackSubmitted) await submitFeedback.mutateAsync()
+              applyStageDecision('next_round')
+            }
+            const handleReject = async () => {
+              if (isInterviewer && !feedbackSubmitted) await submitFeedback.mutateAsync()
+              applyStageDecision('reject')
+            }
+
+            return (
+              <div className="rounded-xl border border-gray-200 bg-gray-50/50 px-5 py-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Decision</p>
+                  {isInterviewer && feedbackSubmitted && (
+                    <span className="flex items-center gap-1 text-xs text-green-600 font-medium">
+                      <CheckCircle className="w-3.5 h-3.5"/> Feedback submitted
+                    </span>
                   )}
                 </div>
-              )}
-            </div>
-          )}
+
+                {actionError && (
+                  <div className="bg-red-50 border border-red-200 rounded-lg px-3 py-2 flex items-start gap-2">
+                    <XCircle className="w-4 h-4 text-red-500 flex-shrink-0 mt-0.5"/>
+                    <p className="text-xs text-red-700">{actionError}</p>
+                  </div>
+                )}
+
+                {isRejected ? (
+                  <div className="flex items-center gap-2 px-3.5 py-2 bg-red-100 text-red-700 text-sm font-medium rounded-lg w-fit">
+                    <XCircle className="w-4 h-4"/> Rejected
+                  </div>
+                ) : (
+                  <div className="flex flex-wrap gap-2">
+                    {nextStage && (
+                      <button onClick={handleNext} disabled={isBusy}
+                        className="flex items-center gap-1.5 px-4 py-2 bg-green-600 hover:bg-green-700 disabled:bg-gray-300 text-white text-sm font-medium rounded-lg transition-colors">
+                        {isBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin"/> : <ChevronRight className="w-3.5 h-3.5"/>}
+                        Select for Next Round
+                      </button>
+                    )}
+                    <button onClick={handleReject} disabled={isBusy}
+                      className="flex items-center gap-1.5 px-4 py-2 bg-white border border-red-300 hover:bg-red-50 disabled:bg-gray-100 text-red-600 text-sm font-medium rounded-lg transition-colors">
+                      {isBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin"/> : <XCircle className="w-3.5 h-3.5"/>}
+                      Reject
+                    </button>
+                    {/* For interviewers: standalone submit (no stage change) */}
+                    {isInterviewer && !feedbackSubmitted && (
+                      <button onClick={() => submitFeedback.mutate()} disabled={isBusy}
+                        className="flex items-center gap-1.5 px-4 py-2 bg-slate-800 hover:bg-slate-700 disabled:bg-gray-300 text-white text-sm font-medium rounded-lg transition-colors ml-auto">
+                        {submitFeedback.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin"/> : <CheckCircle className="w-3.5 h-3.5"/>}
+                        Submit Feedback
+                      </button>
+                    )}
+                  </div>
+                )}
+                {isInterviewer && !isRejected && (
+                  <p className="text-xs text-gray-400">
+                    {feedbackSubmitted
+                      ? 'Your feedback is recorded. You can still change the stage decision.'
+                      : 'Selecting a decision will also submit your feedback.'}
+                  </p>
+                )}
+              </div>
+            )
+          })()}
         </div>
       </div>
 
