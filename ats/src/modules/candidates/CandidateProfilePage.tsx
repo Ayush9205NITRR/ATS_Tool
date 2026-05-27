@@ -331,58 +331,67 @@ export function CandidateProfilePage() {
     try {
       const decisionLabel = caDecision === 'go_ahead' ? 'Go Ahead' : 'Re-work Required'
 
-      const existing = (candidate as any)?.interview_notes ?? {}
-      const caEntry = {
-        text: caNotes || '',
-        author: user!.full_name,
-        authorId: user!.id,
-        timestamp: new Date().toISOString(),
-        decision: caDecision,
-      }
-      const newNotes = { ...existing, cost_approval: [...(existing.cost_approval ?? []), caEntry] }
+      // Use SECURITY DEFINER RPC so interviewers (CA panel) can bypass the
+      // candidates UPDATE RLS policy which only allows admin/hr_team/super_admin.
+      const { data: savedNotes, error: rpcError } = await supabase.rpc('submit_cost_approval', {
+        p_candidate_id: id!,
+        p_decision: caDecision,
+        p_notes: caNotes || '',
+      })
 
-      const { error } = await supabase.from('candidates').update({
-        interview_notes: newNotes,
-      }).eq('id', id!)
-      if (error) throw error
-
-      // Optimistically update the React Query cache immediately so UI reflects decision at once
-      const cached = qc.getQueryData<any>(['candidate', id])
-      if (cached) {
-        qc.setQueryData(['candidate', id], { ...cached, interview_notes: newNotes })
-      }
-
-      // Also try dedicated columns (might not exist if migration not run — ignore errors)
-      await supabase.from('candidates').update({
-        cost_approval_decision: caDecision,
-        cost_approval_notes: caNotes || null,
-        cost_approval_submitted_at: new Date().toISOString(),
-        cost_approval_submitted_by: user!.id,
-      }).eq('id', id!).then(() => {}, () => {})
-
-      // Notify super_admin + admin + hr_team
-      const { data: notifyUsers } = await supabase.from('users')
-        .select('id')
-        .in('role', ['super_admin', 'admin', 'hr_team'])
-        .eq('is_active', true)
-      if (notifyUsers?.length) {
-        await supabase.from('notifications').insert(
-          notifyUsers.map(u => ({
-            user_id: u.id,
-            type: 'cost_approval',
-            title: `Cost Approval: ${candidate.full_name}`,
-            body: `Decision: ${decisionLabel} · by ${user!.full_name}`,
-            metadata: { candidate_id: id! },
-          }))
-        )
+      if (rpcError) {
+        // RPC not yet created (migration not run) → fall back to direct update (works for admin/HR)
+        if ((rpcError as any).code === 'PGRST202' || rpcError.message?.includes('Could not find')) {
+          const existing = (candidate as any)?.interview_notes ?? {}
+          const caEntry = {
+            text: caNotes || '',
+            author: user!.full_name,
+            authorId: user!.id,
+            timestamp: new Date().toISOString(),
+            decision: caDecision,
+          }
+          const newNotes = { ...existing, cost_approval: [...(existing.cost_approval ?? []), caEntry] }
+          const { data: updatedRows, error: updateError } = await supabase.from('candidates')
+            .update({ interview_notes: newNotes })
+            .eq('id', id!)
+            .select('id')
+          if (updateError) throw updateError
+          if (!updatedRows?.length) throw new Error('Permission denied. Run supabase-ca-migration.sql in your Supabase SQL editor to enable CA panel decision saving.')
+          qc.setQueryData(['candidate', id], { ...(qc.getQueryData<any>(['candidate', id]) ?? {}), interview_notes: newNotes })
+        } else {
+          throw rpcError
+        }
+      } else if (savedNotes) {
+        // RPC returned the new interview_notes — update cache immediately
+        const cached = qc.getQueryData<any>(['candidate', id])
+        if (cached) qc.setQueryData(['candidate', id], { ...cached, interview_notes: savedNotes })
       }
 
-      // Invalidate list view only; individual candidate cache is already correct from setQueryData above
+      // Force refetch to confirm DB state persisted
+      qc.invalidateQueries({ queryKey: ['candidate', id] })
       qc.invalidateQueries({ queryKey: ['candidates'] })
+
+      // Notify super_admin + admin + hr_team (non-blocking — ignore errors)
+      supabase.from('users').select('id')
+        .in('role', ['super_admin', 'admin', 'hr_team']).eq('is_active', true)
+        .then(({ data: notifyUsers }) => {
+          if (notifyUsers?.length) {
+            supabase.from('notifications').insert(
+              notifyUsers.map(u => ({
+                user_id: u.id,
+                type: 'cost_approval',
+                title: `Cost Approval: ${candidate.full_name}`,
+                body: `Decision: ${decisionLabel} · by ${user!.full_name}`,
+                metadata: { candidate_id: id! },
+              }))
+            )
+          }
+        })
+
       setCaSaveStatus('saved')
       setCaEditMode(false)
       setTimeout(() => setCaSaveStatus('idle'), 3000)
-    } catch (err) {
+    } catch (err: any) {
       console.error('[submitCostApproval]', err)
       setCaSaveStatus('error')
     }
@@ -395,14 +404,30 @@ export function CandidateProfilePage() {
     const comments: NoteEntry[] = existing['cost_approval_comments'] ?? []
     const newEntry = { text: caComment.trim(), author: user!.full_name, authorId: user!.id, timestamp: new Date().toISOString() }
     const newNotes = { ...existing, cost_approval_comments: [...comments, newEntry] }
-    const { error } = await supabase.from('candidates').update({
-      interview_notes: newNotes,
-    }).eq('id', id!)
-    if (error) {
-      console.error('[submitCAComment]', error)
+
+    // Try RPC first (bypasses RLS for interviewers); fall back to direct update for admin/HR
+    let saved = false
+    const { data: rpcResult, error: rpcErr } = await supabase.rpc('submit_ca_comment', {
+      p_candidate_id: id!,
+      p_comment_text: caComment.trim(),
+    })
+    if (!rpcErr && rpcResult) {
+      qc.setQueryData(['candidate', id], { ...(qc.getQueryData<any>(['candidate', id]) ?? {}), interview_notes: rpcResult })
+      saved = true
     } else {
-      const cached = qc.getQueryData<any>(['candidate', id])
-      if (cached) qc.setQueryData(['candidate', id], { ...cached, interview_notes: newNotes })
+      // Fallback: direct update (works for admin/HR)
+      const { data: updatedRows, error: updateError } = await supabase.from('candidates')
+        .update({ interview_notes: newNotes }).eq('id', id!).select('id')
+      if (!updateError && updatedRows?.length) {
+        const cached = qc.getQueryData<any>(['candidate', id])
+        if (cached) qc.setQueryData(['candidate', id], { ...cached, interview_notes: newNotes })
+        saved = true
+      } else {
+        console.error('[submitCAComment]', updateError ?? 'Permission denied (0 rows updated)')
+      }
+    }
+
+    if (saved) {
       setCaComment('')
       qc.invalidateQueries({ queryKey: ['candidate', id] })
     }
@@ -465,9 +490,18 @@ export function CandidateProfilePage() {
       .map(stageKeyOf)
   )
 
+  // Declare CA context variables early so visibleNotesSections can use them
+  const costApprovalPipelineIdxEarly = stages.findIndex(s => stageKeyOf(s) === stageKeyOf(costApprovalStageName))
+  const hasReachedOrPassedCAEarly = costApprovalPipelineIdxEarly >= 0 && currentStageIdx >= costApprovalPipelineIdxEarly
+  const isCAPanel = costApprovalPanelIds.includes(user?.id ?? '')
+
   const visibleNotesSections = (() => {
+    // CA panel members at cost approval stage: show ALL reached stages as context
+    if (isInterviewer && isCAPanel && hasReachedOrPassedCAEarly) {
+      return ALL_NOTES_SECTIONS.filter(s => reachedStageKeys.has(s.key))
+    }
     if (isInterviewer) {
-      // Interviewers see ONLY their current stage
+      // Regular interviewers see ONLY their current stage
       const key = stageKeyOf(candidate.current_stage)
       const match = ALL_NOTES_SECTIONS.find(s => s.key === key)
       return match ? [match] : []
@@ -499,11 +533,10 @@ export function CandidateProfilePage() {
 
   // Cost approval context
   const isInCostApproval = stageKeyOf(candidate.current_stage) === stageKeyOf(costApprovalStageName)
-  const isCAPanel = costApprovalPanelIds.includes(user?.id ?? '')
+  // isCAPanel, costApprovalPipelineIdxEarly, hasReachedOrPassedCAEarly declared above for visibleNotesSections
   const hasCostApprovalRecord = (interviewNotes['cost_approval'] ?? []).length > 0 || !!(candidate as any).cost_approval_decision
-  const costApprovalPipelineIdx = stages.findIndex(s => stageKeyOf(s) === stageKeyOf(costApprovalStageName))
-  // at or past CA stage (by pipeline index — more reliable than name comparison alone)
-  const hasReachedOrPassedCA = costApprovalPipelineIdx >= 0 && currentStageIdx >= costApprovalPipelineIdx
+  const costApprovalPipelineIdx = costApprovalPipelineIdxEarly
+  const hasReachedOrPassedCA = hasReachedOrPassedCAEarly
   const canSeeCostApproval = (isInCostApproval || hasReachedOrPassedCA || hasCostApprovalRecord) && (canEdit || isCAPanel)
   const canSubmitCostApproval = isCAPanel && (isInCostApproval || hasReachedOrPassedCA || hasCostApprovalRecord)
 
@@ -1145,8 +1178,9 @@ export function CandidateProfilePage() {
           <div>
             <p className="text-sm font-semibold text-gray-700 mb-3 px-1">Interview Notes</p>
 
-            {/* ── Interviewer: Knowledge Base (only stages with notes, read-only) ── */}
-            {isInterviewer && (() => {
+            {/* ── Interviewer: Knowledge Base (previous rounds, read-only) ──
+                Hidden for CA panel members since visibleNotesSections already shows all stages ── */}
+            {isInterviewer && !(isCAPanel && hasReachedOrPassedCA) && (() => {
               const currentIdx = stages.indexOf(candidate.current_stage)
               const prevStagesWithNotes = currentIdx > 0
                 ? stages.slice(0, currentIdx)
@@ -1260,8 +1294,9 @@ export function CandidateProfilePage() {
                       </div>
                     )}
 
-                    {/* Input — HR can only add to screening; other roles follow canAddNotes */}
-                    {canAddNotes && (!isHR || key === 'screening') && (
+                    {/* Input — CA panel at CA stage: read-only (decision goes in CA section)
+                        HR: screening only; other roles: follow canAddNotes */}
+                    {canAddNotes && (!isHR || key === 'screening') && !(isCAPanel && hasReachedOrPassedCA) && (
                       <div className="flex gap-2 items-end pb-3 pl-3.5">
                         <textarea rows={3} value={draft}
                           onChange={e => setDraftNotes(p => ({ ...p, [key]: e.target.value }))}
@@ -1274,7 +1309,7 @@ export function CandidateProfilePage() {
                         </button>
                       </div>
                     )}
-                    {entries.length === 0 && !(canAddNotes && (!isHR || key === 'screening')) && (
+                    {entries.length === 0 && (!(canAddNotes && (!isHR || key === 'screening')) || (isCAPanel && hasReachedOrPassedCA)) && (
                       <p className="text-xs text-gray-400 pl-3.5 pb-3 italic">No notes yet.</p>
                     )}
                   </div>
