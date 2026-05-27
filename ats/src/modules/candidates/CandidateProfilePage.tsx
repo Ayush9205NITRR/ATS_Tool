@@ -80,9 +80,7 @@ export function CandidateProfilePage() {
   const [feedbackErr, setFeedbackErr] = useState<string | null>(null)
   const [editingNote, setEditingNote] = useState<{ section: string; index: number; text: string } | null>(null)
   const [savingEditNote, setSavingEditNote] = useState(false)
-  const [actionError, setActionError] = useState<string | null>(null)
-  // Stage decision
-  const [stageDecisionSaving, setStageDecisionSaving] = useState(false)
+  const [decisionEditMode, setDecisionEditMode] = useState(false)
   // Cost approval state
   const [caDecision, setCaDecision]   = useState<'go_ahead' | 'rework_required' | ''>('')
   const [caNotes, setCaNotes]         = useState('')
@@ -311,6 +309,7 @@ export function CandidateProfilePage() {
       }
     },
     onSuccess: async () => {
+      setDecisionEditMode(false)
       await refetchFeedback()
       qc.invalidateQueries({ queryKey: ['my-feedback', id, user?.id] })
       qc.invalidateQueries({ queryKey: ['my-interviews'] })
@@ -328,7 +327,6 @@ export function CandidateProfilePage() {
     const draft = draftNotes[sectionKey]?.trim()
     if (!draft) return
     setSavingNote(sectionKey)
-    setActionError(null)
     const existing = (candidate as any)?.interview_notes ?? {}
     const entries: NoteEntry[] = existing[sectionKey] ?? []
     const newEntry: NoteEntry = { text: draft, author: user!.full_name, authorId: user!.id, timestamp: new Date().toISOString() }
@@ -353,7 +351,7 @@ export function CandidateProfilePage() {
         throw rpcError
       }
     } catch (err: any) {
-      setActionError(err?.message ?? 'Failed to save note')
+      console.error('[saveNote]', err)
       setSavingNote(null)
       return
     }
@@ -368,57 +366,9 @@ export function CandidateProfilePage() {
       if (cached) qc.setQueryData(['candidate', id], { ...cached, interview_notes: updated })
       setDraftNotes(p => ({ ...p, [sectionKey]: '' }))
     } catch (err: any) {
-      setActionError(err?.message ?? 'Failed to save note')
+      console.error('[saveNote fallback]', err)
     }
     setSavingNote(null)
-  }
-
-  const applyStageDecision = async (action: 'next_round' | 'reject') => {
-    setStageDecisionSaving(true)
-    setActionError(null)
-    let newStage = (candidate as any).current_stage
-    let newStatus = (candidate as any).status ?? 'active'
-    if (action === 'next_round') {
-      const idx = stages.indexOf((candidate as any).current_stage)
-      newStage = idx >= 0 && idx < stages.length - 1 ? stages[idx + 1] : newStage
-    } else {
-      newStatus = 'rejected'
-    }
-
-    try {
-      const { error: rpcError } = await supabase.rpc('set_candidate_stage', {
-        p_candidate_id: id!,
-        p_new_stage: newStage,
-        p_new_status: newStatus,
-      })
-      if (!rpcError) {
-        qc.invalidateQueries({ queryKey: ['candidate', id] })
-        qc.invalidateQueries({ queryKey: ['candidates'] })
-        setStageDecisionSaving(false)
-        return
-      }
-      if ((rpcError as any).code !== 'PGRST202' && !rpcError.message?.includes('Could not find')) {
-        throw rpcError
-      }
-    } catch (err: any) {
-      setActionError(err?.message ?? 'Failed to update stage')
-      setStageDecisionSaving(false)
-      return
-    }
-
-    // Direct update fallback
-    try {
-      const { data: rows, error } = await supabase.from('candidates')
-        .update({ current_stage: newStage, status: newStatus, updated_at: new Date().toISOString() })
-        .eq('id', id!).select('id')
-      if (error) throw error
-      if (!rows?.length) throw new Error('Run supabase-ca-migration.sql in Supabase SQL Editor to enable this for interviewers')
-      qc.invalidateQueries({ queryKey: ['candidate', id] })
-      qc.invalidateQueries({ queryKey: ['candidates'] })
-    } catch (err: any) {
-      setActionError(err?.message ?? 'Failed to update stage')
-    }
-    setStageDecisionSaving(false)
   }
 
   // Edit an existing note — only the original author can edit
@@ -1435,7 +1385,7 @@ export function CandidateProfilePage() {
                     )}
 
                     {/* Input */}
-                    {canAddNotes && (!isHR || key === 'screening') && (
+                    {canAddNotes && (
                       <div className="flex gap-2 items-end pb-3 pl-3.5">
                         <textarea rows={3} value={draft}
                           onChange={e => setDraftNotes(p => ({ ...p, [key]: e.target.value }))}
@@ -1448,7 +1398,7 @@ export function CandidateProfilePage() {
                         </button>
                       </div>
                     )}
-                    {entries.length === 0 && !(canAddNotes && (!isHR || key === 'screening')) && (
+                    {entries.length === 0 && !canAddNotes && (
                       <p className="text-xs text-gray-400 pl-3.5 pb-3 italic">No notes yet.</p>
                     )}
                   </div>
@@ -1490,29 +1440,49 @@ export function CandidateProfilePage() {
           {/* ── Interview Decision — Interviewers only ── */}
           {isInterviewer && (
             <div className={`rounded-xl border-2 px-5 py-4 ${
-              feedbackDecision === 'yes' ? 'border-green-200 bg-green-50/40' :
-              feedbackDecision === 'no'  ? 'border-red-200 bg-red-50/40' :
+              feedbackDecision === 'yes' && !decisionEditMode ? 'border-green-200 bg-green-50/40' :
+              feedbackDecision === 'no'  && !decisionEditMode ? 'border-red-200 bg-red-50/40' :
               'border-slate-200 bg-slate-50/40'
             }`}>
-              {feedbackDecision === 'yes' ? (
-                <div className="flex items-center gap-2.5">
-                  <CheckCircle className="w-5 h-5 text-green-600 flex-shrink-0"/>
-                  <div>
-                    <p className="text-sm font-semibold text-green-800">Selected for Next Round</p>
-                    <p className="text-xs text-green-600 mt-0.5">Candidate has been advanced to the next stage.</p>
+              {feedbackDecision === 'yes' && !decisionEditMode ? (
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2.5">
+                    <CheckCircle className="w-5 h-5 text-green-600 flex-shrink-0"/>
+                    <div>
+                      <p className="text-sm font-semibold text-green-800">Selected for Next Round</p>
+                      <p className="text-xs text-green-600 mt-0.5">Candidate has been advanced to the next stage.</p>
+                    </div>
                   </div>
+                  <button onClick={() => setDecisionEditMode(true)}
+                    className="text-xs text-gray-400 hover:text-gray-600 flex items-center gap-1 ml-4">
+                    <Pencil className="w-3 h-3"/> Edit
+                  </button>
                 </div>
-              ) : feedbackDecision === 'no' ? (
-                <div className="flex items-center gap-2.5">
-                  <XCircle className="w-5 h-5 text-red-500 flex-shrink-0"/>
-                  <div>
-                    <p className="text-sm font-semibold text-red-700">{(myFeedback as any)?.stage ?? candidate.current_stage} Reject</p>
-                    <p className="text-xs text-red-500 mt-0.5">Candidate was rejected at this stage.</p>
+              ) : feedbackDecision === 'no' && !decisionEditMode ? (
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2.5">
+                    <XCircle className="w-5 h-5 text-red-500 flex-shrink-0"/>
+                    <div>
+                      <p className="text-sm font-semibold text-red-700">{(myFeedback as any)?.stage ?? candidate.current_stage} Reject</p>
+                      <p className="text-xs text-red-500 mt-0.5">Candidate was rejected at this stage.</p>
+                    </div>
                   </div>
+                  <button onClick={() => setDecisionEditMode(true)}
+                    className="text-xs text-gray-400 hover:text-gray-600 flex items-center gap-1 ml-4">
+                    <Pencil className="w-3 h-3"/> Edit
+                  </button>
                 </div>
               ) : (
                 <>
-                  <p className="text-sm font-semibold text-gray-800 mb-1">Your Decision</p>
+                  <div className="flex items-center justify-between mb-1">
+                    <p className="text-sm font-semibold text-gray-800">Your Decision</p>
+                    {decisionEditMode && (
+                      <button onClick={() => setDecisionEditMode(false)}
+                        className="text-xs text-gray-400 hover:text-gray-600 flex items-center gap-1">
+                        <X className="w-3 h-3"/> Cancel
+                      </button>
+                    )}
+                  </div>
                   <p className="text-xs text-gray-500 mb-3">Add interview notes above, then make a decision.</p>
                   {feedbackErr && <p className="text-xs text-red-600 mb-2">{feedbackErr}</p>}
                   <div className="flex gap-3">
