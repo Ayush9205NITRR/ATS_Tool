@@ -6,7 +6,7 @@ import { useState, useCallback, useEffect, useRef } from 'react'
 import {
   ArrowLeft, ExternalLink, Phone, Mail, Linkedin, FileText,
   Loader2, Send, Pencil, Check, X, ChevronDown, CheckCircle,
-  ClipboardList, ShieldCheck, BookOpen
+  ClipboardList, ShieldCheck, BookOpen, ChevronRight, XCircle
 } from 'lucide-react'
 import { useCandidate, useUpdateStage } from './useCandidates'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -78,9 +78,10 @@ export function CandidateProfilePage() {
   const [draftNotes, setDraftNotes] = useState<Record<string, string>>({})
   const [savingNote, setSavingNote] = useState<string | null>(null)
   const [feedbackErr, setFeedbackErr] = useState<string | null>(null)
-  // Note editing: key = `${sectionKey}:${entryIndex}`, value = draft text
   const [editingNote, setEditingNote] = useState<{ section: string; index: number; text: string } | null>(null)
   const [savingEditNote, setSavingEditNote] = useState(false)
+  // Stage decision
+  const [stageDecisionSaving, setStageDecisionSaving] = useState(false)
   // Cost approval state
   const [caDecision, setCaDecision]   = useState<'go_ahead' | 'rework_required' | ''>('')
   const [caNotes, setCaNotes]         = useState('')
@@ -291,18 +292,65 @@ export function CandidateProfilePage() {
     const draft = draftNotes[sectionKey]?.trim()
     if (!draft) return
     setSavingNote(sectionKey)
-    const existing = (candidate as any)?.interview_notes ?? {}
-    const entries: NoteEntry[] = existing[sectionKey] ?? []
-    const newEntry: NoteEntry = { text: draft, author: user!.full_name, authorId: user!.id, timestamp: new Date().toISOString() }
-    const newNotes = { ...existing, [sectionKey]: [...entries, newEntry] }
-    const { error } = await supabase.from('candidates').update({ interview_notes: newNotes }).eq('id', id!)
-    if (error) { console.error('[saveNote]', error) }
-    else {
-      const cached = qc.getQueryData<any>(['candidate', id])
-      if (cached) qc.setQueryData(['candidate', id], { ...cached, interview_notes: newNotes })
+    try {
+      const { data: newNotes, error: rpcError } = await supabase.rpc('submit_interview_note', {
+        p_candidate_id: id!,
+        p_section_key: sectionKey,
+        p_note_text: draft,
+      })
+      if (rpcError) {
+        if ((rpcError as any).code === 'PGRST202' || rpcError.message?.includes('Could not find')) {
+          // RPC not deployed yet — fall back to direct update (admin/HR only)
+          const existing = (candidate as any)?.interview_notes ?? {}
+          const entries: NoteEntry[] = existing[sectionKey] ?? []
+          const newEntry: NoteEntry = { text: draft, author: user!.full_name, authorId: user!.id, timestamp: new Date().toISOString() }
+          const updated = { ...existing, [sectionKey]: [...entries, newEntry] }
+          const { data: rows, error: updateErr } = await supabase.from('candidates').update({ interview_notes: updated }).eq('id', id!).select('id')
+          if (updateErr) throw updateErr
+          if (!rows?.length) throw new Error('Permission denied — note not saved')
+          const cached = qc.getQueryData<any>(['candidate', id])
+          if (cached) qc.setQueryData(['candidate', id], { ...cached, interview_notes: updated })
+        } else { throw rpcError }
+      } else {
+        const cached = qc.getQueryData<any>(['candidate', id])
+        if (cached) qc.setQueryData(['candidate', id], { ...cached, interview_notes: newNotes })
+      }
       setDraftNotes(p => ({ ...p, [sectionKey]: '' }))
+    } catch (err) {
+      console.error('[saveNote]', err)
     }
     setSavingNote(null)
+  }
+
+  const applyStageDecision = async (action: 'next_round' | 'reject') => {
+    setStageDecisionSaving(true)
+    try {
+      let newStage = (candidate as any).current_stage
+      let newStatus = (candidate as any).status ?? 'active'
+      if (action === 'next_round') {
+        const idx = stages.indexOf((candidate as any).current_stage)
+        newStage = idx >= 0 && idx < stages.length - 1 ? stages[idx + 1] : newStage
+      } else {
+        newStatus = 'rejected'
+      }
+      const { data: savedNotes, error: rpcError } = await supabase.rpc('set_candidate_stage', {
+        p_candidate_id: id!,
+        p_new_stage: newStage,
+        p_new_status: newStatus,
+      })
+      if (rpcError) {
+        if ((rpcError as any).code === 'PGRST202' || rpcError.message?.includes('Could not find')) {
+          // Fallback for admin/HR (direct update allowed by RLS)
+          const { error } = await supabase.from('candidates').update({ current_stage: newStage, status: newStatus, updated_at: new Date().toISOString() }).eq('id', id!)
+          if (error) throw error
+        } else { throw rpcError }
+      }
+      qc.invalidateQueries({ queryKey: ['candidate', id] })
+      qc.invalidateQueries({ queryKey: ['candidates'] })
+    } catch (err) {
+      console.error('[applyStageDecision]', err)
+    }
+    setStageDecisionSaving(false)
   }
 
   // Edit an existing note — only the original author can edit
@@ -1344,32 +1392,68 @@ export function CandidateProfilePage() {
             </>
           )}
 
-          {/* ── Submit Feedback — Interviewers only, simple button at bottom ── */}
-          {isInterviewer && (
-            <div className={`rounded-xl border-2 px-5 py-4 flex items-center gap-4 ${feedbackSubmitted ? 'border-green-200 bg-green-50/40' : 'border-slate-200 bg-slate-50/40'}`}>
-              {feedbackSubmitted ? (
-                <div className="flex items-center gap-2.5">
-                  <CheckCircle className="w-5 h-5 text-green-600 flex-shrink-0"/>
-                  <div>
-                    <p className="text-sm font-semibold text-green-800">Feedback Submitted</p>
-                    <p className="text-xs text-green-600 mt-0.5">Your notes have been recorded.</p>
-                  </div>
+          {/* ── Stage Decision — visible to admin/HR/interviewer ── */}
+          {canAddNotes && !isAgency && (
+            <div className="rounded-xl border border-gray-200 bg-gray-50/60 px-5 py-4 space-y-3">
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Decision</p>
+              <div className="flex flex-wrap items-center gap-2">
+                {/* Select for next round */}
+                {(() => {
+                  const idx = stages.indexOf((candidate as any).current_stage)
+                  const nextStage = idx >= 0 && idx < stages.length - 1 ? stages[idx + 1] : null
+                  const isRejected = (candidate as any).status === 'rejected'
+                  return (
+                    <>
+                      {nextStage && !isRejected && (
+                        <button
+                          onClick={() => applyStageDecision('next_round')}
+                          disabled={stageDecisionSaving}
+                          className="flex items-center gap-1.5 px-3.5 py-2 bg-green-600 hover:bg-green-700 disabled:bg-gray-300 text-white text-sm font-medium rounded-lg transition-colors">
+                          {stageDecisionSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin"/> : <ChevronRight className="w-3.5 h-3.5"/>}
+                          Select for Next Round
+                          <span className="text-green-200 text-xs ml-0.5">→ {nextStage}</span>
+                        </button>
+                      )}
+                      {isRejected ? (
+                        <span className="flex items-center gap-1.5 px-3.5 py-2 bg-red-100 text-red-700 text-sm font-medium rounded-lg">
+                          <XCircle className="w-3.5 h-3.5"/> Rejected
+                        </span>
+                      ) : (
+                        <button
+                          onClick={() => applyStageDecision('reject')}
+                          disabled={stageDecisionSaving}
+                          className="flex items-center gap-1.5 px-3.5 py-2 bg-white border border-red-300 hover:bg-red-50 disabled:bg-gray-100 text-red-600 text-sm font-medium rounded-lg transition-colors">
+                          {stageDecisionSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin"/> : <XCircle className="w-3.5 h-3.5"/>}
+                          Reject
+                        </button>
+                      )}
+                    </>
+                  )
+                })()}
+              </div>
+
+              {/* Submit feedback button for interviewers */}
+              {isInterviewer && (
+                <div className={`pt-2 border-t border-gray-200 flex items-center gap-4 ${feedbackSubmitted ? 'opacity-70' : ''}`}>
+                  {feedbackSubmitted ? (
+                    <div className="flex items-center gap-2">
+                      <CheckCircle className="w-4 h-4 text-green-600"/>
+                      <p className="text-sm text-green-700 font-medium">Feedback submitted</p>
+                    </div>
+                  ) : (
+                    <>
+                      <p className="text-xs text-gray-500 flex-1">Add notes above, then submit.</p>
+                      {feedbackErr && <p className="text-xs text-red-600">{feedbackErr}</p>}
+                      <button onClick={() => submitFeedback.mutate()} disabled={submitFeedback.isPending}
+                        className="flex-shrink-0 px-4 py-2 bg-slate-800 hover:bg-slate-700 disabled:bg-gray-300 text-white text-sm font-medium rounded-lg transition-colors flex items-center gap-2">
+                        {submitFeedback.isPending
+                          ? <><Loader2 className="w-4 h-4 animate-spin"/>Submitting…</>
+                          : <><CheckCircle className="w-4 h-4"/>Submit Feedback</>
+                        }
+                      </button>
+                    </>
+                  )}
                 </div>
-              ) : (
-                <>
-                  <div>
-                    <p className="text-sm font-semibold text-gray-800">Ready to submit?</p>
-                    <p className="text-xs text-gray-500 mt-0.5">Add your interview notes above, then submit feedback.</p>
-                  </div>
-                  {feedbackErr && <p className="text-xs text-red-600">{feedbackErr}</p>}
-                  <button onClick={() => submitFeedback.mutate()} disabled={submitFeedback.isPending}
-                    className="flex-shrink-0 px-4 py-2 bg-slate-800 hover:bg-slate-700 disabled:bg-gray-300 text-white text-sm font-medium rounded-lg transition-colors flex items-center gap-2">
-                    {submitFeedback.isPending
-                      ? <><Loader2 className="w-4 h-4 animate-spin"/>Submitting…</>
-                      : <><CheckCircle className="w-4 h-4"/>Submit Feedback</>
-                    }
-                  </button>
-                </>
               )}
             </div>
           )}
