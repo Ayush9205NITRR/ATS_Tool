@@ -726,7 +726,9 @@ export function CandidateProfilePage() {
           <p className="text-sm text-gray-400 mt-0.5">
             {(candidate as any).agency?.name
               ? <span>🏢 {(candidate as any).agency.name}</span>
-              : `${candidate.source_name} · ${labelOf(candidate.source_category)}`
+              : candidate.source_category === 'referral'
+                ? <span>👤 {candidate.source_name ? `Referred by ${candidate.source_name}` : 'Employee Referral'}</span>
+                : `${candidate.source_name} · ${labelOf(candidate.source_category)}`
             }
           </p>
         </div>
@@ -816,6 +818,7 @@ export function CandidateProfilePage() {
                     <option value="platform">🔗 Platform</option>
                     <option value="agency">🏢 Agency</option>
                     <option value="college">🎓 College</option>
+                    <option value="referral">👤 Employee Referral</option>
                   </select>
                 </div>
                 <div>
@@ -859,7 +862,10 @@ export function CandidateProfilePage() {
             <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Details</p>
             <div className="space-y-2">
               {[
-                ['Source', `${labelOf(candidate.source_category)} — ${candidate.source_name}`],
+                ['Source', candidate.source_category === 'referral'
+                  ? (candidate.source_name ? `Referred by ${candidate.source_name}` : 'Employee Referral — Unknown')
+                  : `${labelOf(candidate.source_category)} — ${candidate.source_name}`
+                ],
                 ['Job', (candidate as any).job?.title ?? '—'],
                 ['Added', formatDate(candidate.created_at)],
               ].map(([label, val]) => (
@@ -1610,12 +1616,22 @@ function AgencyFeedbackEditor({ candidateId, currentFeedback, canEdit }: {
   )
 }
 
-const _PLATFORM_SOURCES = ['LinkedIn','Naukri','Indeed','Internshala','Shine','Monster','Foundit','Apna','Referral','Website','Other']
+const _PLATFORM_SOURCES = ['LinkedIn','Naukri','Indeed','Internshala','Unstop','Shine','Monster','Foundit','Apna','Website','Other']
 
 function ProfileSubSource({ sourceCategory, value, onChange }: {
   sourceCategory: string; value: string; onChange: (v: string) => void
 }) {
   const { data: agencyUsers = [] } = useAgencies()
+  const { data: employees = [] } = useQuery<string[]>({
+    queryKey: ['employee-referral-list'],
+    queryFn: async () => {
+      const { data } = await supabase.from('app_settings').select('value').eq('key', 'employee_referral_list').maybeSingle()
+      if (!data?.value) return []
+      try { return JSON.parse(data.value) as string[] } catch { return [] }
+    },
+    staleTime: 60_000,
+    enabled: sourceCategory === 'referral',
+  })
   const cls = 'w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-slate-400'
 
   if (sourceCategory === 'agency') return (
@@ -1628,6 +1644,12 @@ function ProfileSubSource({ sourceCategory, value, onChange }: {
     <select value={value} onChange={e => onChange(e.target.value)} className={cls}>
       <option value="">Select platform…</option>
       {_PLATFORM_SOURCES.map(p => <option key={p} value={p}>{p}</option>)}
+    </select>
+  )
+  if (sourceCategory === 'referral') return (
+    <select value={value} onChange={e => onChange(e.target.value)} className={cls}>
+      <option value="">Select employee…</option>
+      {employees.map(e => <option key={e} value={e}>{e}</option>)}
     </select>
   )
   if (sourceCategory === 'college') return (

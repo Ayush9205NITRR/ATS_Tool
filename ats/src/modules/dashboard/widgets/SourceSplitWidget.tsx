@@ -5,7 +5,7 @@ import { supabase } from '../../../lib/supabaseClient'
 import { WidgetBase } from './WidgetBase'
 
 const SOURCE_COLOURS: Record<string,string> = {
-  platform: 'bg-blue-400', agency: 'bg-purple-400', college: 'bg-amber-400'
+  platform: 'bg-blue-400', agency: 'bg-purple-400', college: 'bg-amber-400', referral: 'bg-emerald-400'
 }
 
 export function SourceSplitWidget() {
@@ -28,7 +28,7 @@ export function SourceSplitWidget() {
   const candidates = jobFilter ? allCandidates.filter((c:any)=>c.job_id===jobFilter) : allCandidates
   const total = candidates.length
 
-  const bySource = ['platform','agency','college'].map(src => {
+  const bySource = ['platform','agency','college','referral'].map(src => {
     const list = candidates.filter((c:any)=>c.source_category===src)
     // Sub-sources
     const subMap = new Map<string,number>()
@@ -53,7 +53,9 @@ export function SourceSplitWidget() {
             <div className="flex items-center justify-between mb-1.5">
               <div className="flex items-center gap-2">
                 <span className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${SOURCE_COLOURS[src]}`}/>
-                <span className="text-sm font-semibold text-gray-700 capitalize">{src}</span>
+                <span className="text-sm font-semibold text-gray-700 capitalize">
+                {src === 'referral' ? 'Employee Referral' : src}
+              </span>
               </div>
               <div className="flex items-center gap-2">
                 <span className="text-xs font-bold text-gray-600">{pct}%</span>

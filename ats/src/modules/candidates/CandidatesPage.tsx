@@ -93,18 +93,19 @@ function Popup({ trigger, children }: { trigger:React.ReactNode; children:React.
 }
 
 // ── Source cell — shows category only, click to change ────────
-const PLATFORM_SRC_LIST = ['LinkedIn','Naukri','Indeed','Internshala','Shine','Monster','Foundit','Apna','Referral','Website','Other']
+const PLATFORM_SRC_LIST = ['LinkedIn','Naukri','Indeed','Internshala','Unstop','Shine','Monster','Foundit','Apna','Website','Other']
 
 const SourceCell = memo(({ cid, category, canEdit, onUpdate }: {
   cid:string; category:string; canEdit:boolean
   onUpdate:(id:string,f:string,v:any)=>void
 }) => {
   const badgeCls =
-    category==='agency'   ? 'bg-violet-50 text-violet-700 border-violet-100' :
-    category==='platform' ? 'bg-sky-50 text-sky-700 border-sky-100' :
-    category==='college'  ? 'bg-amber-50 text-amber-700 border-amber-100' :
+    category==='agency'    ? 'bg-violet-50 text-violet-700 border-violet-100' :
+    category==='platform'  ? 'bg-sky-50 text-sky-700 border-sky-100' :
+    category==='college'   ? 'bg-amber-50 text-amber-700 border-amber-100' :
+    category==='referral'  ? 'bg-emerald-50 text-emerald-700 border-emerald-100' :
     'bg-gray-50 text-gray-400 border-gray-100'
-  const label = category ? category.charAt(0).toUpperCase()+category.slice(1) : '—'
+  const label = category === 'referral' ? 'Referral' : category ? category.charAt(0).toUpperCase()+category.slice(1) : '—'
   const badge = (
     <span className={`inline-flex items-center gap-0.5 text-xs px-2 py-0.5 rounded border font-medium ${canEdit?'cursor-pointer hover:opacity-75':''} ${badgeCls}`}>
       {label}{canEdit && <ChevronDown className="w-2.5 h-2.5 opacity-40"/>}
@@ -115,7 +116,7 @@ const SourceCell = memo(({ cid, category, canEdit, onUpdate }: {
     <Popup trigger={badge}>
       <div className="px-1 py-1 min-w-[130px]">
         <p className="text-xs text-gray-400 font-medium px-2 pt-1 pb-0.5">Source Type</p>
-        {[['platform','Platform'],['agency','Agency'],['college','College']].map(([cat,lbl])=>(
+        {[['platform','Platform'],['agency','Agency'],['college','College'],['referral','Employee Referral']].map(([cat,lbl])=>(
           <button key={cat}
             onClick={()=>{ onUpdate(cid,'source_category',cat); onUpdate(cid,'source_name','') }}
             className={`w-full text-left text-xs px-2.5 py-2 rounded flex items-center justify-between gap-3 transition-colors ${
@@ -136,6 +137,7 @@ const SubSourceCell = memo(({ cid, category, name, canEdit, onUpdate }: {
 }) => {
   const [agencyUsers, setAgencyUsers] = useState<{id:string;full_name:string}[]>([])
   const [colleges, setColleges]       = useState<string[]>([])
+  const [employees, setEmployees]     = useState<string[]>([])
   const [loaded, setLoaded] = useState(false)
   const [collegeInput, setCollegeInput] = useState(name)
 
@@ -160,6 +162,12 @@ const SubSourceCell = memo(({ cid, category, name, canEdit, onUpdate }: {
         .then(({data}) => {
           const unique = [...new Set((data ?? []).map((d:any) => d.source_name).filter(Boolean))].sort()
           setColleges(unique)
+        })
+    } else if (category === 'referral') {
+      supabase.from('app_settings').select('value').eq('key','employee_referral_list').maybeSingle()
+        .then(({data}) => {
+          if (!data?.value) return
+          try { setEmployees(JSON.parse(data.value) as string[]) } catch { /* ignore */ }
         })
     }
   }
@@ -189,6 +197,22 @@ const SubSourceCell = memo(({ cid, category, name, canEdit, onUpdate }: {
             {p}{name===p&&<Check className="w-3 h-3 text-blue-500"/>}
           </button>
         ))}
+      </div>
+    </Popup>
+  )
+
+  if (category === 'referral') return (
+    <Popup trigger={<span onClick={loadData}>{trigger}</span>}>
+      <div className="px-1 py-1 max-h-52 overflow-y-auto">
+        {employees.length === 0
+          ? <p className="text-xs text-gray-400 px-2 py-2 italic">No employees configured</p>
+          : employees.map(e => (
+            <button key={e} onClick={() => onUpdate(cid, 'source_name', e)}
+              className={`w-full text-left text-xs px-2.5 py-2 rounded hover:bg-emerald-50 flex items-center justify-between gap-3 ${name===e?'text-emerald-700 font-semibold bg-emerald-50':''}`}>
+              {e}{name===e&&<Check className="w-3 h-3 text-emerald-500"/>}
+            </button>
+          ))
+        }
       </div>
     </Popup>
   )
@@ -740,7 +764,7 @@ const displayed = useMemo(() => {
                                 : bulkField === 'job_id'
                                 ? (jobs as any[]).map(j => <option key={j.id} value={j.id}>{j.title}</option>)
                                 : bulkField === 'source_category'
-                                ? ['platform','agency','college'].map(s => <option key={s} value={s}>{s.charAt(0).toUpperCase()+s.slice(1)}</option>)
+                                ? [['platform','Platform'],['agency','Agency'],['college','College'],['referral','Employee Referral']].map(([s,l]) => <option key={s} value={s}>{l}</option>)
                                 : bulkField === 'assigned_interviewers'
                                 ? (interviewers as any[]).map(u => <option key={u.id} value={u.id}>{u.full_name}</option>)
                                 : bulkField === 'hr_owner'

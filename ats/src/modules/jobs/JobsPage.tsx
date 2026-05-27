@@ -72,14 +72,15 @@ function JobForm({ job, onClose }: { job?: any; onClose: () => void }) {
 
   // All stage templates stored in interview_format JSONB column.
   // Key 'screening' → screening questions (HR-visible); other keys → round questions (panel-visible).
-  const existingFormat: Record<string, string[]> = job?.interview_format ?? {}
+  // Key '_durations' → { stage_key: minutes } duration per stage.
+  const existingFormat: Record<string, any> = job?.interview_format ?? {}
   const existingStageInterviewers: Record<string, string[]> = job?.stage_interviewers ?? {}
   const ALL_TEMPLATE_STAGES = ['Screening', ...ROUND_STAGES]
   const [interviewFormat, setInterviewFormat] = useState<Record<string, string>>(
     Object.fromEntries(
       ALL_TEMPLATE_STAGES.map(name => {
         const key = stageKeyOf(name)
-        const qs: string[] = existingFormat[key] ?? []
+        const qs: string[] = Array.isArray(existingFormat[key]) ? existingFormat[key] : []
         return [key, qs.join('\n')]
       })
     )
@@ -87,7 +88,12 @@ function JobForm({ job, onClose }: { job?: any; onClose: () => void }) {
   const [stageInterviewers, setStageInterviewers] = useState<Record<string, string[]>>(
     Object.fromEntries(ROUND_STAGES.map(name => [stageKeyOf(name), existingStageInterviewers[stageKeyOf(name)] ?? []]))
   )
-  const [showInterviewFormat, setShowInterviewFormat] = useState(false)
+  const existingDurations: Record<string, number> = (existingFormat['_durations'] as Record<string, number>) ?? {}
+  const [stageDurations, setStageDurations] = useState<Record<string, number>>(
+    Object.fromEntries(ALL_TEMPLATE_STAGES.map(name => [stageKeyOf(name), existingDurations[stageKeyOf(name)] ?? 0]))
+  )
+  const [showInterviewProcess, setShowInterviewProcess] = useState(false)
+  const [expandedQuestions, setExpandedQuestions] = useState<string | null>(null)
 
   const { data: agencyUsers = [] } = useQuery({
     queryKey: ['agency-users'],
@@ -135,16 +141,24 @@ function JobForm({ job, onClose }: { job?: any; onClose: () => void }) {
     mutationFn: async (d: FormData) => {
       const skills = d.required_skills ? d.required_skills.split(',').map(s=>s.trim()).filter(Boolean) : []
 
-      // Save all templates into the existing interview_format JSONB column
+      // Save all templates into the existing interview_format JSONB column.
+      // Durations stored as _durations: { stage_key: minutes }.
       const toLines = (key: string) =>
         (interviewFormat[key] ?? '').split('\n').map(s => s.trim()).filter(Boolean)
 
-      const interviewFormatObj: Record<string, string[]> = {}
+      const interviewFormatObj: Record<string, any> = {}
       ALL_TEMPLATE_STAGES.forEach(name => {
         const key = stageKeyOf(name)
         const qs = toLines(key)
         if (qs.length) interviewFormatObj[key] = qs
       })
+      const durationsObj: Record<string, number> = {}
+      ALL_TEMPLATE_STAGES.forEach(name => {
+        const key = stageKeyOf(name)
+        const mins = stageDurations[key] ?? 0
+        if (mins > 0) durationsObj[key] = mins
+      })
+      if (Object.keys(durationsObj).length) interviewFormatObj['_durations'] = durationsObj
 
       const stageInterviewersObj: Record<string, string[]> = {}
       ROUND_STAGES.forEach(name => {
@@ -375,75 +389,133 @@ function JobForm({ job, onClose }: { job?: any; onClose: () => void }) {
         )}
       </div>
 
-      {/* Interview Format Templates */}
+      {/* Interview Process */}
       <div className="border border-green-200 rounded-xl overflow-hidden bg-green-50/20">
         <button
           type="button"
-          onClick={() => setShowInterviewFormat(o => !o)}
+          onClick={() => setShowInterviewProcess(o => !o)}
           className="w-full flex items-center justify-between px-4 py-3 text-left hover:bg-green-50/40 transition-colors"
         >
           <div className="flex items-center gap-2">
             <ClipboardList className="w-4 h-4 text-green-600" />
-            <p className="text-sm font-medium text-gray-700">Interview Format Templates</p>
-            <span className="text-xs text-gray-400">(optional — shown as a guide to interviewers)</span>
+            <p className="text-sm font-medium text-gray-700">Interview Process</p>
+            <span className="text-xs text-gray-400">(panel, duration &amp; questions per round)</span>
           </div>
-          <ChevronDown className={`w-4 h-4 text-gray-400 transition-transform ${showInterviewFormat ? 'rotate-180' : ''}`} />
+          <ChevronDown className={`w-4 h-4 text-gray-400 transition-transform ${showInterviewProcess ? 'rotate-180' : ''}`} />
         </button>
 
-        {showInterviewFormat && (
-          <div className="px-4 pb-4 border-t border-green-100 space-y-4 pt-3">
-            <p className="text-xs text-gray-400">One question per line. Questions are shown on the candidate profile to the relevant viewer only.</p>
-            {ALL_TEMPLATE_STAGES.map(stageName => {
+        {showInterviewProcess && (
+          <div className="border-t border-green-100">
+            {/* Table header */}
+            <div className="grid grid-cols-[28px_1fr_90px_1fr] gap-x-3 px-4 py-2 bg-green-50/60 border-b border-green-100">
+              <span className="text-xs font-semibold text-gray-400">#</span>
+              <span className="text-xs font-semibold text-gray-400">Stage</span>
+              <span className="text-xs font-semibold text-gray-400">Duration</span>
+              <span className="text-xs font-semibold text-gray-400">Panel / Interviewers</span>
+            </div>
+
+            {ALL_TEMPLATE_STAGES.map((stageName, idx) => {
               const key = stageKeyOf(stageName)
               const isScreening = stageName === 'Screening'
+              const assignedIds: string[] = stageInterviewers[key] ?? []
+              const assignedNames = (interviewerUsers as any[]).filter(u => assignedIds.includes(u.id)).map(u => u.full_name)
+              const mins = stageDurations[key] ?? 0
+              const durationLabel = mins === 0 ? '' : mins < 60 ? `${mins} min` : `${Math.floor(mins/60)}h ${mins%60 ? `${mins%60}m` : ''}`.trim()
+              const isExpanded = expandedQuestions === key
+              const hasQuestions = (interviewFormat[key] ?? '').trim().length > 0
+
               return (
-                <div key={key}>
-                  <div className="flex items-center gap-2 mb-1">
-                    <label className="text-xs font-semibold text-gray-700">{stageName}</label>
-                    {isScreening
-                      ? <span className="text-xs bg-blue-50 text-blue-600 border border-blue-200 px-1.5 py-0.5 rounded-full">HR only</span>
-                      : <span className="text-xs bg-green-50 text-green-700 border border-green-200 px-1.5 py-0.5 rounded-full">Assigned panel · this stage only</span>
-                    }
+                <div key={key} className="border-b border-green-100 last:border-b-0">
+                  <div className="grid grid-cols-[28px_1fr_90px_1fr] gap-x-3 px-4 py-2.5 items-center hover:bg-green-50/30 transition-colors">
+                    {/* # */}
+                    <span className="text-xs text-gray-400 font-medium">{idx + 1}</span>
+
+                    {/* Stage name + questions toggle */}
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      <span className="text-sm font-medium text-gray-700 truncate">{stageName}</span>
+                      <button
+                        type="button"
+                        onClick={() => setExpandedQuestions(isExpanded ? null : key)}
+                        title="Interview questions"
+                        className={`flex-shrink-0 text-xs px-1.5 py-0.5 rounded border transition-colors ${
+                          hasQuestions
+                            ? 'bg-green-50 text-green-700 border-green-200 hover:bg-green-100'
+                            : 'bg-gray-50 text-gray-400 border-gray-200 hover:bg-gray-100'
+                        }`}
+                      >Q</button>
+                    </div>
+
+                    {/* Duration */}
+                    <div className="flex items-center gap-1">
+                      <input
+                        type="number"
+                        min="0"
+                        step="5"
+                        value={mins || ''}
+                        onChange={e => setStageDurations(p => ({ ...p, [key]: Number(e.target.value) || 0 }))}
+                        placeholder="—"
+                        className="w-12 px-1.5 py-1 border border-gray-200 rounded text-xs text-center bg-white focus:outline-none focus:ring-1 focus:ring-green-400"
+                      />
+                      <span className="text-xs text-gray-400 flex-shrink-0">min</span>
+                    </div>
+
+                    {/* Interviewers / panel */}
+                    {isScreening ? (
+                      <span className="text-xs bg-blue-50 text-blue-600 border border-blue-200 px-2 py-0.5 rounded-full w-fit">HR only</span>
+                    ) : interviewerUsers.length === 0 ? (
+                      <span className="text-xs text-gray-400 italic">No interviewers</span>
+                    ) : (
+                      <div className="flex flex-wrap gap-1">
+                        {(interviewerUsers as any[]).map(u => {
+                          const sel = assignedIds.includes(u.id)
+                          return (
+                            <button
+                              key={u.id}
+                              type="button"
+                              onClick={() => setStageInterviewers(p => {
+                                const curr = p[key] ?? []
+                                const next = sel ? curr.filter((id: string) => id !== u.id) : [...curr, u.id]
+                                return { ...p, [key]: next }
+                              })}
+                              title={u.full_name}
+                              className={`text-xs px-2 py-0.5 rounded-full border transition-all ${
+                                sel
+                                  ? 'bg-indigo-100 text-indigo-700 border-indigo-300 font-medium'
+                                  : 'bg-white text-gray-400 border-gray-200 hover:border-gray-300 hover:text-gray-600'
+                              }`}
+                            >
+                              {u.full_name.split(' ')[0]}
+                            </button>
+                          )
+                        })}
+                      </div>
+                    )}
                   </div>
-                  <textarea
-                    rows={3}
-                    value={interviewFormat[key] ?? ''}
-                    onChange={e => setInterviewFormat(p => ({ ...p, [key]: e.target.value }))}
-                    placeholder={isScreening
-                      ? 'e.g.\nWalk me through your background\nWhy are you looking for a change?'
-                      : `e.g.\nTell me about a relevant project\nHow do you handle ambiguity?`}
-                    className={inputCls + ' resize-y font-normal text-xs'}
-                  />
-                  {!isScreening && (
-                    <div className="mt-2">
-                      <p className="text-xs text-gray-500 mb-1.5 font-medium">Interviewer(s) for this round</p>
-                      {interviewerUsers.length === 0 ? (
-                        <p className="text-xs text-gray-400 italic">No interviewers found — add users with the Interviewer role first.</p>
-                      ) : (
-                        <div className="flex flex-wrap gap-1.5">
-                          {(interviewerUsers as any[]).map(u => {
-                            const isSelected = (stageInterviewers[key] ?? []).includes(u.id)
-                            return (
-                              <button
-                                key={u.id}
-                                type="button"
-                                onClick={() => setStageInterviewers(p => {
-                                  const curr = p[key] ?? []
-                                  const next = isSelected ? curr.filter((id: string) => id !== u.id) : [...curr, u.id]
-                                  return { ...p, [key]: next }
-                                })}
-                                className={`text-xs px-2.5 py-1 rounded-full border transition-all ${
-                                  isSelected
-                                    ? 'bg-indigo-100 text-indigo-700 border-indigo-300 font-medium'
-                                    : 'bg-white text-gray-500 border-gray-200 hover:border-gray-300 hover:text-gray-700'
-                                }`}
-                              >
-                                {u.full_name}
-                              </button>
-                            )
-                          })}
-                        </div>
-                      )}
+
+                  {/* Duration display chip + selected panel names (compact summary row) */}
+                  {(durationLabel || assignedNames.length > 0) && !isScreening && (
+                    <div className="px-4 pb-1.5 flex items-center gap-2 text-xs text-gray-400">
+                      {durationLabel && <span className="bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">{durationLabel}</span>}
+                      {assignedNames.length > 0 && <span>{assignedNames.join(', ')}</span>}
+                    </div>
+                  )}
+
+                  {/* Questions expand panel */}
+                  {isExpanded && (
+                    <div className="px-4 pb-3 pt-1 bg-white/60 border-t border-green-100/60">
+                      <p className="text-xs text-gray-400 mb-1.5">
+                        {isScreening ? 'Screening questions (HR-visible only)' : 'Round questions (panel-visible · this stage only)'}
+                        {' · '}one per line
+                      </p>
+                      <textarea
+                        rows={3}
+                        value={interviewFormat[key] ?? ''}
+                        onChange={e => setInterviewFormat(p => ({ ...p, [key]: e.target.value }))}
+                        placeholder={isScreening
+                          ? 'Walk me through your background\nWhy are you looking for a change?'
+                          : 'Tell me about a relevant project\nHow do you handle ambiguity?'}
+                        className={inputCls + ' resize-y font-normal text-xs'}
+                      />
                     </div>
                   )}
                 </div>

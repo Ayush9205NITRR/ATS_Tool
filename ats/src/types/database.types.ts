@@ -3,7 +3,7 @@
 // ============================================================
 
 export type Role = 'super_admin' | 'admin' | 'hr_team' | 'interviewer' | 'agency'
-export type SourceCategory = 'platform' | 'agency' | 'college'
+export type SourceCategory = 'platform' | 'agency' | 'college' | 'referral'
 export type CandidateStatus = 'active' | 'rejected' | 'hired' | 'withdrawn'
 export type JobStatus = 'draft' | 'open' | 'paused' | 'closed'
 export type EmploymentType = 'full_time' | 'part_time' | 'contract' | 'internship'
