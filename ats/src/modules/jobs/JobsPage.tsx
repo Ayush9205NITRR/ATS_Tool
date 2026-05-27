@@ -70,19 +70,19 @@ function JobForm({ job, onClose }: { job?: any; onClose: () => void }) {
   const [hrIds, setHrIds]                 = useState<string[]>(job?.assigned_hrs ?? [])
   const [assignAllCandidates, setAssignAllCandidates] = useState<boolean>(false)
 
-  // Screening template (dedicated section)
-  const [screeningTemplate, setScreeningTemplate] = useState<string[]>(job?.screening_template ?? [])
-  const [newScreeningQ, setNewScreeningQ] = useState('')
-
-  // Interview round templates — keyed by stageKey, newline-separated text.
-  // Reads from interview_format first, falls back to interview_templates for migration.
+  // All stage templates — screening + interview rounds, unified as newline-separated text per key.
+  // Screening reads from screening_template; rounds read from interview_templates (with interview_format fallback).
   const existingTemplates: Record<string, string[]> = job?.interview_templates ?? {}
   const existingFormat: Record<string, string[]> = job?.interview_format ?? {}
+  const ALL_TEMPLATE_STAGES = ['Screening', ...ROUND_STAGES]
   const [interviewFormat, setInterviewFormat] = useState<Record<string, string>>(
     Object.fromEntries(
-      ROUND_STAGES.map(name => {
+      ALL_TEMPLATE_STAGES.map(name => {
         const key = stageKeyOf(name)
-        const qs: string[] = existingFormat[key] ?? existingTemplates[key] ?? []
+        const qs: string[] =
+          name === 'Screening'
+            ? (job?.screening_template ?? [])
+            : (existingFormat[key] ?? existingTemplates[key] ?? [])
         return [key, qs.join('\n')]
       })
     )
@@ -123,11 +123,15 @@ function JobForm({ job, onClose }: { job?: any; onClose: () => void }) {
     mutationFn: async (d: FormData) => {
       const skills = d.required_skills ? d.required_skills.split(',').map(s=>s.trim()).filter(Boolean) : []
 
-      // Build interview_templates from the green section textareas
+      // Derive screening_template and interview_templates from unified state
+      const toLines = (key: string) =>
+        (interviewFormat[key] ?? '').split('\n').map(s => s.trim()).filter(Boolean)
+
+      const screeningTemplateArr = toLines('screening')
       const interviewTemplatesObj: Record<string, string[]> = {}
       ROUND_STAGES.forEach(name => {
         const key = stageKeyOf(name)
-        const qs = (interviewFormat[key] ?? '').split('\n').map(s => s.trim()).filter(Boolean)
+        const qs = toLines(key)
         if (qs.length) interviewTemplatesObj[key] = qs
       })
 
@@ -139,7 +143,7 @@ function JobForm({ job, onClose }: { job?: any; onClose: () => void }) {
         target_date: d.target_date||null, required_skills: skills,
         requisition_id: d.requisition_id||null,
         jd_link: (d as any).jd_link||null,
-        screening_template: screeningTemplate,
+        screening_template: screeningTemplateArr,
         interview_templates: interviewTemplatesObj,
         show_to_agency: showToAllAgencies || agencyIds.length > 0,
         allowed_agency_ids: showToAllAgencies ? [] : agencyIds,
@@ -306,33 +310,6 @@ function JobForm({ job, onClose }: { job?: any; onClose: () => void }) {
         )}
       </div>
 
-      {/* Screening Format */}
-      <div className="border border-indigo-200 rounded-xl p-4 bg-indigo-50/20">
-        <p className="text-sm font-medium text-gray-700 mb-1">Screening Format</p>
-        <p className="text-xs text-gray-400 mb-3">Questions / format for the screening stage. Visible to interviewers on candidate profiles.</p>
-        {screeningTemplate.length > 0 && (
-          <ol className="space-y-1.5 mb-3 list-decimal list-inside">
-            {screeningTemplate.map((q, i) => (
-              <li key={i} className="text-sm text-gray-700 bg-white rounded-lg px-3 py-2 border border-indigo-100 flex items-center justify-between gap-2">
-                <span className="flex-1">{q}</span>
-                <button type="button" onClick={() => setScreeningTemplate(p => p.filter((_, j) => j !== i))}
-                  className="text-gray-300 hover:text-red-500 flex-shrink-0 transition-colors"><X className="w-3.5 h-3.5"/></button>
-              </li>
-            ))}
-          </ol>
-        )}
-        <div className="flex gap-2">
-          <input value={newScreeningQ} onChange={e => setNewScreeningQ(e.target.value)}
-            onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); if (newScreeningQ.trim()) { setScreeningTemplate(p => [...p, newScreeningQ.trim()]); setNewScreeningQ('') } } }}
-            placeholder="Add a screening question…" className={inputCls}/>
-          <button type="button" onClick={() => { if (newScreeningQ.trim()) { setScreeningTemplate(p => [...p, newScreeningQ.trim()]); setNewScreeningQ('') } }}
-            disabled={!newScreeningQ.trim()}
-            className="px-3 py-2 bg-indigo-600 text-white text-sm rounded-lg hover:bg-indigo-700 disabled:opacity-40 flex-shrink-0 transition-colors">
-            <Plus className="w-4 h-4"/>
-          </button>
-        </div>
-      </div>
-
       {/* Agency Visibility — required field, not optional */}
       <div className="border border-purple-200 rounded-xl p-4 bg-purple-50/30">
         <div className="flex items-center justify-between mb-3">
@@ -397,23 +374,27 @@ function JobForm({ job, onClose }: { job?: any; onClose: () => void }) {
         </button>
 
         {showInterviewFormat && (
-          <div className="px-4 pb-4 border-t border-green-100 space-y-3">
-            <p className="text-xs text-gray-500 mt-3">
-              Add questions for each stage below. These will be shown to interviewers as a guide on the candidate profile.
-              Enter one question per line.
-            </p>
-            {ROUND_STAGES.map(stageName => {
+          <div className="px-4 pb-4 border-t border-green-100 space-y-4 pt-3">
+            <p className="text-xs text-gray-400">One question per line. Questions are shown on the candidate profile to the relevant viewer only.</p>
+            {ALL_TEMPLATE_STAGES.map(stageName => {
               const key = stageKeyOf(stageName)
+              const isScreening = stageName === 'Screening'
               return (
                 <div key={key}>
-                  <label className="block text-xs font-semibold text-gray-600 mb-1">
-                    {stageName} Questions
-                  </label>
+                  <div className="flex items-center gap-2 mb-1">
+                    <label className="text-xs font-semibold text-gray-700">{stageName}</label>
+                    {isScreening
+                      ? <span className="text-xs bg-blue-50 text-blue-600 border border-blue-200 px-1.5 py-0.5 rounded-full">HR only</span>
+                      : <span className="text-xs bg-green-50 text-green-700 border border-green-200 px-1.5 py-0.5 rounded-full">Assigned panel · this stage only</span>
+                    }
+                  </div>
                   <textarea
                     rows={3}
                     value={interviewFormat[key] ?? ''}
                     onChange={e => setInterviewFormat(p => ({ ...p, [key]: e.target.value }))}
-                    placeholder={`e.g.\nTell me about your relevant experience\nWhat's your approach to problem solving?`}
+                    placeholder={isScreening
+                      ? 'e.g.\nWalk me through your background\nWhy are you looking for a change?'
+                      : `e.g.\nTell me about a relevant project\nHow do you handle ambiguity?`}
                     className={inputCls + ' resize-y font-normal text-xs'}
                   />
                 </div>
