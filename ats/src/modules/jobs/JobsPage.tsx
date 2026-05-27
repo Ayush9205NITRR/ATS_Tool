@@ -58,8 +58,7 @@ const STATUS_COLOUR: Record<string,string> = {
   closed:'bg-red-100 text-red-600 border border-red-200',
 }
 
-const TEMPLATE_STAGES = ['R1', 'Case Study', 'R2', 'R3', 'CF (Virtual)', 'CF (In-Person)']
-const toStageKey = (name: string) => name.toLowerCase().replace(/[^a-z0-9]/g, '_')
+const ROUND_STAGES = ['R1', 'Case Study', 'R2', 'R3', 'CF (Virtual)', 'CF (In-Person)']
 
 function JobForm({ job, onClose }: { job?: any; onClose: () => void }) {
   const { user } = useAuthStore()
@@ -71,20 +70,19 @@ function JobForm({ job, onClose }: { job?: any; onClose: () => void }) {
   const [hrIds, setHrIds]                 = useState<string[]>(job?.assigned_hrs ?? [])
   const [assignAllCandidates, setAssignAllCandidates] = useState<boolean>(false)
 
-  // Templates (HEAD — structured per-stage question lists)
+  // Screening template (dedicated section)
   const [screeningTemplate, setScreeningTemplate] = useState<string[]>(job?.screening_template ?? [])
-  const [interviewTemplates, setInterviewTemplates] = useState<Record<string, string[]>>(job?.interview_templates ?? {})
   const [newScreeningQ, setNewScreeningQ] = useState('')
-  const [activeTemplateStage, setActiveTemplateStage] = useState(TEMPLATE_STAGES[0])
-  const [newInterviewQ, setNewInterviewQ] = useState('')
 
-  // Interview format state — keyed by stage key, value is newline-separated questions (origin/main — backwards compat)
+  // Interview round templates — keyed by stageKey, newline-separated text.
+  // Reads from interview_format first, falls back to interview_templates for migration.
+  const existingTemplates: Record<string, string[]> = job?.interview_templates ?? {}
   const existingFormat: Record<string, string[]> = job?.interview_format ?? {}
   const [interviewFormat, setInterviewFormat] = useState<Record<string, string>>(
     Object.fromEntries(
-      INTERVIEW_STAGE_NAMES.map(name => {
+      ROUND_STAGES.map(name => {
         const key = stageKeyOf(name)
-        const qs: string[] = existingFormat[key] ?? []
+        const qs: string[] = existingFormat[key] ?? existingTemplates[key] ?? []
         return [key, qs.join('\n')]
       })
     )
@@ -125,12 +123,12 @@ function JobForm({ job, onClose }: { job?: any; onClose: () => void }) {
     mutationFn: async (d: FormData) => {
       const skills = d.required_skills ? d.required_skills.split(',').map(s=>s.trim()).filter(Boolean) : []
 
-      // Build interview_format from textarea states
-      const fmtObj: Record<string, string[]> = {}
-      INTERVIEW_STAGE_NAMES.forEach(name => {
+      // Build interview_templates from the green section textareas
+      const interviewTemplatesObj: Record<string, string[]> = {}
+      ROUND_STAGES.forEach(name => {
         const key = stageKeyOf(name)
         const qs = (interviewFormat[key] ?? '').split('\n').map(s => s.trim()).filter(Boolean)
-        if (qs.length) fmtObj[key] = qs
+        if (qs.length) interviewTemplatesObj[key] = qs
       })
 
       const payload = {
@@ -142,13 +140,13 @@ function JobForm({ job, onClose }: { job?: any; onClose: () => void }) {
         requisition_id: d.requisition_id||null,
         jd_link: (d as any).jd_link||null,
         screening_template: screeningTemplate,
-        interview_templates: interviewTemplates,
+        interview_templates: interviewTemplatesObj,
         show_to_agency: showToAllAgencies || agencyIds.length > 0,
         allowed_agency_ids: showToAllAgencies ? [] : agencyIds,
         assigned_hrs: hrIds,
         // hr_owner stays as the FIRST selected HR for backward compatibility
         hr_owner: hrIds[0] ?? null,
-        interview_format: fmtObj,
+        interview_format: interviewTemplatesObj,
       }
       const saved = job
         ? await jobService.update(job.id, payload as any)
@@ -335,57 +333,6 @@ function JobForm({ job, onClose }: { job?: any; onClose: () => void }) {
         </div>
       </div>
 
-      {/* Interview Format — per-stage templates */}
-      <div className="border border-indigo-200 rounded-xl p-4 bg-indigo-50/20">
-        <p className="text-sm font-medium text-gray-700 mb-1">Interview Format</p>
-        <p className="text-xs text-gray-400 mb-3">Questions / format for each interview round. Interviewers see only the questions for their assigned stage.</p>
-        <div className="flex flex-wrap gap-1 mb-3">
-          {TEMPLATE_STAGES.map(s => {
-            const key = toStageKey(s)
-            const count = (interviewTemplates[key] ?? []).length
-            return (
-              <button type="button" key={s} onClick={() => setActiveTemplateStage(s)}
-                className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${
-                  activeTemplateStage === s
-                    ? 'bg-indigo-600 text-white border-indigo-600'
-                    : 'bg-white text-gray-600 border-gray-200 hover:border-indigo-300'
-                }`}>
-                {s}{count > 0 && <span className="ml-1 opacity-70">({count})</span>}
-              </button>
-            )
-          })}
-        </div>
-        {(() => {
-          const key = toStageKey(activeTemplateStage)
-          const qs = interviewTemplates[key] ?? []
-          return (
-            <div>
-              {qs.length > 0 && (
-                <ol className="space-y-1.5 mb-3 list-decimal list-inside">
-                  {qs.map((q, i) => (
-                    <li key={i} className="text-sm text-gray-700 bg-white rounded-lg px-3 py-2 border border-indigo-100 flex items-center justify-between gap-2">
-                      <span className="flex-1">{q}</span>
-                      <button type="button" onClick={() => setInterviewTemplates(p => ({ ...p, [key]: qs.filter((_, j) => j !== i) }))}
-                        className="text-gray-300 hover:text-red-500 flex-shrink-0 transition-colors"><X className="w-3.5 h-3.5"/></button>
-                    </li>
-                  ))}
-                </ol>
-              )}
-              <div className="flex gap-2">
-                <input value={newInterviewQ} onChange={e => setNewInterviewQ(e.target.value)}
-                  onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); if (newInterviewQ.trim()) { setInterviewTemplates(p => ({ ...p, [key]: [...(p[key]??[]), newInterviewQ.trim()] })); setNewInterviewQ('') } } }}
-                  placeholder={`Add ${activeTemplateStage} question…`} className={inputCls}/>
-                <button type="button" onClick={() => { if (newInterviewQ.trim()) { setInterviewTemplates(p => ({ ...p, [key]: [...(p[key]??[]), newInterviewQ.trim()] })); setNewInterviewQ('') } }}
-                  disabled={!newInterviewQ.trim()}
-                  className="px-3 py-2 bg-indigo-600 text-white text-sm rounded-lg hover:bg-indigo-700 disabled:opacity-40 flex-shrink-0 transition-colors">
-                  <Plus className="w-4 h-4"/>
-                </button>
-              </div>
-            </div>
-          )
-        })()}
-      </div>
-
       {/* Agency Visibility — required field, not optional */}
       <div className="border border-purple-200 rounded-xl p-4 bg-purple-50/30">
         <div className="flex items-center justify-between mb-3">
@@ -455,7 +402,7 @@ function JobForm({ job, onClose }: { job?: any; onClose: () => void }) {
               Add questions for each stage below. These will be shown to interviewers as a guide on the candidate profile.
               Enter one question per line.
             </p>
-            {INTERVIEW_STAGE_NAMES.map(stageName => {
+            {ROUND_STAGES.map(stageName => {
               const key = stageKeyOf(stageName)
               return (
                 <div key={key}>
