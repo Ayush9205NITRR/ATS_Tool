@@ -165,7 +165,8 @@ $$;
 GRANT EXECUTE ON FUNCTION public.submit_interview_note(uuid, text, text) TO authenticated;
 
 -- 4. RPC: Advance or reject a candidate stage (bypasses RLS for assigned interviewers)
-CREATE OR REPLACE FUNCTION public.set_candidate_stage(
+DROP FUNCTION IF EXISTS public.set_candidate_stage(uuid, text, text);
+CREATE FUNCTION public.set_candidate_stage(
   p_candidate_id  uuid,
   p_new_stage     text,
   p_new_status    text DEFAULT 'active'
@@ -175,10 +176,13 @@ LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = public
 AS $$
+DECLARE
+  v_status public.candidate_status;
 BEGIN
+  v_status := p_new_status::public.candidate_status;
   UPDATE public.candidates
   SET current_stage = p_new_stage,
-      status        = p_new_status::candidate_status,
+      status        = v_status,
       updated_at    = NOW()
   WHERE id = p_candidate_id;
 END;
