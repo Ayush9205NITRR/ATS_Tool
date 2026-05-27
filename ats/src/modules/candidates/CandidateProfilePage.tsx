@@ -5,8 +5,8 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { useState, useCallback, useEffect, useRef } from 'react'
 import {
   ArrowLeft, ExternalLink, Phone, Mail, Linkedin, FileText,
-  Loader2, Send, Pencil, Check, X, ChevronDown, CheckCircle, XCircle,
-  ClipboardList, ShieldCheck, BookOpen
+  Loader2, Send, Pencil, Check, X, ChevronDown, CheckCircle,
+  ClipboardList, ShieldCheck, BookOpen, ChevronRight, XCircle
 } from 'lucide-react'
 import { useCandidate, useUpdateStage } from './useCandidates'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -80,7 +80,9 @@ export function CandidateProfilePage() {
   const [feedbackErr, setFeedbackErr] = useState<string | null>(null)
   const [editingNote, setEditingNote] = useState<{ section: string; index: number; text: string } | null>(null)
   const [savingEditNote, setSavingEditNote] = useState(false)
-  const [decisionEditMode, setDecisionEditMode] = useState(false)
+  const [actionError, setActionError] = useState<string | null>(null)
+  // Stage decision
+  const [stageDecisionSaving, setStageDecisionSaving] = useState(false)
   // Cost approval state
   const [caDecision, setCaDecision]   = useState<'go_ahead' | 'rework_required' | ''>('')
   const [caNotes, setCaNotes]         = useState('')
@@ -183,7 +185,7 @@ export function CandidateProfilePage() {
       if (!isInterviewer || !user) return null
       const { data, error } = await supabase
         .from('interview_feedback')
-        .select('id, submitted_at, recommendation, stage')
+        .select('id, submitted_at')
         .eq('candidate_id', id!)
         .eq('interviewer_id', user.id)
         .maybeSingle()
@@ -250,12 +252,12 @@ export function CandidateProfilePage() {
     },
   })
 
-  // Interviewer decision: select for next round (yes) or reject at current stage (no)
-  const makeDecision = useMutation({
-    mutationFn: async ({ decision, currentStage, targetStage }: {
-      decision: 'yes' | 'no'; currentStage: string; targetStage: string
-    }) => {
+  // Submit feedback — simple: just marks that interviewer submitted feedback
+  // Notes are already saved via interview_notes on candidates table
+  const submitFeedback = useMutation({
+    mutationFn: async () => {
       setFeedbackErr(null)
+
       const { data: existing } = await supabase
         .from('interview_feedback')
         .select('id')
@@ -265,58 +267,22 @@ export function CandidateProfilePage() {
 
       let error
       if (existing?.id) {
-        const result = await supabase.from('interview_feedback').update({
-          submitted_at: new Date().toISOString(),
-          stage: currentStage,
-          recommendation: decision,
-          overall_score: 3,
-        }).eq('id', existing.id)
+        const result = await supabase.from('interview_feedback')
+          .update({ submitted_at: new Date().toISOString() })
+          .eq('id', existing.id)
         error = result.error
       } else {
-        const result = await supabase.from('interview_feedback').insert({
-          candidate_id: id!,
-          interviewer_id: user!.id,
-          submitted_at: new Date().toISOString(),
-          stage: currentStage,
-          recommendation: decision,
-          overall_score: 3,
-        })
+        const result = await supabase.from('interview_feedback')
+          .insert({ candidate_id: id!, interviewer_id: user!.id, submitted_at: new Date().toISOString() })
         error = result.error
       }
-      if (error) { console.error('[feedback decision]', error); throw error }
 
-      // Advance stage; clear interview_date when selecting for next round so HR reschedules
-      const stageUpdate: Record<string, unknown> = { current_stage: targetStage }
-      if (decision === 'yes') stageUpdate.interview_date = null
-      const { error: stageErr } = await supabase.from('candidates')
-        .update(stageUpdate)
-        .eq('id', id!)
-      if (stageErr) { console.error('[stage update]', stageErr); throw stageErr }
-
-      // Auto-assign interviewers configured for the target stage on this job
-      if (decision === 'yes' && (candidate as any)?.job_id) {
-        const targetKey = targetStage.toLowerCase().replace(/[^a-z0-9]/g, '_')
-        const { data: jobData } = await supabase.from('jobs')
-          .select('stage_interviewers')
-          .eq('id', (candidate as any).job_id)
-          .maybeSingle()
-        const newInterviewers: string[] = (jobData as any)?.stage_interviewers?.[targetKey] ?? []
-        if (newInterviewers.length > 0) {
-          await supabase.from('candidates')
-            .update({ assigned_interviewers: newInterviewers })
-            .eq('id', id!)
-        }
-      }
+      if (error) { console.error('[feedback submit]', error); throw error }
     },
     onSuccess: async () => {
-      setDecisionEditMode(false)
       await refetchFeedback()
       qc.invalidateQueries({ queryKey: ['my-feedback', id, user?.id] })
       qc.invalidateQueries({ queryKey: ['my-interviews'] })
-      qc.invalidateQueries({ queryKey: ['candidate', id] })
-      qc.invalidateQueries({ queryKey: ['candidates'] })
-      qc.invalidateQueries({ queryKey: ['widget'] })
-      qc.invalidateQueries({ queryKey: ['interview-feedback-all', id] })
     },
     onError: (err: any) => {
       setFeedbackErr(err?.message ?? 'Failed. Check browser console.')
@@ -327,6 +293,7 @@ export function CandidateProfilePage() {
     const draft = draftNotes[sectionKey]?.trim()
     if (!draft) return
     setSavingNote(sectionKey)
+    setActionError(null)
     const existing = (candidate as any)?.interview_notes ?? {}
     const entries: NoteEntry[] = existing[sectionKey] ?? []
     const newEntry: NoteEntry = { text: draft, author: user!.full_name, authorId: user!.id, timestamp: new Date().toISOString() }
@@ -351,7 +318,7 @@ export function CandidateProfilePage() {
         throw rpcError
       }
     } catch (err: any) {
-      console.error('[saveNote]', err)
+      setActionError(err?.message ?? 'Failed to save note')
       setSavingNote(null)
       return
     }
@@ -366,9 +333,59 @@ export function CandidateProfilePage() {
       if (cached) qc.setQueryData(['candidate', id], { ...cached, interview_notes: updated })
       setDraftNotes(p => ({ ...p, [sectionKey]: '' }))
     } catch (err: any) {
-      console.error('[saveNote fallback]', err)
+      setActionError(err?.message ?? 'Failed to save note')
     }
     setSavingNote(null)
+  }
+
+  const applyStageDecision = async (action: 'next_round' | 'reject') => {
+    setStageDecisionSaving(true)
+    setActionError(null)
+    let newStage = (candidate as any).current_stage
+    let newStatus = (candidate as any).status ?? 'active'
+    if (action === 'next_round') {
+      const idx = stages.indexOf((candidate as any).current_stage)
+      newStage = idx >= 0 && idx < stages.length - 1 ? stages[idx + 1] : newStage
+    } else {
+      newStatus = 'rejected'
+    }
+
+    try {
+      const { error: rpcError } = await supabase.rpc('set_candidate_stage', {
+        p_candidate_id: id!,
+        p_new_stage: newStage,
+        p_new_status: newStatus,
+      })
+      if (!rpcError) {
+        qc.invalidateQueries({ queryKey: ['candidate', id] })
+        qc.invalidateQueries({ queryKey: ['candidates'] })
+        qc.invalidateQueries({ queryKey: ['my-interviews'] })
+        setStageDecisionSaving(false)
+        return
+      }
+      if ((rpcError as any).code !== 'PGRST202' && !rpcError.message?.includes('Could not find')) {
+        throw rpcError
+      }
+    } catch (err: any) {
+      setActionError(err?.message ?? 'Failed to update stage')
+      setStageDecisionSaving(false)
+      return
+    }
+
+    // Direct update fallback
+    try {
+      const { data: rows, error } = await supabase.from('candidates')
+        .update({ current_stage: newStage, status: newStatus, interview_date: null, updated_at: new Date().toISOString() })
+        .eq('id', id!).select('id')
+      if (error) throw error
+      if (!rows?.length) throw new Error('Run supabase-ca-migration.sql in Supabase SQL Editor to enable this for interviewers')
+      qc.invalidateQueries({ queryKey: ['candidate', id] })
+      qc.invalidateQueries({ queryKey: ['candidates'] })
+      qc.invalidateQueries({ queryKey: ['my-interviews'] })
+    } catch (err: any) {
+      setActionError(err?.message ?? 'Failed to update stage')
+    }
+    setStageDecisionSaving(false)
   }
 
   // Edit an existing note — only the original author can edit
@@ -381,37 +398,15 @@ export function CandidateProfilePage() {
     const existing = (candidate as any)?.interview_notes ?? {}
     const entries: NoteEntry[] = [...(existing[section] ?? [])]
     entries[index] = { ...entries[index], text: trimmed, timestamp: new Date().toISOString() }
-    const newNotes = { ...existing, [section]: entries }
-
-    // Optimistically update the cache first so the UI reflects the change immediately
-    const cached = qc.getQueryData<any>(['candidate', id])
-    if (cached) qc.setQueryData(['candidate', id], { ...cached, interview_notes: newNotes })
-    setEditingNote(null)
-    setSavingEditNote(false)
-
-    // Persist to DB (RPC first for interviewer RLS bypass, direct update fallback)
-    const { error: rpcError } = await supabase.rpc('submit_interview_note_edit', {
-      p_candidate_id: id!,
-      p_section_key: section,
-      p_note_index: index,
-      p_note_text: trimmed,
-    })
-    if (rpcError && (rpcError as any).code !== 'PGRST202' && !rpcError.message?.includes('Could not find')) {
-      console.error('[saveEditedNote rpc]', rpcError)
-    } else if (!rpcError) {
-      return
-    }
-
-    // Direct update fallback
     const { error } = await supabase.from('candidates').update({
-      interview_notes: newNotes
+      interview_notes: { ...existing, [section]: entries }
     }).eq('id', id!)
-    if (error) {
-      console.error('[saveEditedNote]', error)
-      // Revert cache on failure
-      if (cached) qc.setQueryData(['candidate', id], cached)
+    if (error) console.error('[saveEditedNote]', error)
+    else {
       qc.invalidateQueries({ queryKey: ['candidate', id] })
+      setEditingNote(null)
     }
+    setSavingEditNote(false)
   }
 
   const submitCostApproval = async () => {
@@ -541,8 +536,12 @@ export function CandidateProfilePage() {
   if (isLoading) return <div className="flex justify-center py-24"><Loader2 className="w-6 h-6 animate-spin text-blue-500"/></div>
   if (!candidate) return <p className="text-gray-500 py-8 text-center">Candidate not found.</p>
 
-  // Stage names — always from settings hook (same source as CandidatesPage)
-  const stages: string[] = stageConfigsRaw.map((s: any) => s.name)
+  // Stage names — always from hook (hook returns defaults if DB empty)
+  const stages: string[] = (() => {
+    const jobStages = (candidate as any)?.job?.pipeline_stages
+    if (jobStages?.length) return jobStages
+    return stageConfigsRaw.map((s: any) => s.name)
+  })()
 
   // Notes sections — all pipeline stages that have notes capability
   // Used for the interview notes panel (left column) and for cost approval history
@@ -666,28 +665,6 @@ export function CandidateProfilePage() {
     : ((candidate as any).hr_owner ? [(candidate as any).hr_owner] : [])
 
   const feedbackSubmitted = !!myFeedback?.submitted_at
-  const feedbackDecision = (myFeedback as any)?.recommendation as 'yes' | 'no' | null ?? null
-
-  // Stage change: if new stage is before cost approval stage, also clear CA data
-  const handleStageChange = async (newStage: string) => {
-    setStageOpen(false)
-    const newIdx = stages.indexOf(newStage)
-    if (costApprovalPipelineIdx >= 0 && newIdx < costApprovalPipelineIdx) {
-      const existing = (candidate as any)?.interview_notes ?? {}
-      const { cost_approval: _ca, cost_approval_comments: _cac, ...cleanedNotes } = existing as Record<string, any>
-      const { error } = await supabase.from('candidates').update({
-        current_stage: newStage,
-        cost_approval_decision: null,
-        interview_notes: cleanedNotes,
-      }).eq('id', candidate.id)
-      if (error) { console.error('[stage+ca clear]', error); return }
-      qc.invalidateQueries({ queryKey: ['candidate', id] })
-      qc.invalidateQueries({ queryKey: ['candidates'] })
-      qc.invalidateQueries({ queryKey: ['widget'] })
-    } else {
-      updateStage.mutate({ id: candidate.id, stage: newStage })
-    }
-  }
 
   // Google Drive preview: convert share URL to embedded preview
   const drivePreviewUrl = candidate.resume_url
@@ -726,9 +703,7 @@ export function CandidateProfilePage() {
           <p className="text-sm text-gray-400 mt-0.5">
             {(candidate as any).agency?.name
               ? <span>🏢 {(candidate as any).agency.name}</span>
-              : candidate.source_category === 'referral'
-                ? <span>👤 {candidate.source_name ? `Referred by ${candidate.source_name}` : 'Employee Referral'}</span>
-                : `${candidate.source_name} · ${labelOf(candidate.source_category)}`
+              : `${candidate.source_name} · ${labelOf(candidate.source_category)}`
             }
           </p>
         </div>
@@ -755,7 +730,7 @@ export function CandidateProfilePage() {
                     <div className="fixed inset-0 z-40" onClick={() => setStageOpen(false)}/>
                     <div className="absolute right-0 top-full mt-1 bg-white border border-gray-200 rounded-xl shadow-xl z-50 py-1 w-52 max-h-80 overflow-y-auto">
                       {stages.map((s: string) => (
-                        <button key={s} onClick={() => handleStageChange(s)}
+                        <button key={s} onClick={() => { updateStage.mutate({ id: candidate.id, stage: s }); setStageOpen(false) }}
                           className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50 flex items-center justify-between gap-2">
                           <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${stageColor(s)}`}>{s}</span>
                           {s === candidate.current_stage && <Check className="w-3.5 h-3.5 text-slate-600"/>}
@@ -818,7 +793,6 @@ export function CandidateProfilePage() {
                     <option value="platform">🔗 Platform</option>
                     <option value="agency">🏢 Agency</option>
                     <option value="college">🎓 College</option>
-                    <option value="referral">👤 Employee Referral</option>
                   </select>
                 </div>
                 <div>
@@ -862,10 +836,7 @@ export function CandidateProfilePage() {
             <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Details</p>
             <div className="space-y-2">
               {[
-                ['Source', candidate.source_category === 'referral'
-                  ? (candidate.source_name ? `Referred by ${candidate.source_name}` : 'Employee Referral — Unknown')
-                  : `${labelOf(candidate.source_category)} — ${candidate.source_name}`
-                ],
+                ['Source', `${labelOf(candidate.source_category)} — ${candidate.source_name}`],
                 ['Job', (candidate as any).job?.title ?? '—'],
                 ['Added', formatDate(candidate.created_at)],
               ].map(([label, val]) => (
@@ -1482,85 +1453,47 @@ export function CandidateProfilePage() {
             </>
           )}
 
-          {/* ── Interview Decision — Interviewers only ── */}
-          {isInterviewer && (
-            <div className={`rounded-xl border-2 px-5 py-4 ${
-              feedbackDecision === 'yes' && !decisionEditMode ? 'border-green-200 bg-green-50/40' :
-              feedbackDecision === 'no'  && !decisionEditMode ? 'border-red-200 bg-red-50/40' :
-              'border-slate-200 bg-slate-50/40'
-            }`}>
-              {feedbackDecision === 'yes' && !decisionEditMode ? (
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2.5">
-                    <CheckCircle className="w-5 h-5 text-green-600 flex-shrink-0"/>
-                    <div>
-                      <p className="text-sm font-semibold text-green-800">Selected for Next Round</p>
-                      <p className="text-xs text-green-600 mt-0.5">Candidate has been advanced to the next stage.</p>
-                    </div>
+          {/* ── Decision — visible to admin/HR/interviewer ── */}
+          {canAddNotes && !isAgency && (() => {
+            const stageIdx   = stages.indexOf((candidate as any).current_stage)
+            const nextStage  = stageIdx >= 0 && stageIdx < stages.length - 1 ? stages[stageIdx + 1] : null
+            const isRejected = (candidate as any).status === 'rejected'
+            const currentStage = (candidate as any).current_stage ?? ''
+
+            return (
+              <div className="rounded-xl border border-gray-200 bg-gray-50/50 px-5 py-4 space-y-3">
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Decision</p>
+
+                {actionError && (
+                  <div className="bg-red-50 border border-red-200 rounded-lg px-3 py-2 flex items-start gap-2">
+                    <XCircle className="w-4 h-4 text-red-500 flex-shrink-0 mt-0.5"/>
+                    <p className="text-xs text-red-700">{actionError}</p>
                   </div>
-                  <button onClick={() => setDecisionEditMode(true)}
-                    className="text-xs text-gray-400 hover:text-gray-600 flex items-center gap-1 ml-4">
-                    <Pencil className="w-3 h-3"/> Edit
-                  </button>
-                </div>
-              ) : feedbackDecision === 'no' && !decisionEditMode ? (
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2.5">
-                    <XCircle className="w-5 h-5 text-red-500 flex-shrink-0"/>
-                    <div>
-                      <p className="text-sm font-semibold text-red-700">{(myFeedback as any)?.stage ?? candidate.current_stage} Reject</p>
-                      <p className="text-xs text-red-500 mt-0.5">Candidate was rejected at this stage.</p>
-                    </div>
+                )}
+
+                {isRejected ? (
+                  <div className="flex items-center gap-2 px-3.5 py-2 bg-red-100 text-red-700 text-sm font-medium rounded-lg w-fit">
+                    <XCircle className="w-4 h-4"/> {currentStage} Rejected
                   </div>
-                  <button onClick={() => setDecisionEditMode(true)}
-                    className="text-xs text-gray-400 hover:text-gray-600 flex items-center gap-1 ml-4">
-                    <Pencil className="w-3 h-3"/> Edit
-                  </button>
-                </div>
-              ) : (
-                <>
-                  <div className="flex items-center justify-between mb-1">
-                    <p className="text-sm font-semibold text-gray-800">Your Decision</p>
-                    {decisionEditMode && (
-                      <button onClick={() => setDecisionEditMode(false)}
-                        className="text-xs text-gray-400 hover:text-gray-600 flex items-center gap-1">
-                        <X className="w-3 h-3"/> Cancel
+                ) : (
+                  <div className="flex flex-wrap gap-2">
+                    {nextStage && (
+                      <button onClick={() => applyStageDecision('next_round')} disabled={stageDecisionSaving}
+                        className="flex items-center gap-1.5 px-4 py-2 bg-green-600 hover:bg-green-700 disabled:bg-gray-300 text-white text-sm font-medium rounded-lg transition-colors">
+                        {stageDecisionSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin"/> : <ChevronRight className="w-3.5 h-3.5"/>}
+                        Select for Next Round
                       </button>
                     )}
-                  </div>
-                  <p className="text-xs text-gray-500 mb-3">Add interview notes above, then make a decision.</p>
-                  {feedbackErr && <p className="text-xs text-red-600 mb-2">{feedbackErr}</p>}
-                  <div className="flex gap-3">
-                    <button
-                      onClick={() => {
-                        const idx = stages.indexOf(candidate.current_stage)
-                        const targetStage = stages[idx + 1] ?? candidate.current_stage
-                        makeDecision.mutate({ decision: 'yes', currentStage: candidate.current_stage, targetStage })
-                      }}
-                      disabled={makeDecision.isPending}
-                      className="flex-1 px-4 py-2 bg-green-600 hover:bg-green-700 disabled:bg-gray-300 text-white text-sm font-medium rounded-lg transition-colors flex items-center justify-center gap-2"
-                    >
-                      {makeDecision.isPending ? <Loader2 className="w-4 h-4 animate-spin"/> : <CheckCircle className="w-4 h-4"/>}
-                      Select for Next Round
-                    </button>
-                    <button
-                      onClick={() => {
-                        const stageName = candidate.current_stage
-                        const rejectLabel = `${stageName} Reject`
-                        const targetStage = stages.find(s => s.toLowerCase() === rejectLabel.toLowerCase()) ?? rejectLabel
-                        makeDecision.mutate({ decision: 'no', currentStage: stageName, targetStage })
-                      }}
-                      disabled={makeDecision.isPending}
-                      className="flex-1 px-4 py-2 bg-red-600 hover:bg-red-700 disabled:bg-gray-300 text-white text-sm font-medium rounded-lg transition-colors flex items-center justify-center gap-2"
-                    >
-                      {makeDecision.isPending ? <Loader2 className="w-4 h-4 animate-spin"/> : <XCircle className="w-4 h-4"/>}
-                      {candidate.current_stage} Reject
+                    <button onClick={() => applyStageDecision('reject')} disabled={stageDecisionSaving}
+                      className="flex items-center gap-1.5 px-4 py-2 bg-white border border-red-300 hover:bg-red-50 disabled:bg-gray-100 text-red-600 text-sm font-medium rounded-lg transition-colors">
+                      {stageDecisionSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin"/> : <XCircle className="w-3.5 h-3.5"/>}
+                      {currentStage} Reject
                     </button>
                   </div>
-                </>
-              )}
-            </div>
-          )}
+                )}
+              </div>
+            )
+          })()}
         </div>
       </div>
 
@@ -1616,22 +1549,12 @@ function AgencyFeedbackEditor({ candidateId, currentFeedback, canEdit }: {
   )
 }
 
-const _PLATFORM_SOURCES = ['LinkedIn','Naukri','Indeed','Internshala','Unstop','Shine','Monster','Foundit','Apna','Website','Other']
+const _PLATFORM_SOURCES = ['LinkedIn','Naukri','Indeed','Internshala','Shine','Monster','Foundit','Apna','Referral','Website','Other']
 
 function ProfileSubSource({ sourceCategory, value, onChange }: {
   sourceCategory: string; value: string; onChange: (v: string) => void
 }) {
   const { data: agencyUsers = [] } = useAgencies()
-  const { data: employees = [] } = useQuery<string[]>({
-    queryKey: ['employee-referral-list'],
-    queryFn: async () => {
-      const { data } = await supabase.from('app_settings').select('value').eq('key', 'employee_referral_list').maybeSingle()
-      if (!data?.value) return []
-      try { return JSON.parse(data.value) as string[] } catch { return [] }
-    },
-    staleTime: 60_000,
-    enabled: sourceCategory === 'referral',
-  })
   const cls = 'w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-slate-400'
 
   if (sourceCategory === 'agency') return (
@@ -1644,12 +1567,6 @@ function ProfileSubSource({ sourceCategory, value, onChange }: {
     <select value={value} onChange={e => onChange(e.target.value)} className={cls}>
       <option value="">Select platform…</option>
       {_PLATFORM_SOURCES.map(p => <option key={p} value={p}>{p}</option>)}
-    </select>
-  )
-  if (sourceCategory === 'referral') return (
-    <select value={value} onChange={e => onChange(e.target.value)} className={cls}>
-      <option value="">Select employee…</option>
-      {employees.map(e => <option key={e} value={e}>{e}</option>)}
     </select>
   )
   if (sourceCategory === 'college') return (

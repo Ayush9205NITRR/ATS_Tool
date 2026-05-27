@@ -181,9 +181,10 @@ DECLARE
 BEGIN
   v_status := p_new_status::public.candidate_status;
   UPDATE public.candidates
-  SET current_stage = p_new_stage,
-      status        = v_status,
-      updated_at    = NOW()
+  SET current_stage  = p_new_stage,
+      status         = v_status,
+      interview_date = NULL,
+      updated_at     = NOW()
   WHERE id = p_candidate_id;
 END;
 $$;
