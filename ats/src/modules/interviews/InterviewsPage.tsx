@@ -2,7 +2,7 @@
 // INTERVIEWS PAGE — Table view matching CandidatesPage style
 // Feedback state managed via interview_feedback table
 // ============================================================
-import { useMemo, useState, useRef, useEffect, useCallback } from 'react'
+import { useMemo, useState, useRef, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Loader2, CheckCircle, Clock, Briefcase, Calendar, X, ChevronDown, UserCheck, UserX, ArrowRight, Search } from 'lucide-react'
@@ -10,6 +10,7 @@ import { supabase } from '../../lib/supabaseClient'
 import { useAuthStore } from '../auth/authStore'
 import { formatDateTime } from '../../shared/utils/helpers'
 import { PageHeader } from '../../shared/components/PageHeader'
+import { useStages } from '../../shared/hooks/useStages'
 
 type FeedbackFilter = 'pending' | 'submitted'
 type AdminTab = 'schedule_pending' | 'scheduled' | 'rejected'
@@ -65,25 +66,17 @@ function matchesDateFilter(iso: string | null, op: DateOp, a: string, b: string)
   }
 }
 
-const STAGE_COLOURS: Record<string, string> = {
-  Applied: 'bg-gray-100 text-gray-600',
-  Screening: 'bg-blue-100 text-blue-700',
-  R1: 'bg-indigo-100 text-indigo-700',
-  'Case Study': 'bg-yellow-100 text-yellow-700',
-  R2: 'bg-orange-100 text-orange-700',
-  R3: 'bg-orange-200 text-orange-800',
-  'CF (Virtual)': 'bg-purple-100 text-purple-700',
-  'CF (In-Person)': 'bg-purple-200 text-purple-800',
-  Offer: 'bg-violet-100 text-violet-700',
-  Hired: 'bg-green-100 text-green-700',
-  Rejected: 'bg-red-100 text-red-700',
-}
-
 export function InterviewsPage() {
   const { user, hasRole } = useAuthStore()
   const navigate = useNavigate()
   const qc = useQueryClient()
   const isInterviewer = hasRole(['interviewer'])
+
+  const { stageConfigs } = useStages()
+  const stageColour = (name: string) => {
+    const cfg = stageConfigs.find(s => s.name === name)
+    return cfg ? `${cfg.color} ${cfg.textColor}` : 'bg-gray-100 text-gray-600'
+  }
   const [filter, setFilter]     = useState<FeedbackFilter>('pending')
   const [adminTab, setAdminTab] = useState<AdminTab>('schedule_pending')
   const [searchQuery, setSearchQuery] = useState('')
@@ -263,8 +256,8 @@ export function InterviewsPage() {
       }
       const latest = Array.from(latestPerCandidate.values())
       return {
-        schedulePending: latest.filter(r => r.recommendation === 'yes' && !r.candidateInterviewDate),
-        scheduled:       latest.filter(r => r.recommendation === 'yes' && !!r.candidateInterviewDate),
+        schedulePending: latest.filter(r => r.recommendation === 'yes' && r.stage === r.candidateStage),
+        scheduled:       latest.filter(r => r.recommendation === 'yes' && r.stage !== r.candidateStage),
         rejected:        latest.filter(r => r.recommendation === 'no'),
       }
     },
@@ -552,7 +545,7 @@ export function InterviewsPage() {
 
                     {/* Stage */}
                     <td className="px-4 py-3">
-                      <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${STAGE_COLOURS[c.current_stage] ?? 'bg-gray-100 text-gray-600'}`}>
+                      <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${stageColour(c.current_stage)}`}>
                         {c.current_stage}
                       </span>
                     </td>
@@ -658,8 +651,8 @@ export function InterviewsPage() {
                   ) : adminTab === 'scheduled' ? (
                     <>
                       <Calendar className="w-8 h-8 mb-2 text-gray-300"/>
-                      <p className="text-sm font-medium text-gray-500">No interviews scheduled yet</p>
-                      <p className="text-xs mt-1">Candidates with a scheduled interview date will appear here.</p>
+                      <p className="text-sm font-medium text-gray-500">No interviews in progress</p>
+                      <p className="text-xs mt-1">Candidates advanced to the next round will appear here.</p>
                     </>
                   ) : (
                     <>
@@ -701,7 +694,7 @@ export function InterviewsPage() {
                         </td>
                         <td className="px-4 py-3 text-xs text-gray-600">{r.jobTitle}</td>
                         <td className="px-4 py-3">
-                          <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${STAGE_COLOURS[r.stage] ?? 'bg-gray-100 text-gray-600'}`}>
+                          <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${stageColour(r.stage)}`}>
                             {r.stage}
                           </span>
                         </td>
@@ -729,7 +722,7 @@ export function InterviewsPage() {
                     {adminTab === 'schedule_pending'
                       ? `${rows.length} candidate${rows.length !== 1 ? 's' : ''} ready to schedule — assign an interview date`
                       : adminTab === 'scheduled'
-                      ? `${rows.length} interview${rows.length !== 1 ? 's' : ''} scheduled`
+                      ? `${rows.length} candidate${rows.length !== 1 ? 's' : ''} in next round`
                       : `${rows.length} candidate${rows.length !== 1 ? 's' : ''} rejected by interviewers`
                     }
                   </p>
