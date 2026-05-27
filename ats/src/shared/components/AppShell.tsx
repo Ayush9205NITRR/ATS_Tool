@@ -11,7 +11,6 @@ const NAV = [
   { to: '/candidates', label: 'Candidates',     icon: Users,           roles: ['super_admin','admin','hr_team'] },
   { to: '/candidates', label: 'My Submissions', icon: Users,           roles: ['agency'] },
   { to: '/interviews',     label: 'My Interviews',  icon: ClipboardList, roles: ['interviewer'] },
-  { to: '/interviews',     label: 'Reviews',        icon: ClipboardList, roles: ['admin','super_admin','hr_team'] },
   { to: '/cost-approval',  label: 'Cost Approval',  icon: ShieldCheck,   roles: ['super_admin','admin','hr_team','interviewer'] },
   { to: '/jobs',           label: 'Jobs',           icon: Briefcase,     roles: ['super_admin','admin','hr_team'] },
   { to: '/upload',     label: 'Upload',         icon: Upload,          roles: ['super_admin','admin','hr_team','agency'] },
