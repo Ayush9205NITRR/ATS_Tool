@@ -412,6 +412,7 @@ export function CandidatesPage() {
     staleTime: 60_000,
   })
   const caStageForCleanup = caSettings?.stageName ?? ''
+  const caIdx = caStageForCleanup ? STAGES.indexOf(caStageForCleanup) : -1
 
   const [serverFilters, setServerFilters] = useState<CandidateFilters>(() => ({
     job_id: searchParams.get('job') || undefined,
@@ -440,6 +441,10 @@ export function CandidatesPage() {
   const [showBulkMenu, setShowBulkMenu]   = useState(false)
   const [bulkField, setBulkField]         = useState<string|null>(null)
   const [confirmDelete, setConfirmDelete] = useState<string|null>(null)
+  const [caResetConfirm, setCaResetConfirm] = useState<{ id: string; stage: string } | null>(null)
+  const [caResetBulkConfirm, setCaResetBulkConfirm] = useState(false)
+  const [caResetBulkSaving, setCaResetBulkSaving] = useState(false)
+  const [pendingBulkApply, setPendingBulkApply] = useState<{ field: string; value: string } | null>(null)
   const [groupBy, setGroupBy] = useState('')
   const LS_KEY = 'ats_col_layout_v1'
   const savedLayout = (() => {
@@ -462,6 +467,8 @@ export function CandidatesPage() {
   const [sendEmailCandidates, setSendEmailCandidates] = useState<any[]>([])
   const [bulkSelectValue, setBulkSelectValue] = useState('')
   const filterRef = useRef<HTMLDivElement>(null)
+  // Stable ref so onUpdate closure always has the latest caIdx, STAGES, and displayed without re-creating the callback
+  const caUpdateRef = useRef<{ caIdx: number; stages: string[]; displayed: any[] }>({ caIdx: -1, stages: [], displayed: [] })
 
   useEffect(() => {
     const fn = (e:MouseEvent) => { if (filterRef.current && !filterRef.current.contains(e.target as Node)) setShowFilterBar(false) }
@@ -536,15 +543,30 @@ const displayed = useMemo(() => {
   const updateField = useMutation({
     mutationFn: async({id,field,value}:{id:string;field:string;value:any})=>{
       const updates: Record<string,any> = { [field]: value }
-      if (field === 'current_stage' && value && caStageForCleanup) {
+      if (field === 'current_stage' && value && caIdx >= 0) {
         const newIdx = STAGES.indexOf(value)
-        const caIdx = STAGES.indexOf(caStageForCleanup)
-        if (caIdx >= 0 && newIdx < caIdx) {
+        if (newIdx >= 0 && newIdx <= caIdx) {
           const { data: c } = await supabase.from('candidates').select('interview_notes').eq('id', id).maybeSingle()
           const notes: Record<string,any> = (c as any)?.interview_notes ?? {}
-          const { cost_approval: _ca, cost_approval_comments: _cac, ...cleaned } = notes
-          updates.cost_approval_decision = null
-          updates.interview_notes = cleaned
+          const caEntries: any[] = notes.cost_approval ?? []
+          const lastCA = caEntries[caEntries.length - 1]
+          if (lastCA && lastCA.decision !== 'reset') {
+            const now = new Date().toISOString()
+            const by = user?.full_name ?? 'unknown'
+            const dateLabel = new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
+            updates.cost_approval_decision = null
+            updates.interview_notes = {
+              ...notes,
+              cost_approval: [
+                ...caEntries,
+                { decision: 'reset', text: `Cost approval reset — stage moved back to "${value}" by ${by} on ${dateLabel}`, author: by, authorId: user?.id ?? null, timestamp: now, isSystem: true },
+              ],
+              cost_approval_comments: [
+                ...(notes.cost_approval_comments ?? []),
+                { text: `Cost approval reset — stage moved back to "${value}"`, author: by, authorId: user?.id ?? null, timestamp: now, isSystem: true },
+              ],
+            }
+          }
         }
       }
       const{error}=await supabase.from('candidates').update(updates).eq('id',id)
@@ -599,7 +621,27 @@ const displayed = useMemo(() => {
     onSuccess:()=>{qc.invalidateQueries({queryKey:['candidates']});setSelectedIds(new Set())},
   })
 
-  const onUpdate  = useCallback((id:string,field:string,value:any)=>updateField.mutate({id,field,value}),[updateField])
+  // Keep ref up-to-date on every render so onUpdate always sees the latest values
+  caUpdateRef.current = { caIdx, stages: STAGES, displayed }
+
+  const onUpdate = useCallback((id: string, field: string, value: any) => {
+    if (field === 'current_stage') {
+      const { caIdx, stages, displayed } = caUpdateRef.current
+      if (caIdx >= 0) {
+        const newIdx = stages.indexOf(value)
+        if (newIdx >= 0 && newIdx <= caIdx) {
+          const cand = displayed.find((c: any) => c.id === id)
+          const entries: any[] = cand?.interview_notes?.cost_approval ?? []
+          const lastCA = entries[entries.length - 1]
+          if (lastCA && lastCA.decision !== 'reset') {
+            setCaResetConfirm({ id, stage: value })
+            return
+          }
+        }
+      }
+    }
+    updateField.mutate({ id, field, value })
+  }, [updateField])
   const toggleSel = useCallback((id:string)=>setSelectedIds(p=>{const n=new Set(p);n.has(id)?n.delete(id):n.add(id);return n}),[])
   const toggleAll = useCallback(()=>setSelectedIds(s=>s.size===displayed.length?new Set():new Set(displayed.map((c:any)=>c.id))),[displayed])
   const getName   = useCallback((list:any[], id:string|null) => {
@@ -781,6 +823,22 @@ const displayed = useMemo(() => {
                               const val = bulkField === 'interview_date'
                                 ? new Date(bulkSelectValue).toISOString()
                                 : bulkSelectValue
+                              if (bulkField === 'current_stage' && caIdx >= 0) {
+                                const newIdx = STAGES.indexOf(val)
+                                if (newIdx >= 0 && newIdx <= caIdx) {
+                                  const affectedCount = displayed.filter((c: any) => {
+                                    if (!selectedIds.has(c.id)) return false
+                                    const entries: any[] = c.interview_notes?.cost_approval ?? []
+                                    const last = entries[entries.length - 1]
+                                    return last && last.decision !== 'reset'
+                                  }).length
+                                  if (affectedCount > 0) {
+                                    setPendingBulkApply({ field: bulkField!, value: val })
+                                    setCaResetBulkConfirm(true)
+                                    return
+                                  }
+                                }
+                              }
                               bulkUpdate.mutate({ field: bulkField!, value: val })
                             }}
                             className="w-full py-1.5 bg-gray-900 text-white rounded-lg text-xs font-medium hover:bg-gray-800 disabled:opacity-40 transition-colors flex items-center justify-center gap-1.5">
@@ -993,6 +1051,98 @@ const displayed = useMemo(() => {
           <Button variant="danger" loading={deleteOne.isPending} onClick={()=>confirmDelete&&deleteOne.mutate(confirmDelete)}>Delete</Button>
         </div>
       </Modal>
+
+      {/* ── CA reset confirmation — individual stage cell edit ── */}
+      <Modal open={!!caResetConfirm} onClose={() => setCaResetConfirm(null)} title="Reset cost approval?" size="sm">
+        <div className="space-y-4">
+          <p className="text-sm text-gray-700">
+            Moving this candidate to <strong>{caResetConfirm?.stage}</strong> will reset their cost approval
+            status to <span className="font-medium text-amber-700">Pending</span>. The approval history is
+            preserved for audit purposes.
+          </p>
+          <p className="text-xs text-gray-500">This action will be logged in the candidate's Cost Approval section.</p>
+          <div className="flex gap-2 justify-end">
+            <Button variant="secondary" onClick={() => setCaResetConfirm(null)}>Cancel</Button>
+            <button
+              onClick={() => {
+                if (caResetConfirm) {
+                  updateField.mutate({ id: caResetConfirm.id, field: 'current_stage', value: caResetConfirm.stage })
+                  setCaResetConfirm(null)
+                }
+              }}
+              className="px-4 py-2 text-sm bg-amber-600 text-white rounded-lg hover:bg-amber-700"
+            >
+              Yes, reset &amp; move
+            </button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* ── CA reset confirmation — bulk stage change ── */}
+      {caResetBulkConfirm && pendingBulkApply && (()=>{
+        const affectedCandidates = displayed.filter((c: any) => {
+          if (!selectedIds.has(c.id)) return false
+          const entries: any[] = c.interview_notes?.cost_approval ?? []
+          const last = entries[entries.length - 1]
+          return last && last.decision !== 'reset'
+        })
+        return (
+          <Modal
+            open={caResetBulkConfirm}
+            onClose={() => { if (!caResetBulkSaving) { setCaResetBulkConfirm(false); setPendingBulkApply(null) } }}
+            title="Reset cost approval for batch?"
+            size="sm"
+          >
+            <div className="space-y-4">
+              <p className="text-sm text-gray-700">
+                Moving <strong>{selectedIds.size}</strong> candidates to <strong>{pendingBulkApply.value}</strong> will
+                reset the cost approval for <strong>{affectedCandidates.length}</strong> of them who currently have
+                an active approval. Their approval history is preserved for audit.
+              </p>
+              <p className="text-xs text-gray-500">Each reset will be logged in the respective candidate's Cost Approval section.</p>
+              <div className="flex gap-2 justify-end">
+                <Button variant="secondary" disabled={caResetBulkSaving} onClick={() => { setCaResetBulkConfirm(false); setPendingBulkApply(null) }}>Cancel</Button>
+                <button
+                  disabled={caResetBulkSaving}
+                  onClick={async () => {
+                    if (!pendingBulkApply) return
+                    setCaResetBulkSaving(true)
+                    const { field, value } = pendingBulkApply
+                    const now = new Date().toISOString()
+                    const by = user?.full_name ?? 'unknown'
+                    const dateLabel = new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
+                    for (const c of affectedCandidates) {
+                      const notes = c.interview_notes ?? {}
+                      await supabase.from('candidates').update({
+                        interview_notes: {
+                          ...notes,
+                          cost_approval: [
+                            ...(notes.cost_approval ?? []),
+                            { decision: 'reset', text: `Cost approval reset — stage moved back to "${value}" by ${by} on ${dateLabel} (bulk update)`, author: by, authorId: user?.id ?? null, timestamp: now, isSystem: true },
+                          ],
+                          cost_approval_comments: [
+                            ...(notes.cost_approval_comments ?? []),
+                            { text: `Cost approval reset — stage moved back to "${value}" (bulk update)`, author: by, authorId: user?.id ?? null, timestamp: now, isSystem: true },
+                          ],
+                        },
+                        cost_approval_decision: null,
+                      }).eq('id', c.id)
+                    }
+                    bulkUpdate.mutate({ field, value })
+                    setCaResetBulkSaving(false)
+                    setCaResetBulkConfirm(false)
+                    setPendingBulkApply(null)
+                  }}
+                  className="flex items-center gap-2 px-4 py-2 text-sm bg-amber-600 text-white rounded-lg hover:bg-amber-700 disabled:opacity-50"
+                >
+                  {caResetBulkSaving && <Loader2 className="w-3.5 h-3.5 animate-spin"/>}
+                  Yes, reset &amp; move all
+                </button>
+              </div>
+            </div>
+          </Modal>
+        )
+      })()}
 
       {scheduleCandidate && (
         <ScheduleInterviewModal

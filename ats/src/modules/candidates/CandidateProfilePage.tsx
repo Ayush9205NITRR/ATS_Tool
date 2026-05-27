@@ -11,6 +11,7 @@ import {
 import { useCandidate, useUpdateStage } from './useCandidates'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Button } from '../../shared/components/Button'
+import { Modal } from '../../shared/components/Modal'
 import { useAuthStore } from '../auth/authStore'
 import { formatDateTime, formatDate, formatRelative, labelOf } from '../../shared/utils/helpers'
 import { supabase } from '../../lib/supabaseClient'
@@ -90,6 +91,10 @@ export function CandidateProfilePage() {
   const [caComment, setCaComment]     = useState('')
   const [caSavingComment, setCaSavingComment] = useState(false)
   const [caEditMode, setCaEditMode]   = useState(false)
+  // CA reset confirmation modal
+  const [caResetConfirmOpen,  setCaResetConfirmOpen]  = useState(false)
+  const [caResetConfirmStage, setCaResetConfirmStage] = useState('')
+  const [caResetSaving,       setCaResetSaving]       = useState(false)
   // Latch: once cost approval section is shown for this candidate, keep it shown
   // even during brief cache-refetch windows where conditions might flicker false.
   const costApprovalShownForId = useRef<string | null>(null)
@@ -146,15 +151,19 @@ export function CandidateProfilePage() {
     staleTime: 30_000,
   })
 
-  // Sync cost approval fields from interview_notes.cost_approval when candidate loads
+  // Sync cost approval fields from interview_notes.cost_approval when candidate loads.
+  // Skip 'reset' entries — they're audit trail only, not the active decision.
   useEffect(() => {
     if (!candidate) return
     const iNotes = (candidate as any).interview_notes ?? {}
     const caEntries: any[] = iNotes['cost_approval'] ?? []
-    const latest = caEntries[caEntries.length - 1]
+    const latest = [...caEntries].reverse().find(e => e.decision !== 'reset') ?? null
     if (latest) {
       setCaDecision(latest.decision ?? '')
       setCaNotes(latest.text ?? '')
+    } else {
+      setCaDecision('')
+      setCaNotes('')
     }
   }, [(candidate as any)?.id])
 
@@ -518,6 +527,47 @@ export function CandidateProfilePage() {
     setCaSavingComment(false)
   }
 
+  // Appends a 'reset' entry to cost_approval (audit trail preserved) and clears CA decision columns.
+  const resetCostApproval = async (targetStage: string) => {
+    setCaResetSaving(true)
+    try {
+      const existing = (candidate as any)?.interview_notes ?? {}
+      const now = new Date().toISOString()
+      const by = user!.full_name
+      const dateLabel = new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
+      const resetEntry = {
+        decision: 'reset',
+        text: `Cost approval reset — stage moved back to "${targetStage}" by ${by} on ${dateLabel}`,
+        author: by,
+        authorId: user!.id,
+        timestamp: now,
+        isSystem: true,
+      }
+      const activityEntry = {
+        text: `Cost approval reset — stage moved back to "${targetStage}" by ${by}`,
+        author: by,
+        authorId: user!.id,
+        timestamp: now,
+        isSystem: true,
+      }
+      const { error } = await supabase.from('candidates').update({
+        interview_notes: {
+          ...existing,
+          cost_approval: [...(existing.cost_approval ?? []), resetEntry],
+          cost_approval_comments: [...(existing.cost_approval_comments ?? []), activityEntry],
+        },
+        cost_approval_decision: null,
+        cost_approval_submitted_at: null,
+        cost_approval_submitted_by: null,
+      }).eq('id', id!)
+      if (error) throw error
+      qc.invalidateQueries({ queryKey: ['candidate', id] })
+      qc.invalidateQueries({ queryKey: ['candidates'] })
+    } finally {
+      setCaResetSaving(false)
+    }
+  }
+
   const toggleInterviewer = useCallback((uid: string) => {
     const curr: string[] = (candidate as any)?.assigned_interviewers ?? []
     const next = curr.includes(uid) ? curr.filter(i => i !== uid) : [...curr, uid]
@@ -637,12 +687,16 @@ export function CandidateProfilePage() {
   const latestCAEntry = caEntries[caEntries.length - 1] ?? null
   const costApprovalDecision = (candidate as any).cost_approval_decision as string | null
   const costApprovalNotes: NoteEntry[] = (candidate as any).cost_approval_notes ?? []
-  const hasCAResult = !!(latestCAEntry?.decision || costApprovalDecision)
-  const caResultDecision: string = latestCAEntry?.decision ?? costApprovalDecision ?? ''
+  // Exclude 'reset' sentinel entries — they are audit trail, not an active decision
+  const hasCAResult = !!(latestCAEntry?.decision && latestCAEntry.decision !== 'reset') || !!costApprovalDecision
+  // Latest non-reset entry — used for display (author, timestamp, notes)
+  const latestActiveCAEntry = [...caEntries].reverse().find(e => e.decision !== 'reset') ?? null
+  const hasActiveCARecord = hasCAResult
+  const caResultDecision: string = latestActiveCAEntry?.decision ?? costApprovalDecision ?? ''
   const caResultGoAhead = caResultDecision === 'go_ahead'
-  const caResultAuthor = latestCAEntry?.author ?? ''
-  const caResultTs = latestCAEntry?.timestamp ?? ''
-  const caResultNotes = latestCAEntry?.text ?? ''
+  const caResultAuthor = latestActiveCAEntry?.author ?? ''
+  const caResultTs = latestActiveCAEntry?.timestamp ?? ''
+  const caResultNotes = latestActiveCAEntry?.text ?? ''
   const showCAForm = canSubmitCostApproval && (!hasCAResult || caEditMode)
 
   // Stage pill color — DB config → hardcoded map → gray fallback
@@ -730,7 +784,18 @@ export function CandidateProfilePage() {
                     <div className="fixed inset-0 z-40" onClick={() => setStageOpen(false)}/>
                     <div className="absolute right-0 top-full mt-1 bg-white border border-gray-200 rounded-xl shadow-xl z-50 py-1 w-52 max-h-80 overflow-y-auto">
                       {stages.map((s: string) => (
-                        <button key={s} onClick={() => { updateStage.mutate({ id: candidate.id, stage: s }); setStageOpen(false) }}
+                        <button key={s} onClick={() => {
+                          setStageOpen(false)
+                          if (s === candidate.current_stage) return
+                          const newIdx = stages.indexOf(s)
+                          const needsReset = hasActiveCARecord && costApprovalPipelineIdx >= 0 && newIdx >= 0 && newIdx <= costApprovalPipelineIdx
+                          if (needsReset) {
+                            setCaResetConfirmStage(s)
+                            setCaResetConfirmOpen(true)
+                          } else {
+                            updateStage.mutate({ id: candidate.id, stage: s })
+                          }
+                        }}
                           className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50 flex items-center justify-between gap-2">
                           <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${stageColor(s)}`}>{s}</span>
                           {s === candidate.current_stage && <Check className="w-3.5 h-3.5 text-slate-600"/>}
@@ -1238,6 +1303,15 @@ export function CandidateProfilePage() {
                     <p className="text-xs text-gray-400 italic">No comments yet.</p>
                   )}
                   {(interviewNotes['cost_approval_comments'] ?? []).map((c: any, i: number) => {
+                    if (c.isSystem) {
+                      return (
+                        <div key={i} className="flex items-center gap-2 py-1.5 px-3 bg-amber-50 rounded-lg border border-amber-100">
+                          <ShieldCheck className="w-3 h-3 text-amber-500 flex-shrink-0"/>
+                          <p className="text-xs text-amber-700 flex-1">{c.text}</p>
+                          <p className="text-xs text-gray-400 flex-shrink-0 whitespace-nowrap">{formatRelative(c.timestamp)}</p>
+                        </div>
+                      )
+                    }
                     const isMe = c.authorId === user?.id
                     return (
                       <div key={i} className={`flex items-end gap-2 ${isMe ? 'flex-row-reverse' : ''}`}>
@@ -1496,6 +1570,53 @@ export function CandidateProfilePage() {
           })()}
         </div>
       </div>
+
+      {/* ── CA Reset confirmation modal ── */}
+      <Modal
+        open={caResetConfirmOpen}
+        onClose={() => { if (!caResetSaving) { setCaResetConfirmOpen(false); setCaResetConfirmStage('') } }}
+        title="Reset cost approval?"
+        size="sm"
+      >
+        <div className="space-y-4">
+          <div className="flex items-start gap-3 p-3 bg-amber-50 rounded-lg border border-amber-200">
+            <ShieldCheck className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5"/>
+            <div>
+              <p className="text-sm font-medium text-amber-800">Moving to an earlier stage</p>
+              <p className="text-sm text-amber-700 mt-0.5">
+                Moving <strong>{candidate.full_name}</strong> to <strong>{caResetConfirmStage}</strong> will reset
+                their cost approval status to <span className="font-medium">Pending</span>. The full approval
+                history is preserved for audit.
+              </p>
+            </div>
+          </div>
+          <p className="text-xs text-gray-500">
+            This reset will be logged in the Cost Approval discussion section with your name and the date.
+          </p>
+          <div className="flex gap-2 justify-end">
+            <button
+              disabled={caResetSaving}
+              onClick={() => { setCaResetConfirmOpen(false); setCaResetConfirmStage('') }}
+              className="px-4 py-2 text-sm border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50 disabled:opacity-50"
+            >
+              Cancel
+            </button>
+            <button
+              disabled={caResetSaving}
+              onClick={async () => {
+                await resetCostApproval(caResetConfirmStage)
+                updateStage.mutate({ id: candidate.id, stage: caResetConfirmStage })
+                setCaResetConfirmOpen(false)
+                setCaResetConfirmStage('')
+              }}
+              className="flex items-center gap-2 px-4 py-2 text-sm bg-amber-600 text-white rounded-lg hover:bg-amber-700 disabled:opacity-50"
+            >
+              {caResetSaving && <Loader2 className="w-3.5 h-3.5 animate-spin"/>}
+              Yes, reset &amp; move
+            </button>
+          </div>
+        </div>
+      </Modal>
 
     </div>
   )
