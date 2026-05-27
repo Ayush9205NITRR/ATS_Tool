@@ -12,7 +12,7 @@ import { DuplicateWarning } from '../../../shared/components/DuplicateWarning'
 import { Button } from '../../../shared/components/Button'
 import { supabase } from '../../../lib/supabaseClient'
 
-const PLATFORM_SRCS = ['LinkedIn','Naukri','Indeed','Internshala','Shine','Monster','Foundit','Apna','Referral','Website','Other']
+const PLATFORM_SRCS = ['LinkedIn','Naukri','Indeed','Internshala','Unstop','Shine','Monster','Foundit','Apna','Referral','Website','Other']
 
 // Inline SubSourceField — no external file dependency
 function SubSourceField({ sourceCategory, value, onChange, required }: {
@@ -25,6 +25,16 @@ function SubSourceField({ sourceCategory, value, onChange, required }: {
       return (data ?? []).map((u:any) => ({ id: u.id, name: u.full_name }))
     },
     staleTime: 60_000,
+  })
+  const { data: employees = [] } = useQuery({
+    queryKey: ['employee-referral-list'],
+    queryFn: async () => {
+      const { data } = await supabase.from('app_settings').select('value').eq('key', 'employee_referral_list').maybeSingle()
+      if (!data?.value) return [] as string[]
+      try { return JSON.parse(data.value) as string[] } catch { return [] as string[] }
+    },
+    staleTime: 60_000,
+    enabled: sourceCategory === 'referral',
   })
   const cls = 'w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500'
   if (!sourceCategory) return <input disabled placeholder="Select source type first…" className={`${cls} bg-gray-50 text-gray-400`}/>
@@ -40,6 +50,12 @@ function SubSourceField({ sourceCategory, value, onChange, required }: {
       {PLATFORM_SRCS.map(p => <option key={p} value={p}>{p}</option>)}
     </select>
   )
+  if (sourceCategory === 'referral') return (
+    <select value={value} onChange={e=>onChange(e.target.value)} className={cls} required={required}>
+      <option value="">Select employee…</option>
+      {(employees as string[]).map(e => <option key={e} value={e}>{e}</option>)}
+    </select>
+  )
   return <input type="text" value={value} onChange={e=>onChange(e.target.value)} placeholder="e.g. IIT Delhi, BITS Pilani…" className={cls} required={required}/>
 }
 
@@ -48,7 +64,7 @@ const schema = z.object({
   email:           z.string().email('Valid email required').transform(v => v.trim().toLowerCase()),
   phone:           z.string().refine(v => !v?.trim() || v.replace(/\D/g,'').length === 10, '10-digit number required').optional(),
   job_id:          z.string().min(1, 'Job selection is required'),
-  source_category: z.enum(['platform','agency','college']).optional(),
+  source_category: z.enum(['platform','agency','college','referral']).optional(),
   resume_url:      z.string().url('Valid URL').optional().or(z.literal('')),
   linkedin_url:    z.string().url('Valid URL').optional().or(z.literal('')),
   notes:           z.string().optional(),
@@ -196,6 +212,7 @@ export function SingleEntryForm({ onSuccess }: { onSuccess?: () => void }) {
               <option value="platform">🔗 Platform</option>
               <option value="agency">🏢 Agency</option>
               <option value="college">🎓 College</option>
+              <option value="referral">👤 Employee Referral</option>
             </select>
           </Field>
         ) : (
@@ -206,7 +223,7 @@ export function SingleEntryForm({ onSuccess }: { onSuccess?: () => void }) {
 
         {/* Sub-Source — dynamic based on source */}
         {!isAgency && (
-          <Field label={sourceCategory === 'agency' ? 'Agency Name *' : sourceCategory === 'college' ? 'College Name *' : 'Platform *'}>
+          <Field label={sourceCategory === 'agency' ? 'Agency Name *' : sourceCategory === 'college' ? 'College Name *' : sourceCategory === 'referral' ? 'Referred By *' : 'Platform *'}>
             <SubSourceField
               sourceCategory={sourceCategory}
               value={sourceName}

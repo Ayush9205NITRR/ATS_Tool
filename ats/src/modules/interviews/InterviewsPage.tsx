@@ -5,14 +5,14 @@
 import { useMemo, useState, useRef, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Loader2, CheckCircle, Clock, Briefcase, Calendar, X, ChevronDown, UserCheck, UserX, ArrowRight } from 'lucide-react'
+import { Loader2, CheckCircle, Clock, Briefcase, Calendar, X, ChevronDown, UserCheck, UserX, ArrowRight, Search } from 'lucide-react'
 import { supabase } from '../../lib/supabaseClient'
 import { useAuthStore } from '../auth/authStore'
 import { formatDateTime } from '../../shared/utils/helpers'
 import { PageHeader } from '../../shared/components/PageHeader'
 
 type FeedbackFilter = 'pending' | 'submitted'
-type AdminTab = 'pending' | 'rejected'
+type AdminTab = 'schedule_pending' | 'scheduled' | 'rejected'
 
 // ─── Airtable-style date filter ──────────────────────────────
 type DateOp =
@@ -85,7 +85,8 @@ export function InterviewsPage() {
   const qc = useQueryClient()
   const isInterviewer = hasRole(['interviewer'])
   const [filter, setFilter]     = useState<FeedbackFilter>('pending')
-  const [adminTab, setAdminTab] = useState<AdminTab>('pending')
+  const [adminTab, setAdminTab] = useState<AdminTab>('schedule_pending')
+  const [searchQuery, setSearchQuery] = useState('')
 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [jobFilter, setJobFilter]     = useState<string>('')
@@ -225,7 +226,7 @@ export function InterviewsPage() {
 
       const [{ data: candidates }, { data: interviewers }] = await Promise.all([
         candidateIds.length
-          ? supabase.from('candidates').select('id, full_name, current_stage, job_id').in('id', candidateIds)
+          ? supabase.from('candidates').select('id, full_name, current_stage, interview_date, job_id').in('id', candidateIds)
           : { data: [] as any[] },
         interviewerIds.length
           ? supabase.from('users').select('id, full_name').in('id', interviewerIds)
@@ -248,14 +249,23 @@ export function InterviewsPage() {
           candidateName: c.full_name ?? '—',
           candidateStage: c.current_stage ?? f.stage,
           candidateId: f.candidate_id,
+          candidateInterviewDate: c.interview_date ?? null,
           jobTitle: jobMap[c.job_id] ?? '—',
           interviewerName: interviewerMap[f.interviewer_id] ?? '—',
         }
       }
 
+      // Deduplicate by candidate: most recent feedback per candidate determines status
+      const allEnriched = (feedbacks ?? []).map(enrich)
+      const latestPerCandidate = new Map<string, any>()
+      for (const f of allEnriched) {
+        if (!latestPerCandidate.has(f.candidate_id)) latestPerCandidate.set(f.candidate_id, f)
+      }
+      const latest = Array.from(latestPerCandidate.values())
       return {
-        pending:  (feedbacks ?? []).filter((f: any) => f.recommendation === 'yes').map(enrich),
-        rejected: (feedbacks ?? []).filter((f: any) => f.recommendation === 'no').map(enrich),
+        schedulePending: latest.filter(r => r.recommendation === 'yes' && !r.candidateInterviewDate),
+        scheduled:       latest.filter(r => r.recommendation === 'yes' && !!r.candidateInterviewDate),
+        rejected:        latest.filter(r => r.recommendation === 'no'),
       }
     },
     enabled: !isInterviewer && !!user,
@@ -278,15 +288,16 @@ export function InterviewsPage() {
   // Apply job + interview_date filters
   const displayed = useMemo(() => {
     return rawList.filter((c: any) => {
+      if (searchQuery && !c.full_name.toLowerCase().includes(searchQuery.toLowerCase())) return false
       if (jobFilter && c.job?.id !== jobFilter) return false
       if (!matchesDateFilter(c.interview_date ?? null, dateOp, dateA, dateB)) return false
       return true
     })
-  }, [rawList, jobFilter, dateOp, dateA, dateB])
+  }, [rawList, searchQuery, jobFilter, dateOp, dateA, dateB])
 
   const pendingCount   = data?.pending.length   ?? 0
   const submittedCount = data?.submitted.length ?? 0
-  const hasActiveFilters = !!(jobFilter || dateOp !== 'any')
+  const hasActiveFilters = !!(searchQuery || jobFilter || dateOp !== 'any')
 
   // Short chip label that appears on the date button
   const dateChipLabel = (() => {
@@ -311,7 +322,7 @@ export function InterviewsPage() {
         title={isInterviewer ? 'My Interviews' : 'Interview Reviews'}
         subtitle={isInterviewer
           ? `${data?.all.length ?? 0} assigned · ${pendingCount} pending feedback`
-          : `${adminData?.pending.length ?? 0} pending schedule · ${adminData?.rejected.length ?? 0} rejected`
+          : `${adminData?.schedulePending.length ?? 0} pending schedule · ${adminData?.scheduled.length ?? 0} scheduled · ${adminData?.rejected.length ?? 0} rejected`
         }
       />
 
@@ -348,8 +359,23 @@ export function InterviewsPage() {
 
       </div>
 
-      {/* Filter bar — Job + Interview Date range */}
+      {/* Filter bar — Search + Job + Interview Date range */}
       <div className="flex flex-wrap items-center gap-2 mb-4">
+        <div className="flex items-center gap-1.5 border border-gray-200 rounded-lg bg-white px-3 py-2 min-w-[200px]">
+          <Search className="w-3.5 h-3.5 text-gray-400 flex-shrink-0"/>
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={e => setSearchQuery(e.target.value)}
+            placeholder="Search candidates…"
+            className="text-sm bg-transparent border-none outline-none text-gray-700 min-w-[140px]"
+          />
+          {searchQuery && (
+            <button onClick={() => setSearchQuery('')} className="text-gray-300 hover:text-gray-500 flex-shrink-0">
+              <X className="w-3.5 h-3.5"/>
+            </button>
+          )}
+        </div>
         <div className="flex items-center gap-1.5 border border-gray-200 rounded-lg bg-white px-3 py-2">
           <Briefcase className="w-3.5 h-3.5 text-gray-400"/>
           <select
@@ -366,7 +392,7 @@ export function InterviewsPage() {
 
         {hasActiveFilters && (
           <button
-            onClick={() => { setJobFilter(''); clearDate() }}
+            onClick={() => { setSearchQuery(''); setJobFilter(''); clearDate() }}
             className="flex items-center gap-1 text-sm text-gray-500 hover:text-gray-800 px-2 py-1.5 rounded-lg hover:bg-gray-50"
           >
             <X className="w-3.5 h-3.5"/> Clear filters
@@ -567,17 +593,31 @@ export function InterviewsPage() {
         <div>
           <div className="flex items-center gap-1 bg-gray-100 p-1 rounded-xl mb-4 w-fit">
             <button
-              onClick={() => setAdminTab('pending')}
+              onClick={() => setAdminTab('schedule_pending')}
               className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-                adminTab === 'pending' ? 'bg-white shadow-sm text-gray-900' : 'text-gray-500 hover:text-gray-700'
+                adminTab === 'schedule_pending' ? 'bg-white shadow-sm text-gray-900' : 'text-gray-500 hover:text-gray-700'
               }`}
             >
               <UserCheck className="w-3.5 h-3.5"/>
               Schedule Pending
-              {(adminData?.pending.length ?? 0) > 0 && (
+              {(adminData?.schedulePending.length ?? 0) > 0 && (
                 <span className={`text-xs px-1.5 py-0.5 rounded-full font-semibold ${
-                  adminTab === 'pending' ? 'bg-green-100 text-green-700' : 'bg-gray-200 text-gray-500'
-                }`}>{adminData!.pending.length}</span>
+                  adminTab === 'schedule_pending' ? 'bg-amber-100 text-amber-700' : 'bg-gray-200 text-gray-500'
+                }`}>{adminData!.schedulePending.length}</span>
+              )}
+            </button>
+            <button
+              onClick={() => setAdminTab('scheduled')}
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                adminTab === 'scheduled' ? 'bg-white shadow-sm text-gray-900' : 'text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              <Calendar className="w-3.5 h-3.5"/>
+              Interviews Scheduled
+              {(adminData?.scheduled.length ?? 0) > 0 && (
+                <span className={`text-xs px-1.5 py-0.5 rounded-full font-semibold ${
+                  adminTab === 'scheduled' ? 'bg-blue-100 text-blue-700' : 'bg-gray-200 text-gray-500'
+                }`}>{adminData!.scheduled.length}</span>
               )}
             </button>
             <button
@@ -601,15 +641,25 @@ export function InterviewsPage() {
               <Loader2 className="w-6 h-6 animate-spin text-blue-500"/>
             </div>
           ) : (() => {
-            const rows = adminTab === 'pending' ? (adminData?.pending ?? []) : (adminData?.rejected ?? [])
+            const rows = adminTab === 'schedule_pending'
+              ? (adminData?.schedulePending ?? [])
+              : adminTab === 'scheduled'
+              ? (adminData?.scheduled ?? [])
+              : (adminData?.rejected ?? [])
             if (rows.length === 0) {
               return (
                 <div className="bg-white rounded-xl border border-gray-200 flex flex-col items-center justify-center py-16 text-gray-400">
-                  {adminTab === 'pending' ? (
+                  {adminTab === 'schedule_pending' ? (
                     <>
                       <UserCheck className="w-8 h-8 mb-2 text-gray-300"/>
                       <p className="text-sm font-medium text-gray-500">No interviews to schedule</p>
                       <p className="text-xs mt-1">Candidates selected for next round will appear here.</p>
+                    </>
+                  ) : adminTab === 'scheduled' ? (
+                    <>
+                      <Calendar className="w-8 h-8 mb-2 text-gray-300"/>
+                      <p className="text-sm font-medium text-gray-500">No interviews scheduled yet</p>
+                      <p className="text-xs mt-1">Candidates with a scheduled interview date will appear here.</p>
                     </>
                   ) : (
                     <>
@@ -630,6 +680,9 @@ export function InterviewsPage() {
                       <th className="text-left px-4 py-3 font-medium">Job</th>
                       <th className="text-left px-4 py-3 font-medium">Reviewed At Stage</th>
                       <th className="text-left px-4 py-3 font-medium">Reviewer</th>
+                      {adminTab === 'scheduled' && (
+                        <th className="text-left px-4 py-3 font-medium">Interview Date</th>
+                      )}
                       <th className="text-left px-4 py-3 font-medium">Decision Date</th>
                       <th className="px-4 py-3 font-medium text-right">Action</th>
                     </tr>
@@ -642,7 +695,7 @@ export function InterviewsPage() {
                             className="font-medium text-blue-600 hover:underline text-left text-sm">
                             {r.candidateName}
                           </button>
-                          {adminTab === 'pending' && (
+                          {adminTab !== 'rejected' && (
                             <p className="text-xs text-gray-400 mt-0.5">Current: {r.candidateStage}</p>
                           )}
                         </td>
@@ -653,6 +706,11 @@ export function InterviewsPage() {
                           </span>
                         </td>
                         <td className="px-4 py-3 text-xs text-gray-600">{r.interviewerName}</td>
+                        {adminTab === 'scheduled' && (
+                          <td className="px-4 py-3 text-xs text-blue-600 whitespace-nowrap font-medium">
+                            {r.candidateInterviewDate ? formatDateTime(r.candidateInterviewDate) : '—'}
+                          </td>
+                        )}
                         <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">
                           {r.submitted_at ? formatDateTime(r.submitted_at) : '—'}
                         </td>
@@ -668,8 +726,10 @@ export function InterviewsPage() {
                 </table>
                 <div className="px-4 py-2 bg-gray-50 border-t border-gray-100">
                   <p className="text-xs text-gray-400">
-                    {adminTab === 'pending'
+                    {adminTab === 'schedule_pending'
                       ? `${rows.length} candidate${rows.length !== 1 ? 's' : ''} ready to schedule — assign an interview date`
+                      : adminTab === 'scheduled'
+                      ? `${rows.length} interview${rows.length !== 1 ? 's' : ''} scheduled`
                       : `${rows.length} candidate${rows.length !== 1 ? 's' : ''} rejected by interviewers`
                     }
                   </p>

@@ -113,8 +113,113 @@ export function OrgSettingsTab() {
       {/* Cost Approval Settings */}
       <CostApprovalSettingsSection/>
 
+      {/* Employee Referral List */}
+      <EmployeeListSection/>
+
       {/* Rejection Workflow */}
       <RejectionWorkflow/>
+    </div>
+  )
+}
+
+// ── Employee Referral List ────────────────────────────────────
+function EmployeeListSection() {
+  const qc = useQueryClient()
+  const [newEmployee, setNewEmployee] = useState('')
+  const [saved, setSaved] = useState(false)
+  const [draft, setDraft] = useState<string[] | null>(null)
+
+  const { data: employees = [], isLoading } = useQuery({
+    queryKey: ['employee-referral-list'],
+    queryFn: async () => {
+      const { data } = await supabase.from('app_settings').select('value').eq('key', 'employee_referral_list').maybeSingle()
+      if (!data?.value) return [] as string[]
+      try { return JSON.parse(data.value) as string[] } catch { return [] as string[] }
+    },
+    staleTime: 30_000,
+  })
+
+  const currentList = draft ?? employees
+
+  const addEmployee = () => {
+    const trimmed = newEmployee.trim()
+    if (!trimmed || currentList.includes(trimmed)) return
+    setDraft([...currentList, trimmed])
+    setNewEmployee('')
+  }
+
+  const removeEmployee = (name: string) => setDraft(currentList.filter(e => e !== name))
+
+  const save = async () => {
+    const { error } = await supabase.from('app_settings').upsert({
+      key: 'employee_referral_list',
+      value: JSON.stringify([...currentList].sort()),
+      updated_at: new Date().toISOString(),
+    }, { onConflict: 'key' })
+    if (error) { console.error('[employee list save]', error); return }
+    qc.invalidateQueries({ queryKey: ['employee-referral-list'] })
+    setSaved(true)
+    setDraft(null)
+    setTimeout(() => setSaved(false), 2000)
+  }
+
+  const isDirty = draft !== null
+
+  return (
+    <div className="border-t border-gray-100 pt-6 space-y-4">
+      <div>
+        <h3 className="text-sm font-semibold text-gray-900 mb-1">Employee Referral List</h3>
+        <p className="text-xs text-gray-500">Manage the list of employees available as referrers when adding candidates via Employee Referral source.</p>
+      </div>
+
+      {isLoading ? (
+        <div className="flex justify-center py-4"><Loader2 className="w-4 h-4 animate-spin text-gray-400"/></div>
+      ) : (
+        <div className="bg-white border border-gray-200 rounded-xl p-4 space-y-3">
+          <div className="flex gap-2">
+            <input
+              value={newEmployee}
+              onChange={e => setNewEmployee(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addEmployee() } }}
+              placeholder="Employee full name…"
+              className="flex-1 px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+            />
+            <button onClick={addEmployee} disabled={!newEmployee.trim()}
+              className="px-3 py-2 bg-gray-900 text-white rounded-lg text-sm hover:bg-gray-800 disabled:opacity-40 flex items-center gap-1 transition-colors flex-shrink-0">
+              <Plus className="w-4 h-4"/> Add
+            </button>
+          </div>
+
+          {currentList.length === 0 ? (
+            <p className="text-xs text-gray-400 text-center py-3">No employees added yet.</p>
+          ) : (
+            <div className="flex flex-wrap gap-1.5 max-h-48 overflow-y-auto">
+              {[...currentList].sort().map(e => (
+                <span key={e} className="flex items-center gap-1 text-xs bg-gray-100 text-gray-700 border border-gray-200 px-2.5 py-1 rounded-full">
+                  {e}
+                  <button onClick={() => removeEmployee(e)} className="text-gray-400 hover:text-red-500 transition-colors ml-0.5">
+                    <X className="w-3 h-3"/>
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+
+          {isDirty && (
+            <div className="flex items-center gap-2 pt-1 border-t border-gray-100">
+              <button onClick={save}
+                className={`flex items-center gap-1.5 px-4 py-2 text-sm rounded-lg font-medium transition-all ${
+                  saved ? 'bg-green-500 text-white' : 'bg-gray-900 text-white hover:bg-gray-800'
+                }`}>
+                {saved ? <><Check className="w-3.5 h-3.5"/>Saved</> : 'Save changes'}
+              </button>
+              <button onClick={() => setDraft(null)} className="text-sm text-gray-500 hover:text-gray-700 transition-colors">
+                Discard
+              </button>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }
