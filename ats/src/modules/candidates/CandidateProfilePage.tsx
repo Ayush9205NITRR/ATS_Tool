@@ -113,16 +113,17 @@ export function CandidateProfilePage() {
     staleTime: 60_000,
   })
 
-  // Job templates — fetch screening_template + interview_templates for this job
+  // Job templates — stored in interview_format JSONB column.
+  // 'screening' key = HR-only questions; other keys = round questions for panel members.
   const jobId = (candidate as any)?.job_id
   const { data: jobTemplates } = useQuery({
     queryKey: ['job-templates', jobId],
     queryFn: async () => {
       const { data } = await supabase.from('jobs')
-        .select('screening_template, interview_templates')
+        .select('interview_format')
         .eq('id', jobId!)
         .maybeSingle()
-      return data as { screening_template: string[] | null; interview_templates: Record<string, string[]> | null } | null
+      return data as { interview_format: Record<string, string[]> | null } | null
     },
     enabled: !!jobId,
     staleTime: 60_000,
@@ -515,14 +516,15 @@ export function CandidateProfilePage() {
   // Screening: HR only. Round: assigned panel member for this candidate, current stage only.
   const getTemplateQuestions = (sectionKey: string): string[] => {
     if (!jobTemplates) return []
+    const fmt = jobTemplates.interview_format ?? {}
     if (sectionKey === 'screening') {
-      return isHR ? ((jobTemplates.screening_template as string[]) ?? []) : []
+      return isHR ? (fmt['screening'] ?? []) : []
     }
     // Round questionnaire: only for the candidate's current stage, only if user is on the panel
     const onPanel = ((candidate as any).assigned_interviewers ?? []).includes(user?.id ?? '')
     const currentKey = stageKeyOf(candidate.current_stage)
     if (!onPanel || sectionKey !== currentKey) return []
-    return ((jobTemplates.interview_templates as Record<string, string[]>) ?? {})[sectionKey] ?? []
+    return fmt[sectionKey] ?? []
   }
 
   // interviewNotes must be declared before visibleNotesSections (HR branch uses it)

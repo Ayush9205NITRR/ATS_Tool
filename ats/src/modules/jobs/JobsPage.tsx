@@ -70,19 +70,15 @@ function JobForm({ job, onClose }: { job?: any; onClose: () => void }) {
   const [hrIds, setHrIds]                 = useState<string[]>(job?.assigned_hrs ?? [])
   const [assignAllCandidates, setAssignAllCandidates] = useState<boolean>(false)
 
-  // All stage templates — screening + interview rounds, unified as newline-separated text per key.
-  // Screening reads from screening_template; rounds read from interview_templates (with interview_format fallback).
-  const existingTemplates: Record<string, string[]> = job?.interview_templates ?? {}
+  // All stage templates stored in interview_format JSONB column.
+  // Key 'screening' → screening questions (HR-visible); other keys → round questions (panel-visible).
   const existingFormat: Record<string, string[]> = job?.interview_format ?? {}
   const ALL_TEMPLATE_STAGES = ['Screening', ...ROUND_STAGES]
   const [interviewFormat, setInterviewFormat] = useState<Record<string, string>>(
     Object.fromEntries(
       ALL_TEMPLATE_STAGES.map(name => {
         const key = stageKeyOf(name)
-        const qs: string[] =
-          name === 'Screening'
-            ? (job?.screening_template ?? [])
-            : (existingFormat[key] ?? existingTemplates[key] ?? [])
+        const qs: string[] = existingFormat[key] ?? []
         return [key, qs.join('\n')]
       })
     )
@@ -123,16 +119,15 @@ function JobForm({ job, onClose }: { job?: any; onClose: () => void }) {
     mutationFn: async (d: FormData) => {
       const skills = d.required_skills ? d.required_skills.split(',').map(s=>s.trim()).filter(Boolean) : []
 
-      // Derive screening_template and interview_templates from unified state
+      // Save all templates into the existing interview_format JSONB column
       const toLines = (key: string) =>
         (interviewFormat[key] ?? '').split('\n').map(s => s.trim()).filter(Boolean)
 
-      const screeningTemplateArr = toLines('screening')
-      const interviewTemplatesObj: Record<string, string[]> = {}
-      ROUND_STAGES.forEach(name => {
+      const interviewFormatObj: Record<string, string[]> = {}
+      ALL_TEMPLATE_STAGES.forEach(name => {
         const key = stageKeyOf(name)
         const qs = toLines(key)
-        if (qs.length) interviewTemplatesObj[key] = qs
+        if (qs.length) interviewFormatObj[key] = qs
       })
 
       const payload = {
@@ -143,14 +138,12 @@ function JobForm({ job, onClose }: { job?: any; onClose: () => void }) {
         target_date: d.target_date||null, required_skills: skills,
         requisition_id: d.requisition_id||null,
         jd_link: (d as any).jd_link||null,
-        screening_template: screeningTemplateArr,
-        interview_templates: interviewTemplatesObj,
         show_to_agency: showToAllAgencies || agencyIds.length > 0,
         allowed_agency_ids: showToAllAgencies ? [] : agencyIds,
         assigned_hrs: hrIds,
         // hr_owner stays as the FIRST selected HR for backward compatibility
         hr_owner: hrIds[0] ?? null,
-        interview_format: interviewTemplatesObj,
+        interview_format: interviewFormatObj,
       }
       const saved = job
         ? await jobService.update(job.id, payload as any)
