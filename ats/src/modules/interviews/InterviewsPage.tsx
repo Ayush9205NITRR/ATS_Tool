@@ -13,7 +13,9 @@ import { PageHeader } from '../../shared/components/PageHeader'
 import { useStages } from '../../shared/hooks/useStages'
 
 type FeedbackFilter = 'pending' | 'submitted'
-type AdminTab = 'schedule_pending' | 'scheduled' | 'rejected'
+type AdminTab = 'to_schedule' | 'scheduled' | 'rejected'
+
+const INTERVIEW_STAGE_LIST = ['Screening', 'R1', 'Case Study', 'R2', 'R3', 'CF (Virtual)', 'CF (In-Person)']
 
 // ─── Airtable-style date filter ──────────────────────────────
 type DateOp =
@@ -78,8 +80,12 @@ export function InterviewsPage() {
     return cfg ? `${cfg.color} ${cfg.textColor}` : 'bg-gray-100 text-gray-600'
   }
   const [filter, setFilter]     = useState<FeedbackFilter>('pending')
-  const [adminTab, setAdminTab] = useState<AdminTab>('schedule_pending')
+  const [adminTab, setAdminTab] = useState<AdminTab>('to_schedule')
   const [searchQuery, setSearchQuery] = useState('')
+  const [adminSearch, setAdminSearch]           = useState('')
+  const [adminJobFilter, setAdminJobFilter]     = useState('')
+  const [adminStageFilter, setAdminStageFilter] = useState('')
+  const [adminPanelFilter, setAdminPanelFilter] = useState('')
 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [jobFilter, setJobFilter]     = useState<string>('')
@@ -203,71 +209,94 @@ export function InterviewsPage() {
     },
   })
 
-  // Admin / HR view: candidates reviewed by interviewers
+  // Admin / HR view: candidates in interview stages
   const { data: adminData, isLoading: adminLoading } = useQuery({
-    queryKey: ['admin-interview-reviews'],
+    queryKey: ['admin-interviews-v2'],
     queryFn: async () => {
-      const { data: feedbacks, error } = await supabase
+      // Fetch all active candidates in interview stages
+      const { data: candidates } = await supabase
+        .from('candidates')
+        .select('id, full_name, current_stage, interview_date, job_id, assigned_interviewers')
+        .eq('status', 'active')
+        .in('current_stage', INTERVIEW_STAGE_LIST)
+
+      // Fetch latest rejection feedback per candidate (for rejected tab)
+      const { data: rejFeedbacks } = await supabase
         .from('interview_feedback')
-        .select('id, candidate_id, interviewer_id, stage, recommendation, submitted_at')
-        .in('recommendation', ['yes', 'no'])
+        .select('candidate_id, stage, submitted_at, interviewer_id')
+        .eq('recommendation', 'no')
         .order('submitted_at', { ascending: false })
-      if (error) throw error
 
-      const candidateIds = [...new Set((feedbacks ?? []).map((f: any) => f.candidate_id))]
-      const interviewerIds = [...new Set((feedbacks ?? []).map((f: any) => f.interviewer_id))]
+      const latestRejMap = new Map<string, any>()
+      for (const f of rejFeedbacks ?? []) {
+        if (!latestRejMap.has(f.candidate_id)) latestRejMap.set(f.candidate_id, f)
+      }
 
-      // Fetch candidates first so we can collect assigned_interviewers IDs
-      const { data: candidates } = candidateIds.length
-        ? await supabase.from('candidates').select('id, full_name, current_stage, interview_date, job_id, assigned_interviewers').in('id', candidateIds)
-        : { data: [] as any[] }
+      // Some rejected candidates may not be in interview stages anymore — fetch them too
+      const existingIds = new Set((candidates ?? []).map((c: any) => c.id))
+      const missingRejIds = [...latestRejMap.keys()].filter(id => !existingIds.has(id))
+      let allCandidates: any[] = [...(candidates ?? [])]
+      if (missingRejIds.length) {
+        const { data: rejCands } = await supabase
+          .from('candidates')
+          .select('id, full_name, current_stage, interview_date, job_id, assigned_interviewers')
+          .in('id', missingRejIds)
+        allCandidates = [...allCandidates, ...(rejCands ?? [])]
+      }
 
-      const jobIds = [...new Set((candidates ?? []).map((c: any) => c.job_id).filter(Boolean))]
-      const assignedIds = [...new Set((candidates ?? []).flatMap((c: any) => c.assigned_interviewers ?? []))]
-      const allUserIds = [...new Set([...interviewerIds, ...assignedIds])]
+      const jobIds = [...new Set(allCandidates.map((c: any) => c.job_id).filter(Boolean))]
+      const allInterviewerIds = [...new Set(allCandidates.flatMap((c: any) => c.assigned_interviewers ?? []))]
 
-      const [{ data: jobs }, { data: interviewers }] = await Promise.all([
-        jobIds.length
-          ? supabase.from('jobs').select('id, title').in('id', jobIds)
-          : { data: [] as any[] },
-        allUserIds.length
-          ? supabase.from('users').select('id, full_name').in('id', allUserIds)
-          : { data: [] as any[] },
+      const [{ data: jobs }, { data: users }] = await Promise.all([
+        jobIds.length ? supabase.from('jobs').select('id,title').in('id', jobIds) : { data: [] as any[] },
+        allInterviewerIds.length ? supabase.from('users').select('id,full_name').in('id', allInterviewerIds) : { data: [] as any[] },
       ])
 
-      const candidateMap = Object.fromEntries((candidates ?? []).map((c: any) => [c.id, c]))
-      const interviewerMap = Object.fromEntries((interviewers ?? []).map((u: any) => [u.id, u.full_name]))
       const jobMap = Object.fromEntries((jobs ?? []).map((j: any) => [j.id, j.title]))
+      const userMap = Object.fromEntries((users ?? []).map((u: any) => [u.id, u.full_name]))
 
-      const enrich = (f: any) => {
-        const c = candidateMap[f.candidate_id] ?? {}
-        return {
-          ...f,
-          candidateName: c.full_name ?? '—',
-          candidateStage: c.current_stage ?? f.stage,
-          candidateId: f.candidate_id,
-          candidateInterviewDate: c.interview_date ?? null,
-          jobTitle: jobMap[c.job_id] ?? '—',
-          interviewerName: interviewerMap[f.interviewer_id] ?? '—',
-          panelNames: ((c.assigned_interviewers ?? []) as string[]).map((uid: string) => interviewerMap[uid]).filter(Boolean) as string[],
-        }
-      }
+      const enrich = (c: any) => ({
+        ...c,
+        jobTitle: jobMap[c.job_id] ?? '—',
+        panelNames: ((c.assigned_interviewers ?? []) as string[]).map((uid: string) => userMap[uid]).filter(Boolean) as string[],
+      })
 
-      // Deduplicate by candidate: most recent feedback per candidate determines status
-      const allEnriched = (feedbacks ?? []).map(enrich)
-      const latestPerCandidate = new Map<string, any>()
-      for (const f of allEnriched) {
-        if (!latestPerCandidate.has(f.candidate_id)) latestPerCandidate.set(f.candidate_id, f)
-      }
-      const latest = Array.from(latestPerCandidate.values())
+      const enriched = allCandidates.map(enrich)
+      const enrichedMap = Object.fromEntries(enriched.map((c: any) => [c.id, c]))
+
+      const rejectedList = [...latestRejMap.entries()].map(([cid, f]) => ({
+        ...(enrichedMap[cid] ?? { id: cid, full_name: '—', current_stage: '—', interview_date: null, panelNames: [], jobTitle: '—' }),
+        rejectedStage: f.stage,
+        rejectedAt: f.submitted_at,
+        rejectedByName: userMap[f.interviewer_id] ?? '—',
+      }))
+
       return {
-        schedulePending: latest.filter(r => r.recommendation === 'yes' && r.stage === r.candidateStage),
-        scheduled:       latest.filter(r => r.recommendation === 'yes' && r.stage !== r.candidateStage),
-        rejected:        latest.filter(r => r.recommendation === 'no'),
+        toSchedule: enriched.filter((c: any) => !c.interview_date && INTERVIEW_STAGE_LIST.includes(c.current_stage)),
+        scheduled:  enriched.filter((c: any) =>  c.interview_date && INTERVIEW_STAGE_LIST.includes(c.current_stage)),
+        rejected:   rejectedList,
       }
     },
     enabled: !isInterviewer && !!user,
     staleTime: 30_000,
+  })
+
+  const { data: allAdminJobs = [] } = useQuery({
+    queryKey: ['jobs-for-admin-filter'],
+    queryFn: async () => {
+      const { data } = await supabase.from('jobs').select('id,title').order('title')
+      return data ?? []
+    },
+    enabled: !isInterviewer,
+  })
+
+  const { data: allAdminInterviewers = [] } = useQuery({
+    queryKey: ['interviewers-for-admin-filter'],
+    queryFn: async () => {
+      const { data } = await supabase.from('users').select('id,full_name').eq('role','interviewer').eq('is_active',true).order('full_name')
+      return data ?? []
+    },
+    enabled: !isInterviewer,
   })
 
   const rawList = filter === 'pending' ? (data?.pending ?? []) : (data?.submitted ?? [])
@@ -320,7 +349,7 @@ export function InterviewsPage() {
         title={isInterviewer ? 'My Interviews' : 'Interview Reviews'}
         subtitle={isInterviewer
           ? `${data?.all.length ?? 0} assigned · ${pendingCount} pending feedback`
-          : `${adminData?.schedulePending.length ?? 0} pending schedule · ${adminData?.scheduled.length ?? 0} scheduled · ${adminData?.rejected.length ?? 0} rejected`
+          : `${adminData?.toSchedule.length ?? 0} to schedule · ${adminData?.scheduled.length ?? 0} scheduled · ${adminData?.rejected.length ?? 0} rejected`
         }
       />
 
@@ -589,19 +618,20 @@ export function InterviewsPage() {
       {/* Admin / HR Manager view */}
       {!isInterviewer && (
         <div>
+          {/* Tabs */}
           <div className="flex items-center gap-1 bg-gray-100 p-1 rounded-xl mb-4 w-fit">
             <button
-              onClick={() => setAdminTab('schedule_pending')}
+              onClick={() => setAdminTab('to_schedule')}
               className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-                adminTab === 'schedule_pending' ? 'bg-white shadow-sm text-gray-900' : 'text-gray-500 hover:text-gray-700'
+                adminTab === 'to_schedule' ? 'bg-white shadow-sm text-gray-900' : 'text-gray-500 hover:text-gray-700'
               }`}
             >
-              <UserCheck className="w-3.5 h-3.5"/>
-              Schedule Pending
-              {(adminData?.schedulePending.length ?? 0) > 0 && (
-                <span className={`text-xs px-1.5 py-0.5 rounded-full font-semibold ${
-                  adminTab === 'schedule_pending' ? 'bg-amber-100 text-amber-700' : 'bg-gray-200 text-gray-500'
-                }`}>{adminData!.schedulePending.length}</span>
+              <Clock className="w-3.5 h-3.5"/>
+              To be Scheduled
+              {(adminData?.toSchedule.length ?? 0) > 0 && (
+                <span className={`text-xs px-1.5 py-0.5 rounded-full font-semibold ${adminTab === 'to_schedule' ? 'bg-amber-100 text-amber-700' : 'bg-gray-200 text-gray-500'}`}>
+                  {adminData!.toSchedule.length}
+                </span>
               )}
             </button>
             <button
@@ -613,9 +643,9 @@ export function InterviewsPage() {
               <Calendar className="w-3.5 h-3.5"/>
               Interviews Scheduled
               {(adminData?.scheduled.length ?? 0) > 0 && (
-                <span className={`text-xs px-1.5 py-0.5 rounded-full font-semibold ${
-                  adminTab === 'scheduled' ? 'bg-blue-100 text-blue-700' : 'bg-gray-200 text-gray-500'
-                }`}>{adminData!.scheduled.length}</span>
+                <span className={`text-xs px-1.5 py-0.5 rounded-full font-semibold ${adminTab === 'scheduled' ? 'bg-blue-100 text-blue-700' : 'bg-gray-200 text-gray-500'}`}>
+                  {adminData!.scheduled.length}
+                </span>
               )}
             </button>
             <button
@@ -625,13 +655,57 @@ export function InterviewsPage() {
               }`}
             >
               <UserX className="w-3.5 h-3.5"/>
-              Interviews Rejected
+              Interview Rejects
               {(adminData?.rejected.length ?? 0) > 0 && (
-                <span className={`text-xs px-1.5 py-0.5 rounded-full font-semibold ${
-                  adminTab === 'rejected' ? 'bg-red-100 text-red-700' : 'bg-gray-200 text-gray-500'
-                }`}>{adminData!.rejected.length}</span>
+                <span className={`text-xs px-1.5 py-0.5 rounded-full font-semibold ${adminTab === 'rejected' ? 'bg-red-100 text-red-700' : 'bg-gray-200 text-gray-500'}`}>
+                  {adminData!.rejected.length}
+                </span>
               )}
             </button>
+          </div>
+
+          {/* Filters */}
+          <div className="flex flex-wrap items-center gap-2 mb-4">
+            <div className="flex items-center gap-1.5 border border-gray-200 rounded-lg bg-white px-3 py-2 min-w-[180px]">
+              <Search className="w-3.5 h-3.5 text-gray-400 flex-shrink-0"/>
+              <input
+                type="text"
+                value={adminSearch}
+                onChange={e => setAdminSearch(e.target.value)}
+                placeholder="Search candidates…"
+                className="text-sm bg-transparent border-none outline-none text-gray-700 min-w-[120px]"
+              />
+              {adminSearch && (
+                <button onClick={() => setAdminSearch('')} className="text-gray-300 hover:text-gray-500">
+                  <X className="w-3.5 h-3.5"/>
+                </button>
+              )}
+            </div>
+            <div className="flex items-center gap-1.5 border border-gray-200 rounded-lg bg-white px-3 py-2">
+              <Briefcase className="w-3.5 h-3.5 text-gray-400"/>
+              <select value={adminJobFilter} onChange={e => setAdminJobFilter(e.target.value)}
+                className="text-sm bg-transparent border-none outline-none text-gray-700 cursor-pointer max-w-[180px]">
+                <option value="">All jobs</option>
+                {(allAdminJobs as any[]).map((j: any) => <option key={j.id} value={j.id}>{j.title}</option>)}
+              </select>
+            </div>
+            <select value={adminStageFilter} onChange={e => setAdminStageFilter(e.target.value)}
+              className="px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none text-gray-700">
+              <option value="">All stages</option>
+              {INTERVIEW_STAGE_LIST.map(s => <option key={s} value={s}>{s}</option>)}
+            </select>
+            <select value={adminPanelFilter} onChange={e => setAdminPanelFilter(e.target.value)}
+              className="px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none text-gray-700">
+              <option value="">All panel</option>
+              {(allAdminInterviewers as any[]).map((u: any) => <option key={u.id} value={u.full_name}>{u.full_name}</option>)}
+            </select>
+            {(adminSearch || adminJobFilter || adminStageFilter || adminPanelFilter) && (
+              <button
+                onClick={() => { setAdminSearch(''); setAdminJobFilter(''); setAdminStageFilter(''); setAdminPanelFilter('') }}
+                className="flex items-center gap-1 text-sm text-gray-500 hover:text-gray-800 px-2 py-1.5 rounded-lg hover:bg-gray-50">
+                <X className="w-3.5 h-3.5"/> Clear
+              </button>
+            )}
           </div>
 
           {adminLoading ? (
@@ -639,25 +713,34 @@ export function InterviewsPage() {
               <Loader2 className="w-6 h-6 animate-spin text-blue-500"/>
             </div>
           ) : (() => {
-            const rows = adminTab === 'schedule_pending'
-              ? (adminData?.schedulePending ?? [])
+            const rawRows = adminTab === 'to_schedule'
+              ? (adminData?.toSchedule ?? [])
               : adminTab === 'scheduled'
               ? (adminData?.scheduled ?? [])
               : (adminData?.rejected ?? [])
+
+            const rows = rawRows.filter((r: any) => {
+              if (adminSearch && !r.full_name?.toLowerCase().includes(adminSearch.toLowerCase())) return false
+              if (adminJobFilter && r.job_id !== adminJobFilter) return false
+              if (adminStageFilter && r.current_stage !== adminStageFilter) return false
+              if (adminPanelFilter && !(r.panelNames ?? []).includes(adminPanelFilter)) return false
+              return true
+            })
+
             if (rows.length === 0) {
               return (
                 <div className="bg-white rounded-xl border border-gray-200 flex flex-col items-center justify-center py-16 text-gray-400">
-                  {adminTab === 'schedule_pending' ? (
+                  {adminTab === 'to_schedule' ? (
                     <>
                       <UserCheck className="w-8 h-8 mb-2 text-gray-300"/>
                       <p className="text-sm font-medium text-gray-500">No interviews to schedule</p>
-                      <p className="text-xs mt-1">Candidates selected for next round will appear here.</p>
+                      <p className="text-xs mt-1">Active candidates in interview stages without a date will appear here.</p>
                     </>
                   ) : adminTab === 'scheduled' ? (
                     <>
                       <Calendar className="w-8 h-8 mb-2 text-gray-300"/>
-                      <p className="text-sm font-medium text-gray-500">No interviews in progress</p>
-                      <p className="text-xs mt-1">Candidates advanced to the next round will appear here.</p>
+                      <p className="text-sm font-medium text-gray-500">No interviews scheduled</p>
+                      <p className="text-xs mt-1">Candidates with an interview date set will appear here.</p>
                     </>
                   ) : (
                     <>
@@ -669,6 +752,7 @@ export function InterviewsPage() {
                 </div>
               )
             }
+
             return (
               <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
                 <table className="w-full text-sm">
@@ -676,12 +760,10 @@ export function InterviewsPage() {
                     <tr className="border-b border-gray-100 bg-gray-50 text-xs text-gray-500 uppercase tracking-wide">
                       <th className="text-left px-4 py-3 font-medium">Candidate</th>
                       <th className="text-left px-4 py-3 font-medium">Job</th>
-                      <th className="text-left px-4 py-3 font-medium">Reviewed At Stage</th>
-                      <th className="text-left px-4 py-3 font-medium">Reviewer</th>
-                      {adminTab === 'scheduled' && (
-                        <th className="text-left px-4 py-3 font-medium">Panel</th>
-                      )}
-                      <th className="text-left px-4 py-3 font-medium">Decision Date</th>
+                      <th className="text-left px-4 py-3 font-medium">Stage</th>
+                      <th className="text-left px-4 py-3 font-medium">Panel</th>
+                      {adminTab === 'scheduled' && <th className="text-left px-4 py-3 font-medium">Interview Date</th>}
+                      {adminTab === 'rejected' && <th className="text-left px-4 py-3 font-medium">Rejected At</th>}
                       <th className="px-4 py-3 font-medium text-right">Action</th>
                     </tr>
                   </thead>
@@ -689,37 +771,40 @@ export function InterviewsPage() {
                     {rows.map((r: any) => (
                       <tr key={r.id} className="hover:bg-gray-50/40 transition-colors">
                         <td className="px-4 py-3">
-                          <button onClick={() => navigate(`/candidates/${r.candidateId}`)}
+                          <button onClick={() => navigate(`/candidates/${r.id}`)}
                             className="font-medium text-blue-600 hover:underline text-left text-sm">
-                            {r.candidateName}
+                            {r.full_name}
                           </button>
-                          {adminTab !== 'rejected' && (
-                            <p className="text-xs text-gray-400 mt-0.5">Current: {r.candidateStage}</p>
-                          )}
                         </td>
                         <td className="px-4 py-3 text-xs text-gray-600">{r.jobTitle}</td>
                         <td className="px-4 py-3">
-                          <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${stageColour(r.stage)}`}>
-                            {r.stage}
+                          <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${stageColour(adminTab === 'rejected' ? r.rejectedStage ?? r.current_stage : r.current_stage)}`}>
+                            {adminTab === 'rejected' ? (r.rejectedStage ?? r.current_stage) : r.current_stage}
                           </span>
                         </td>
-                        <td className="px-4 py-3 text-xs text-gray-600">{r.interviewerName}</td>
+                        <td className="px-4 py-3 text-xs text-gray-600">
+                          {(r.panelNames ?? []).length > 0
+                            ? <div className="flex flex-wrap gap-1">{(r.panelNames as string[]).map((n: string) => (
+                                <span key={n} className="bg-indigo-50 text-indigo-700 border border-indigo-100 px-1.5 py-0.5 rounded-md text-xs">{n}</span>
+                              ))}</div>
+                            : <span className="text-gray-300">—</span>
+                          }
+                        </td>
                         {adminTab === 'scheduled' && (
-                          <td className="px-4 py-3 text-xs text-gray-600">
-                            {r.panelNames?.length > 0
-                              ? <div className="flex flex-wrap gap-1">{r.panelNames.map((n: string) => (
-                                  <span key={n} className="bg-indigo-50 text-indigo-700 border border-indigo-100 px-1.5 py-0.5 rounded-md text-xs">{n}</span>
-                                ))}</div>
-                              : <span className="text-gray-300">—</span>}
+                          <td className="px-4 py-3 text-xs text-gray-600 whitespace-nowrap">
+                            {r.interview_date ? formatDateTime(r.interview_date) : <span className="text-gray-300">—</span>}
                           </td>
                         )}
-                        <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">
-                          {r.submitted_at ? formatDateTime(r.submitted_at) : '—'}
-                        </td>
+                        {adminTab === 'rejected' && (
+                          <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">
+                            {r.rejectedAt ? formatDateTime(r.rejectedAt) : '—'}
+                            {r.rejectedByName ? <span className="ml-1 text-gray-400">by {r.rejectedByName}</span> : null}
+                          </td>
+                        )}
                         <td className="px-4 py-3 text-right">
-                          <button onClick={() => navigate(`/candidates/${r.candidateId}`)}
+                          <button onClick={() => navigate(`/candidates/${r.id}`)}
                             className="flex items-center gap-1 text-xs px-3 py-1.5 border border-gray-200 hover:border-blue-300 hover:text-blue-600 text-gray-600 rounded-lg transition-colors ml-auto">
-                            View Profile <ArrowRight className="w-3 h-3"/>
+                            View <ArrowRight className="w-3 h-3"/>
                           </button>
                         </td>
                       </tr>
@@ -728,12 +813,8 @@ export function InterviewsPage() {
                 </table>
                 <div className="px-4 py-2 bg-gray-50 border-t border-gray-100">
                   <p className="text-xs text-gray-400">
-                    {adminTab === 'schedule_pending'
-                      ? `${rows.length} candidate${rows.length !== 1 ? 's' : ''} ready to schedule — assign an interview date`
-                      : adminTab === 'scheduled'
-                      ? `${rows.length} candidate${rows.length !== 1 ? 's' : ''} in next round`
-                      : `${rows.length} candidate${rows.length !== 1 ? 's' : ''} rejected by interviewers`
-                    }
+                    {rows.length} candidate{rows.length !== 1 ? 's' : ''}
+                    {adminTab === 'to_schedule' ? ' awaiting an interview date' : adminTab === 'scheduled' ? ' with interview scheduled' : ' rejected by interviewers'}
                   </p>
                 </div>
               </div>

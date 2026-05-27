@@ -250,10 +250,10 @@ export function CandidateProfilePage() {
     },
   })
 
-  // Interviewer decision: select for next round (yes) or reject at current stage (no)
+  // Interviewer decision: records feedback only — HR advances stage separately
   const makeDecision = useMutation({
-    mutationFn: async ({ decision, currentStage, targetStage }: {
-      decision: 'yes' | 'no'; currentStage: string; targetStage: string
+    mutationFn: async ({ decision, currentStage }: {
+      decision: 'yes' | 'no'; currentStage: string
     }) => {
       setFeedbackErr(null)
       const { data: existing } = await supabase
@@ -284,29 +284,6 @@ export function CandidateProfilePage() {
         error = result.error
       }
       if (error) { console.error('[feedback decision]', error); throw error }
-
-      // Advance stage; clear interview_date when selecting for next round so HR reschedules
-      const stageUpdate: Record<string, unknown> = { current_stage: targetStage }
-      if (decision === 'yes') stageUpdate.interview_date = null
-      const { error: stageErr } = await supabase.from('candidates')
-        .update(stageUpdate)
-        .eq('id', id!)
-      if (stageErr) { console.error('[stage update]', stageErr); throw stageErr }
-
-      // Auto-assign interviewers configured for the target stage on this job
-      if (decision === 'yes' && (candidate as any)?.job_id) {
-        const targetKey = targetStage.toLowerCase().replace(/[^a-z0-9]/g, '_')
-        const { data: jobData } = await supabase.from('jobs')
-          .select('stage_interviewers')
-          .eq('id', (candidate as any).job_id)
-          .maybeSingle()
-        const newInterviewers: string[] = (jobData as any)?.stage_interviewers?.[targetKey] ?? []
-        if (newInterviewers.length > 0) {
-          await supabase.from('candidates')
-            .update({ assigned_interviewers: newInterviewers })
-            .eq('id', id!)
-        }
-      }
     },
     onSuccess: async () => {
       setDecisionEditMode(false)
@@ -668,25 +645,35 @@ export function CandidateProfilePage() {
   const feedbackSubmitted = !!myFeedback?.submitted_at
   const feedbackDecision = (myFeedback as any)?.recommendation as 'yes' | 'no' | null ?? null
 
-  // Stage change: if new stage is before cost approval stage, also clear CA data
+  // Stage change: always clears interview_date; resets CA data if new stage is at/before CA stage
   const handleStageChange = async (newStage: string) => {
     setStageOpen(false)
     const newIdx = stages.indexOf(newStage)
-    if (costApprovalPipelineIdx >= 0 && newIdx < costApprovalPipelineIdx) {
+    const updates: Record<string, any> = { current_stage: newStage, interview_date: null }
+
+    if (costApprovalPipelineIdx >= 0 && newIdx <= costApprovalPipelineIdx) {
       const existing = (candidate as any)?.interview_notes ?? {}
       const { cost_approval: _ca, cost_approval_comments: _cac, ...cleanedNotes } = existing as Record<string, any>
-      const { error } = await supabase.from('candidates').update({
-        current_stage: newStage,
-        cost_approval_decision: null,
-        interview_notes: cleanedNotes,
-      }).eq('id', candidate.id)
-      if (error) { console.error('[stage+ca clear]', error); return }
-      qc.invalidateQueries({ queryKey: ['candidate', id] })
-      qc.invalidateQueries({ queryKey: ['candidates'] })
-      qc.invalidateQueries({ queryKey: ['widget'] })
-    } else {
-      updateStage.mutate({ id: candidate.id, stage: newStage })
+      updates.cost_approval_decision = null
+      updates.interview_notes = cleanedNotes
+      const hasCaData = !!(candidate as any)?.cost_approval_decision ||
+        ((candidate as any)?.interview_notes?.cost_approval ?? []).length > 0
+      if (hasCaData) {
+        const existingNotes: any[] = (candidate as any)?.cost_approval_notes ?? []
+        updates.cost_approval_notes = [...existingNotes, {
+          text: `Cost approval reset — stage moved back to ${newStage}`,
+          author: user?.full_name ?? 'System',
+          authorId: user?.id ?? '',
+          timestamp: new Date().toISOString(),
+        }]
+      }
     }
+
+    const { error } = await supabase.from('candidates').update(updates).eq('id', candidate.id)
+    if (error) { console.error('[stage change]', error); return }
+    qc.invalidateQueries({ queryKey: ['candidate', id] })
+    qc.invalidateQueries({ queryKey: ['candidates'] })
+    qc.invalidateQueries({ queryKey: ['widget'] })
   }
 
   // Google Drive preview: convert share URL to embedded preview
@@ -1482,6 +1469,43 @@ export function CandidateProfilePage() {
             </>
           )}
 
+          {/* ── Panel Decisions — visible to HR/Admin for current stage ── */}
+          {canEdit && !isInterviewer && (() => {
+            const stageFeedbacks = (interviewFeedbacks as any[]).filter(f => f.stage === candidate.current_stage)
+            if (!stageFeedbacks.length) return null
+            const userMap = Object.fromEntries(allUsers.map(u => [u.id, u.full_name]))
+            return (
+              <div className="bg-gray-50/60 rounded-xl border border-gray-100 px-5 py-4">
+                <p className="text-sm font-semibold text-gray-700 mb-3">Panel Decisions
+                  <span className="ml-1.5 text-xs font-normal text-gray-400">— {candidate.current_stage}</span>
+                </p>
+                <div className="space-y-2">
+                  {stageFeedbacks.map((f: any) => {
+                    const isYes = f.recommendation === 'yes'
+                    const isNo  = f.recommendation === 'no'
+                    return (
+                      <div key={f.id} className={`flex items-center justify-between px-3 py-2 rounded-lg border ${
+                        isYes ? 'bg-green-50 border-green-100' : isNo ? 'bg-red-50 border-red-100' : 'bg-white border-gray-100'
+                      }`}>
+                        <div className="flex items-center gap-2">
+                          {isYes
+                            ? <CheckCircle className="w-4 h-4 text-green-600 flex-shrink-0"/>
+                            : isNo
+                            ? <XCircle className="w-4 h-4 text-red-500 flex-shrink-0"/>
+                            : null}
+                          <span className="text-sm text-gray-700">{userMap[f.interviewer_id] ?? '—'}</span>
+                        </div>
+                        <span className={`text-xs font-semibold ${isYes ? 'text-green-700' : isNo ? 'text-red-700' : 'text-gray-400'}`}>
+                          {isYes ? '✓ Proceed' : isNo ? '✗ Reject' : '—'}
+                        </span>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            )
+          })()}
+
           {/* ── Interview Decision — Interviewers only ── */}
           {isInterviewer && (
             <div className={`rounded-xl border-2 px-5 py-4 ${
@@ -1494,8 +1518,8 @@ export function CandidateProfilePage() {
                   <div className="flex items-center gap-2.5">
                     <CheckCircle className="w-5 h-5 text-green-600 flex-shrink-0"/>
                     <div>
-                      <p className="text-sm font-semibold text-green-800">Selected for Next Round</p>
-                      <p className="text-xs text-green-600 mt-0.5">Candidate has been advanced to the next stage.</p>
+                      <p className="text-sm font-semibold text-green-800">Decision Submitted — Proceed</p>
+                      <p className="text-xs text-green-600 mt-0.5">You recommended this candidate for the next round.</p>
                     </div>
                   </div>
                   <button onClick={() => setDecisionEditMode(true)}
@@ -1508,8 +1532,8 @@ export function CandidateProfilePage() {
                   <div className="flex items-center gap-2.5">
                     <XCircle className="w-5 h-5 text-red-500 flex-shrink-0"/>
                     <div>
-                      <p className="text-sm font-semibold text-red-700">{(myFeedback as any)?.stage ?? candidate.current_stage} Reject</p>
-                      <p className="text-xs text-red-500 mt-0.5">Candidate was rejected at this stage.</p>
+                      <p className="text-sm font-semibold text-red-700">Decision Submitted — Rejected</p>
+                      <p className="text-xs text-red-500 mt-0.5">You rejected this candidate at {(myFeedback as any)?.stage ?? candidate.current_stage}.</p>
                     </div>
                   </div>
                   <button onClick={() => setDecisionEditMode(true)}
@@ -1528,33 +1552,24 @@ export function CandidateProfilePage() {
                       </button>
                     )}
                   </div>
-                  <p className="text-xs text-gray-500 mb-3">Add interview notes above, then make a decision.</p>
+                  <p className="text-xs text-gray-500 mb-3">Add interview notes above, then submit your recommendation. HR will advance the stage.</p>
                   {feedbackErr && <p className="text-xs text-red-600 mb-2">{feedbackErr}</p>}
                   <div className="flex gap-3">
                     <button
-                      onClick={() => {
-                        const idx = stages.indexOf(candidate.current_stage)
-                        const targetStage = stages[idx + 1] ?? candidate.current_stage
-                        makeDecision.mutate({ decision: 'yes', currentStage: candidate.current_stage, targetStage })
-                      }}
+                      onClick={() => makeDecision.mutate({ decision: 'yes', currentStage: candidate.current_stage })}
                       disabled={makeDecision.isPending}
                       className="flex-1 px-4 py-2 bg-green-600 hover:bg-green-700 disabled:bg-gray-300 text-white text-sm font-medium rounded-lg transition-colors flex items-center justify-center gap-2"
                     >
                       {makeDecision.isPending ? <Loader2 className="w-4 h-4 animate-spin"/> : <CheckCircle className="w-4 h-4"/>}
-                      Select for Next Round
+                      Recommend: Proceed
                     </button>
                     <button
-                      onClick={() => {
-                        const stageName = candidate.current_stage
-                        const rejectLabel = `${stageName} Reject`
-                        const targetStage = stages.find(s => s.toLowerCase() === rejectLabel.toLowerCase()) ?? rejectLabel
-                        makeDecision.mutate({ decision: 'no', currentStage: stageName, targetStage })
-                      }}
+                      onClick={() => makeDecision.mutate({ decision: 'no', currentStage: candidate.current_stage })}
                       disabled={makeDecision.isPending}
                       className="flex-1 px-4 py-2 bg-red-600 hover:bg-red-700 disabled:bg-gray-300 text-white text-sm font-medium rounded-lg transition-colors flex items-center justify-center gap-2"
                     >
                       {makeDecision.isPending ? <Loader2 className="w-4 h-4 animate-spin"/> : <XCircle className="w-4 h-4"/>}
-                      {candidate.current_stage} Reject
+                      Recommend: Reject
                     </button>
                   </div>
                 </>

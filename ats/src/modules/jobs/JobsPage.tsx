@@ -88,10 +88,6 @@ function JobForm({ job, onClose }: { job?: any; onClose: () => void }) {
   const [stageInterviewers, setStageInterviewers] = useState<Record<string, string[]>>(
     Object.fromEntries(ROUND_STAGES.map(name => [stageKeyOf(name), existingStageInterviewers[stageKeyOf(name)] ?? []]))
   )
-  const existingDurations: Record<string, number> = (existingFormat['_durations'] as Record<string, number>) ?? {}
-  const [stageDurations, setStageDurations] = useState<Record<string, number>>(
-    Object.fromEntries(ALL_TEMPLATE_STAGES.map(name => [stageKeyOf(name), existingDurations[stageKeyOf(name)] ?? 0]))
-  )
   const [showInterviewProcess, setShowInterviewProcess] = useState(false)
   const [expandedQuestions, setExpandedQuestions] = useState<string | null>(null)
 
@@ -142,7 +138,6 @@ function JobForm({ job, onClose }: { job?: any; onClose: () => void }) {
       const skills = d.required_skills ? d.required_skills.split(',').map(s=>s.trim()).filter(Boolean) : []
 
       // Save all templates into the existing interview_format JSONB column.
-      // Durations stored as _durations: { stage_key: minutes }.
       const toLines = (key: string) =>
         (interviewFormat[key] ?? '').split('\n').map(s => s.trim()).filter(Boolean)
 
@@ -152,13 +147,6 @@ function JobForm({ job, onClose }: { job?: any; onClose: () => void }) {
         const qs = toLines(key)
         if (qs.length) interviewFormatObj[key] = qs
       })
-      const durationsObj: Record<string, number> = {}
-      ALL_TEMPLATE_STAGES.forEach(name => {
-        const key = stageKeyOf(name)
-        const mins = stageDurations[key] ?? 0
-        if (mins > 0) durationsObj[key] = mins
-      })
-      if (Object.keys(durationsObj).length) interviewFormatObj['_durations'] = durationsObj
 
       const stageInterviewersObj: Record<string, string[]> = {}
       ROUND_STAGES.forEach(name => {
@@ -399,7 +387,7 @@ function JobForm({ job, onClose }: { job?: any; onClose: () => void }) {
           <div className="flex items-center gap-2">
             <ClipboardList className="w-4 h-4 text-green-600" />
             <p className="text-sm font-medium text-gray-700">Interview Process</p>
-            <span className="text-xs text-gray-400">(panel, duration &amp; questions per round)</span>
+            <span className="text-xs text-gray-400">(panel &amp; questions per round)</span>
           </div>
           <ChevronDown className={`w-4 h-4 text-gray-400 transition-transform ${showInterviewProcess ? 'rotate-180' : ''}`} />
         </button>
@@ -407,10 +395,9 @@ function JobForm({ job, onClose }: { job?: any; onClose: () => void }) {
         {showInterviewProcess && (
           <div className="border-t border-green-100">
             {/* Table header */}
-            <div className="grid grid-cols-[28px_1fr_90px_1fr] gap-x-3 px-4 py-2 bg-green-50/60 border-b border-green-100">
+            <div className="grid grid-cols-[28px_1fr_1fr] gap-x-3 px-4 py-2 bg-green-50/60 border-b border-green-100">
               <span className="text-xs font-semibold text-gray-400">#</span>
               <span className="text-xs font-semibold text-gray-400">Stage</span>
-              <span className="text-xs font-semibold text-gray-400">Duration</span>
               <span className="text-xs font-semibold text-gray-400">Panel / Interviewers</span>
             </div>
 
@@ -419,14 +406,12 @@ function JobForm({ job, onClose }: { job?: any; onClose: () => void }) {
               const isScreening = stageName === 'Screening'
               const assignedIds: string[] = stageInterviewers[key] ?? []
               const assignedNames = (interviewerUsers as any[]).filter(u => assignedIds.includes(u.id)).map(u => u.full_name)
-              const mins = stageDurations[key] ?? 0
-              const durationLabel = mins === 0 ? '' : mins < 60 ? `${mins} min` : `${Math.floor(mins/60)}h ${mins%60 ? `${mins%60}m` : ''}`.trim()
               const isExpanded = expandedQuestions === key
               const hasQuestions = (interviewFormat[key] ?? '').trim().length > 0
 
               return (
                 <div key={key} className="border-b border-green-100 last:border-b-0">
-                  <div className="grid grid-cols-[28px_1fr_90px_1fr] gap-x-3 px-4 py-2.5 items-center hover:bg-green-50/30 transition-colors">
+                  <div className="grid grid-cols-[28px_1fr_1fr] gap-x-3 px-4 py-2.5 items-center hover:bg-green-50/30 transition-colors">
                     {/* # */}
                     <span className="text-xs text-gray-400 font-medium">{idx + 1}</span>
 
@@ -443,20 +428,6 @@ function JobForm({ job, onClose }: { job?: any; onClose: () => void }) {
                             : 'bg-gray-50 text-gray-400 border-gray-200 hover:bg-gray-100'
                         }`}
                       >Q</button>
-                    </div>
-
-                    {/* Duration */}
-                    <div className="flex items-center gap-1">
-                      <input
-                        type="number"
-                        min="0"
-                        step="5"
-                        value={mins || ''}
-                        onChange={e => setStageDurations(p => ({ ...p, [key]: Number(e.target.value) || 0 }))}
-                        placeholder="—"
-                        className="w-12 px-1.5 py-1 border border-gray-200 rounded text-xs text-center bg-white focus:outline-none focus:ring-1 focus:ring-green-400"
-                      />
-                      <span className="text-xs text-gray-400 flex-shrink-0">min</span>
                     </div>
 
                     {/* Interviewers / panel */}
@@ -492,11 +463,10 @@ function JobForm({ job, onClose }: { job?: any; onClose: () => void }) {
                     )}
                   </div>
 
-                  {/* Duration display chip + selected panel names (compact summary row) */}
-                  {(durationLabel || assignedNames.length > 0) && !isScreening && (
-                    <div className="px-4 pb-1.5 flex items-center gap-2 text-xs text-gray-400">
-                      {durationLabel && <span className="bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">{durationLabel}</span>}
-                      {assignedNames.length > 0 && <span>{assignedNames.join(', ')}</span>}
+                  {/* Selected panel names summary */}
+                  {assignedNames.length > 0 && !isScreening && (
+                    <div className="px-4 pb-1.5 text-xs text-gray-400">
+                      {assignedNames.join(', ')}
                     </div>
                   )}
 

@@ -3,7 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   Search, Upload, UserPlus, Loader2, ExternalLink, FileText,
   Eye, X, Archive, Trash2, Filter, ChevronDown, Check,
-  Layers, GripVertical, Calendar
+  Layers, GripVertical, Download
 } from 'lucide-react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
@@ -29,8 +29,6 @@ import type { CandidateFilters } from './candidateService'
 import { INTERVIEW_STAGES } from '../../types/database.types'
 import { useStages as useStagesHook } from '../../shared/hooks/useStages'
 import { formatDate, formatDateTime } from '../../shared/utils/helpers'
-import { ScheduleInterviewModal } from './ScheduleInterviewModal'
-import { SendEmailModal } from './SendEmailModal'
 
 // ── Stage colours ─────────────────────────────────────────────
 const STAGE_PILL: Record<string,string> = {
@@ -386,6 +384,29 @@ function ActionBtn({ onClick, title, children, danger }: { onClick:()=>void; tit
   )
 }
 
+function exportCSV(candidates: any[], jobs: any[], hrUsers: any[]) {
+  const getName = (arr: any[], id: string) => arr.find(u => u.id === id)?.full_name ?? ''
+  const rows = candidates.map(c => [
+    c.full_name ?? '',
+    c.email ?? '',
+    c.phone ?? '',
+    c.current_stage ?? '',
+    c.job?.title ?? '',
+    c.source_category ?? '',
+    c.source_name ?? '',
+    getName(hrUsers, c.hr_owner ?? ''),
+    c.interview_date ? new Date(c.interview_date).toLocaleString() : '',
+    c.status ?? '',
+  ])
+  const header = ['Name','Email','Phone','Stage','Job','Source','Sub-Source','HR Owner','Interview Date','Status']
+  const csv = [header, ...rows].map(r => r.map(v => `"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n')
+  const blob = new Blob([csv], { type: 'text/csv' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url; a.download = 'candidates.csv'; a.click()
+  URL.revokeObjectURL(url)
+}
+
 // ── Main page ─────────────────────────────────────────────────
 export function CandidatesPage() {
   const navigate = useNavigate()
@@ -458,8 +479,6 @@ export function CandidatesPage() {
     }))
   }, [colOrder, visibleCols, pinnedCols])
 
-  const [scheduleCandidate, setScheduleCandidate] = useState<any | null>(null)
-  const [sendEmailCandidates, setSendEmailCandidates] = useState<any[]>([])
   const [bulkSelectValue, setBulkSelectValue] = useState('')
   const filterRef = useRef<HTMLDivElement>(null)
 
@@ -536,15 +555,18 @@ const displayed = useMemo(() => {
   const updateField = useMutation({
     mutationFn: async({id,field,value}:{id:string;field:string;value:any})=>{
       const updates: Record<string,any> = { [field]: value }
-      if (field === 'current_stage' && value && caStageForCleanup) {
-        const newIdx = STAGES.indexOf(value)
-        const caIdx = STAGES.indexOf(caStageForCleanup)
-        if (caIdx >= 0 && newIdx < caIdx) {
-          const { data: c } = await supabase.from('candidates').select('interview_notes').eq('id', id).maybeSingle()
-          const notes: Record<string,any> = (c as any)?.interview_notes ?? {}
-          const { cost_approval: _ca, cost_approval_comments: _cac, ...cleaned } = notes
-          updates.cost_approval_decision = null
-          updates.interview_notes = cleaned
+      if (field === 'current_stage' && value) {
+        updates.interview_date = null
+        if (caStageForCleanup) {
+          const newIdx = STAGES.indexOf(value)
+          const caIdx = STAGES.indexOf(caStageForCleanup)
+          if (caIdx >= 0 && newIdx <= caIdx) {
+            const { data: c } = await supabase.from('candidates').select('interview_notes').eq('id', id).maybeSingle()
+            const notes: Record<string,any> = (c as any)?.interview_notes ?? {}
+            const { cost_approval: _ca, cost_approval_comments: _cac, ...cleaned } = notes
+            updates.cost_approval_decision = null
+            updates.interview_notes = cleaned
+          }
         }
       }
       const{error}=await supabase.from('candidates').update(updates).eq('id',id)
@@ -801,6 +823,17 @@ const displayed = useMemo(() => {
                           </div>
                         </div>
                       )}
+                      <div className="border-t border-gray-100 mt-1 pt-1">
+                        <button
+                          onClick={() => {
+                            const sel = displayed.filter((c:any) => selectedIds.has(c.id))
+                            exportCSV(sel, jobs as any[], hrUsers as any[])
+                            setShowBulkMenu(false)
+                          }}
+                          className="w-full text-left text-sm px-3 py-2 rounded-lg text-blue-700 hover:bg-blue-50 transition-colors flex items-center gap-2">
+                          <Download className="w-3.5 h-3.5"/>Download CSV
+                        </button>
+                      </div>
                     </div>
                   </>
                 )}
@@ -947,11 +980,6 @@ const displayed = useMemo(() => {
                             })}
                             <td className="px-3 py-2.5">
                               <div className="flex items-center gap-0.5 justify-end">
-                                {canEdit && (
-                                  <ActionBtn onClick={() => setScheduleCandidate(c)} title="Schedule interview">
-                                    <Calendar className="w-3.5 h-3.5"/>
-                                  </ActionBtn>
-                                )}
                                 {canEdit && !isAgency && (
                                   <ActionBtn onClick={()=>archiveOne.mutate({id:c.id,archive:!c.archived_at})} title={c.archived_at?'Unarchive':'Archive'}>
                                     <Archive className="w-3.5 h-3.5"/>
@@ -994,17 +1022,6 @@ const displayed = useMemo(() => {
         </div>
       </Modal>
 
-      {scheduleCandidate && (
-        <ScheduleInterviewModal
-          candidateId={scheduleCandidate.id}
-          candidateName={scheduleCandidate.full_name}
-          candidateEmail={scheduleCandidate.email}
-          resumeUrl={scheduleCandidate.resume_url}
-          jobTitle={scheduleCandidate.job?.title}
-          jdLink={scheduleCandidate.job?.jd_link}
-          onClose={() => setScheduleCandidate(null)}
-        />
-      )}
     </div>
   )
 }
