@@ -845,7 +845,7 @@ export function CandidateProfilePage() {
           )}
           {(() => {
             const visibleFields = (customFields as any[]).filter((f: any) =>
-              !isInterviewer || f.show_to_interviewer !== false
+              !isInterviewer || f.show_to_interviewer !== false || (isCAPanel && hasReachedOrPassedCAEarly)
             )
             if (visibleFields.length === 0) return null
             const customData = (candidate as any).custom_data ?? {}
@@ -860,7 +860,7 @@ export function CandidateProfilePage() {
                           {f.field_label}
                           {f.is_required && <span className="text-red-400 ml-1">*</span>}
                           {!isInterviewer && f.show_to_interviewer === false && (
-                            <span className="ml-1 text-xs text-gray-300">(hidden from interviewers)</span>
+                            <span className="ml-1 text-xs text-gray-300">(restricted)</span>
                           )}
                         </label>
                         {f.field_type === 'boolean' ? (
