@@ -639,7 +639,7 @@ export function InterviewsPage() {
               }`}
             >
               <UserCheck className="w-3.5 h-3.5"/>
-              Interviews Pending
+              Schedule Pending
               {(adminData?.pending.length ?? 0) > 0 && (
                 <span className={`text-xs px-1.5 py-0.5 rounded-full font-semibold ${
                   adminTab === 'pending' ? 'bg-green-100 text-green-700' : 'bg-gray-200 text-gray-500'
@@ -674,7 +674,7 @@ export function InterviewsPage() {
                   {adminTab === 'pending' ? (
                     <>
                       <UserCheck className="w-8 h-8 mb-2 text-gray-300"/>
-                      <p className="text-sm font-medium text-gray-500">No pending interviews</p>
+                      <p className="text-sm font-medium text-gray-500">No interviews to schedule</p>
                       <p className="text-xs mt-1">Candidates selected for next round will appear here.</p>
                     </>
                   ) : (
@@ -735,7 +735,7 @@ export function InterviewsPage() {
                 <div className="px-4 py-2 bg-gray-50 border-t border-gray-100">
                   <p className="text-xs text-gray-400">
                     {adminTab === 'pending'
-                      ? `${rows.length} candidate${rows.length !== 1 ? 's' : ''} ready to schedule for next round`
+                      ? `${rows.length} candidate${rows.length !== 1 ? 's' : ''} ready to schedule — assign an interview date`
                       : `${rows.length} candidate${rows.length !== 1 ? 's' : ''} rejected by interviewers`
                     }
                   </p>

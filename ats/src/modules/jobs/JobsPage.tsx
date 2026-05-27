@@ -73,6 +73,7 @@ function JobForm({ job, onClose }: { job?: any; onClose: () => void }) {
   // All stage templates stored in interview_format JSONB column.
   // Key 'screening' → screening questions (HR-visible); other keys → round questions (panel-visible).
   const existingFormat: Record<string, string[]> = job?.interview_format ?? {}
+  const existingStageInterviewers: Record<string, string[]> = job?.stage_interviewers ?? {}
   const ALL_TEMPLATE_STAGES = ['Screening', ...ROUND_STAGES]
   const [interviewFormat, setInterviewFormat] = useState<Record<string, string>>(
     Object.fromEntries(
@@ -82,6 +83,9 @@ function JobForm({ job, onClose }: { job?: any; onClose: () => void }) {
         return [key, qs.join('\n')]
       })
     )
+  )
+  const [stageInterviewers, setStageInterviewers] = useState<Record<string, string[]>>(
+    Object.fromEntries(ROUND_STAGES.map(name => [stageKeyOf(name), existingStageInterviewers[stageKeyOf(name)] ?? []]))
   )
   const [showInterviewFormat, setShowInterviewFormat] = useState(false)
 
@@ -99,6 +103,18 @@ function JobForm({ job, onClose }: { job?: any; onClose: () => void }) {
       const { data } = await supabase.from('users')
         .select('id,full_name,email,role')
         .in('role', ['hr_team','admin'])
+        .eq('is_active', true)
+        .order('full_name')
+      return data ?? []
+    },
+  })
+
+  const { data: interviewerUsers = [] } = useQuery({
+    queryKey: ['interviewer-users'],
+    queryFn: async () => {
+      const { data } = await supabase.from('users')
+        .select('id,full_name,email')
+        .eq('role', 'interviewer')
         .eq('is_active', true)
         .order('full_name')
       return data ?? []
@@ -130,6 +146,13 @@ function JobForm({ job, onClose }: { job?: any; onClose: () => void }) {
         if (qs.length) interviewFormatObj[key] = qs
       })
 
+      const stageInterviewersObj: Record<string, string[]> = {}
+      ROUND_STAGES.forEach(name => {
+        const key = stageKeyOf(name)
+        const ids = stageInterviewers[key] ?? []
+        if (ids.length) stageInterviewersObj[key] = ids
+      })
+
       const payload = {
         title: d.title, department: d.department||null, location: d.location||null,
         employment_type: d.employment_type??null, description: d.description||null,
@@ -144,6 +167,7 @@ function JobForm({ job, onClose }: { job?: any; onClose: () => void }) {
         // hr_owner stays as the FIRST selected HR for backward compatibility
         hr_owner: hrIds[0] ?? null,
         interview_format: interviewFormatObj,
+        stage_interviewers: stageInterviewersObj,
       }
       const saved = job
         ? await jobService.update(job.id, payload as any)
@@ -390,6 +414,38 @@ function JobForm({ job, onClose }: { job?: any; onClose: () => void }) {
                       : `e.g.\nTell me about a relevant project\nHow do you handle ambiguity?`}
                     className={inputCls + ' resize-y font-normal text-xs'}
                   />
+                  {!isScreening && (
+                    <div className="mt-2">
+                      <p className="text-xs text-gray-500 mb-1.5 font-medium">Interviewer(s) for this round</p>
+                      {interviewerUsers.length === 0 ? (
+                        <p className="text-xs text-gray-400 italic">No interviewers found — add users with the Interviewer role first.</p>
+                      ) : (
+                        <div className="flex flex-wrap gap-1.5">
+                          {(interviewerUsers as any[]).map(u => {
+                            const isSelected = (stageInterviewers[key] ?? []).includes(u.id)
+                            return (
+                              <button
+                                key={u.id}
+                                type="button"
+                                onClick={() => setStageInterviewers(p => {
+                                  const curr = p[key] ?? []
+                                  const next = isSelected ? curr.filter((id: string) => id !== u.id) : [...curr, u.id]
+                                  return { ...p, [key]: next }
+                                })}
+                                className={`text-xs px-2.5 py-1 rounded-full border transition-all ${
+                                  isSelected
+                                    ? 'bg-indigo-100 text-indigo-700 border-indigo-300 font-medium'
+                                    : 'bg-white text-gray-500 border-gray-200 hover:border-gray-300 hover:text-gray-700'
+                                }`}
+                              >
+                                {u.full_name}
+                              </button>
+                            )
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               )
             })}

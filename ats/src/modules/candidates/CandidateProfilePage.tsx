@@ -287,10 +287,28 @@ export function CandidateProfilePage() {
       }
       if (error) { console.error('[feedback decision]', error); throw error }
 
+      // Advance stage; clear interview_date when selecting for next round so HR reschedules
+      const stageUpdate: Record<string, unknown> = { current_stage: targetStage }
+      if (decision === 'yes') stageUpdate.interview_date = null
       const { error: stageErr } = await supabase.from('candidates')
-        .update({ current_stage: targetStage })
+        .update(stageUpdate)
         .eq('id', id!)
       if (stageErr) { console.error('[stage update]', stageErr); throw stageErr }
+
+      // Auto-assign interviewers configured for the target stage on this job
+      if (decision === 'yes' && (candidate as any)?.job_id) {
+        const targetKey = targetStage.toLowerCase().replace(/[^a-z0-9]/g, '_')
+        const { data: jobData } = await supabase.from('jobs')
+          .select('stage_interviewers')
+          .eq('id', (candidate as any).job_id)
+          .maybeSingle()
+        const newInterviewers: string[] = (jobData as any)?.stage_interviewers?.[targetKey] ?? []
+        if (newInterviewers.length > 0) {
+          await supabase.from('candidates')
+            .update({ assigned_interviewers: newInterviewers })
+            .eq('id', id!)
+        }
+      }
     },
     onSuccess: async () => {
       await refetchFeedback()
