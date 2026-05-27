@@ -475,15 +475,16 @@ export function CandidateProfilePage() {
   })()
 
   // Template questions per stage
-  // Admin/SA: never shown (they configure templates, don't need to see them inline)
-  // HR: screening only
-  // Interviewers: their current stage only (screening excluded)
+  // Screening: HR only. Round: assigned panel member for this candidate, current stage only.
   const getTemplateQuestions = (sectionKey: string): string[] => {
-    if (hasRole(['admin', 'super_admin'])) return []
-    if (isHR && sectionKey !== 'screening') return []
-    if (isInterviewer && sectionKey === 'screening') return []
     if (!jobTemplates) return []
-    if (sectionKey === 'screening') return (jobTemplates.screening_template as string[]) ?? []
+    if (sectionKey === 'screening') {
+      return isHR ? ((jobTemplates.screening_template as string[]) ?? []) : []
+    }
+    // Round questionnaire: only for the candidate's current stage, only if user is on the panel
+    const onPanel = ((candidate as any).assigned_interviewers ?? []).includes(user?.id ?? '')
+    const currentKey = stageKeyOf(candidate.current_stage)
+    if (!onPanel || sectionKey !== currentKey) return []
     return ((jobTemplates.interview_templates as Record<string, string[]>) ?? {})[sectionKey] ?? []
   }
 
