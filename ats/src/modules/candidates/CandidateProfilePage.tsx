@@ -381,15 +381,37 @@ export function CandidateProfilePage() {
     const existing = (candidate as any)?.interview_notes ?? {}
     const entries: NoteEntry[] = [...(existing[section] ?? [])]
     entries[index] = { ...entries[index], text: trimmed, timestamp: new Date().toISOString() }
-    const { error } = await supabase.from('candidates').update({
-      interview_notes: { ...existing, [section]: entries }
-    }).eq('id', id!)
-    if (error) console.error('[saveEditedNote]', error)
-    else {
-      qc.invalidateQueries({ queryKey: ['candidate', id] })
-      setEditingNote(null)
-    }
+    const newNotes = { ...existing, [section]: entries }
+
+    // Optimistically update the cache first so the UI reflects the change immediately
+    const cached = qc.getQueryData<any>(['candidate', id])
+    if (cached) qc.setQueryData(['candidate', id], { ...cached, interview_notes: newNotes })
+    setEditingNote(null)
     setSavingEditNote(false)
+
+    // Persist to DB (RPC first for interviewer RLS bypass, direct update fallback)
+    const { error: rpcError } = await supabase.rpc('submit_interview_note_edit', {
+      p_candidate_id: id!,
+      p_section_key: section,
+      p_note_index: index,
+      p_note_text: trimmed,
+    })
+    if (rpcError && (rpcError as any).code !== 'PGRST202' && !rpcError.message?.includes('Could not find')) {
+      console.error('[saveEditedNote rpc]', rpcError)
+    } else if (!rpcError) {
+      return
+    }
+
+    // Direct update fallback
+    const { error } = await supabase.from('candidates').update({
+      interview_notes: newNotes
+    }).eq('id', id!)
+    if (error) {
+      console.error('[saveEditedNote]', error)
+      // Revert cache on failure
+      if (cached) qc.setQueryData(['candidate', id], cached)
+      qc.invalidateQueries({ queryKey: ['candidate', id] })
+    }
   }
 
   const submitCostApproval = async () => {
@@ -1385,7 +1407,7 @@ export function CandidateProfilePage() {
                     )}
 
                     {/* Input */}
-                    {canAddNotes && (
+                    {canAddNotes && (!isHR || key === 'screening') && (
                       <div className="flex gap-2 items-end pb-3 pl-3.5">
                         <textarea rows={3} value={draft}
                           onChange={e => setDraftNotes(p => ({ ...p, [key]: e.target.value }))}
@@ -1398,7 +1420,7 @@ export function CandidateProfilePage() {
                         </button>
                       </div>
                     )}
-                    {entries.length === 0 && !canAddNotes && (
+                    {entries.length === 0 && !(canAddNotes && (!isHR || key === 'screening')) && (
                       <p className="text-xs text-gray-400 pl-3.5 pb-3 italic">No notes yet.</p>
                     )}
                   </div>
