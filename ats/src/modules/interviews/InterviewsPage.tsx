@@ -346,20 +346,6 @@ export function InterviewsPage() {
           </button>
         </div>
 
-        {/* Bulk submit */}
-        {filter === 'pending' && selectedIds.size > 0 && (
-          <button
-            onClick={() => submitBulk.mutate()}
-            disabled={submitBulk.isPending}
-            className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-60"
-          >
-            {submitBulk.isPending
-              ? <Loader2 className="w-4 h-4 animate-spin"/>
-              : <CheckCircle className="w-4 h-4"/>
-            }
-            Submit Feedback ({selectedIds.size})
-          </button>
-        )}
       </div>
 
       {/* Filter bar — Job + Interview Date range */}
@@ -368,7 +354,7 @@ export function InterviewsPage() {
           <Briefcase className="w-3.5 h-3.5 text-gray-400"/>
           <select
             value={jobFilter}
-            onChange={e => { setJobFilter(e.target.value); setSelectedIds(new Set()) }}
+            onChange={e => { setJobFilter(e.target.value) }}
             className="text-sm bg-transparent border-none outline-none text-gray-700 cursor-pointer pr-1 max-w-[200px]"
           >
             <option value="">All jobs</option>
@@ -380,7 +366,7 @@ export function InterviewsPage() {
 
         {hasActiveFilters && (
           <button
-            onClick={() => { setJobFilter(''); clearDate(); setSelectedIds(new Set()) }}
+            onClick={() => { setJobFilter(''); clearDate() }}
             className="flex items-center gap-1 text-sm text-gray-500 hover:text-gray-800 px-2 py-1.5 rounded-lg hover:bg-gray-50"
           >
             <X className="w-3.5 h-3.5"/> Clear filters
@@ -426,7 +412,6 @@ export function InterviewsPage() {
                   if (['any','today','tomorrow','yesterday','last_7','next_7','this_month','empty','not_empty'].includes(op)) {
                     setDateA(''); setDateB('')
                   }
-                  setSelectedIds(new Set())
                 }}
                 className="w-full text-sm border border-gray-200 rounded-lg px-2 py-1.5 mb-2 bg-white"
               >
@@ -511,45 +496,27 @@ export function InterviewsPage() {
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-gray-100 bg-gray-50 text-xs text-gray-500 uppercase tracking-wide">
-                {filter === 'pending' && (
-                  <th className="px-4 py-3 w-10">
-                    <input type="checkbox"
-                      checked={selectedIds.size === displayed.length && displayed.length > 0}
-                      onChange={toggleAll}
-                      className="rounded border-gray-300 text-blue-600 cursor-pointer"/>
-                  </th>
-                )}
                 <th className="text-left px-4 py-3 font-medium">Candidate</th>
                 <th className="text-left px-4 py-3 font-medium">Job</th>
                 <th className="text-left px-4 py-3 font-medium">Stage</th>
                 <th className="text-left px-4 py-3 font-medium">Interview Date</th>
                 {filter === 'submitted' && (
-                  <th className="text-left px-4 py-3 font-medium">Submitted At</th>
+                  <th className="text-left px-4 py-3 font-medium">Decision Date</th>
                 )}
-                <th className="px-4 py-3 font-medium text-right">Action</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-50">
               {displayed.map((c: any) => {
-                const isSel = selectedIds.has(c.id)
                 const submittedAt = data?.doneMap.get(c.id)
-                const isSubmitting = submitOne.isPending && submitOne.variables === c.id
 
                 return (
-                  <tr key={c.id} className={`transition-colors ${isSel ? 'bg-blue-50/50' : 'hover:bg-gray-50/40'}`}>
-                    {filter === 'pending' && (
-                      <td className="px-4 py-3 w-10">
-                        <input type="checkbox" checked={isSel} onChange={() => toggleSel(c.id)}
-                          className="rounded border-gray-300 text-blue-600 cursor-pointer"/>
-                      </td>
-                    )}
+                  <tr key={c.id}
+                    className="hover:bg-gray-50/40 transition-colors cursor-pointer"
+                    onClick={() => navigate(`/candidates/${c.id}`)}>
 
                     {/* Name */}
                     <td className="px-4 py-3">
-                      <button onClick={() => navigate(`/candidates/${c.id}`)}
-                        className="font-medium text-blue-600 hover:underline text-left text-sm">
-                        {c.full_name}
-                      </button>
+                      <span className="font-medium text-blue-600 text-sm">{c.full_name}</span>
                     </td>
 
                     {/* Job */}
@@ -569,40 +536,12 @@ export function InterviewsPage() {
                       {c.interview_date ? formatDateTime(c.interview_date) : <span className="text-gray-300">—</span>}
                     </td>
 
-                    {/* Submitted At (submitted tab only) */}
+                    {/* Decision Date (submitted tab only) */}
                     {filter === 'submitted' && (
                       <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">
                         {submittedAt ? formatDateTime(submittedAt) : '—'}
                       </td>
                     )}
-
-                    {/* Action */}
-                    <td className="px-4 py-3 text-right">
-                      {filter === 'pending' ? (
-                        <div className="flex items-center justify-end gap-2">
-                          <button onClick={() => navigate(`/candidates/${c.id}`)}
-                            className="text-xs px-3 py-1.5 border border-gray-200 hover:border-blue-300 hover:text-blue-600 text-gray-600 rounded-lg transition-colors">
-                            Add Notes
-                          </button>
-                          <button
-                            onClick={() => submitOne.mutate(c.id)}
-                            disabled={isSubmitting}
-                            className="text-xs px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium transition-colors disabled:opacity-60 flex items-center gap-1"
-                          >
-                            {isSubmitting
-                              ? <Loader2 className="w-3 h-3 animate-spin"/>
-                              : <CheckCircle className="w-3 h-3"/>
-                            }
-                            Submit
-                          </button>
-                        </div>
-                      ) : (
-                        <button onClick={() => navigate(`/candidates/${c.id}`)}
-                          className="text-xs px-3 py-1.5 border border-gray-200 hover:border-blue-300 hover:text-blue-600 text-gray-600 rounded-lg transition-colors">
-                          View Profile
-                        </button>
-                      )}
-                    </td>
                   </tr>
                 )
               })}
@@ -610,18 +549,13 @@ export function InterviewsPage() {
           </table>
 
     {/* Footer */}
-          <div className="px-4 py-2 bg-gray-50 border-t border-gray-100 flex items-center justify-between">
+          <div className="px-4 py-2 bg-gray-50 border-t border-gray-100">
             <p className="text-xs text-gray-400">
               {filter === 'pending'
-                ? 'Select candidates to bulk submit · Or submit individually'
-                : `${submittedCount} feedback${submittedCount !== 1 ? 's' : ''} submitted`
+                ? `${displayed.length} candidate${displayed.length !== 1 ? 's' : ''} awaiting your decision — click a name to open their profile`
+                : `${submittedCount} decision${submittedCount !== 1 ? 's' : ''} submitted`
               }
             </p>
-            {selectedIds.size > 0 && (
-              <button onClick={() => setSelectedIds(new Set())} className="text-xs text-gray-400 hover:text-gray-600">
-                Clear selection
-              </button>
-            )}
           </div>
         </div>
       )}
