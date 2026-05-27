@@ -217,19 +217,23 @@ export function InterviewsPage() {
       const candidateIds = [...new Set((feedbacks ?? []).map((f: any) => f.candidate_id))]
       const interviewerIds = [...new Set((feedbacks ?? []).map((f: any) => f.interviewer_id))]
 
-      const [{ data: candidates }, { data: interviewers }] = await Promise.all([
-        candidateIds.length
-          ? supabase.from('candidates').select('id, full_name, current_stage, interview_date, job_id').in('id', candidateIds)
-          : { data: [] as any[] },
-        interviewerIds.length
-          ? supabase.from('users').select('id, full_name').in('id', interviewerIds)
-          : { data: [] as any[] },
-      ])
+      // Fetch candidates first so we can collect assigned_interviewers IDs
+      const { data: candidates } = candidateIds.length
+        ? await supabase.from('candidates').select('id, full_name, current_stage, interview_date, job_id, assigned_interviewers').in('id', candidateIds)
+        : { data: [] as any[] }
 
       const jobIds = [...new Set((candidates ?? []).map((c: any) => c.job_id).filter(Boolean))]
-      const { data: jobs } = jobIds.length
-        ? await supabase.from('jobs').select('id, title').in('id', jobIds)
-        : { data: [] as any[] }
+      const assignedIds = [...new Set((candidates ?? []).flatMap((c: any) => c.assigned_interviewers ?? []))]
+      const allUserIds = [...new Set([...interviewerIds, ...assignedIds])]
+
+      const [{ data: jobs }, { data: interviewers }] = await Promise.all([
+        jobIds.length
+          ? supabase.from('jobs').select('id, title').in('id', jobIds)
+          : { data: [] as any[] },
+        allUserIds.length
+          ? supabase.from('users').select('id, full_name').in('id', allUserIds)
+          : { data: [] as any[] },
+      ])
 
       const candidateMap = Object.fromEntries((candidates ?? []).map((c: any) => [c.id, c]))
       const interviewerMap = Object.fromEntries((interviewers ?? []).map((u: any) => [u.id, u.full_name]))
@@ -245,6 +249,7 @@ export function InterviewsPage() {
           candidateInterviewDate: c.interview_date ?? null,
           jobTitle: jobMap[c.job_id] ?? '—',
           interviewerName: interviewerMap[f.interviewer_id] ?? '—',
+          panelNames: ((c.assigned_interviewers ?? []) as string[]).map((uid: string) => interviewerMap[uid]).filter(Boolean) as string[],
         }
       }
 
@@ -674,7 +679,7 @@ export function InterviewsPage() {
                       <th className="text-left px-4 py-3 font-medium">Reviewed At Stage</th>
                       <th className="text-left px-4 py-3 font-medium">Reviewer</th>
                       {adminTab === 'scheduled' && (
-                        <th className="text-left px-4 py-3 font-medium">Interview Date</th>
+                        <th className="text-left px-4 py-3 font-medium">Panel</th>
                       )}
                       <th className="text-left px-4 py-3 font-medium">Decision Date</th>
                       <th className="px-4 py-3 font-medium text-right">Action</th>
@@ -700,8 +705,12 @@ export function InterviewsPage() {
                         </td>
                         <td className="px-4 py-3 text-xs text-gray-600">{r.interviewerName}</td>
                         {adminTab === 'scheduled' && (
-                          <td className="px-4 py-3 text-xs text-blue-600 whitespace-nowrap font-medium">
-                            {r.candidateInterviewDate ? formatDateTime(r.candidateInterviewDate) : '—'}
+                          <td className="px-4 py-3 text-xs text-gray-600">
+                            {r.panelNames?.length > 0
+                              ? <div className="flex flex-wrap gap-1">{r.panelNames.map((n: string) => (
+                                  <span key={n} className="bg-indigo-50 text-indigo-700 border border-indigo-100 px-1.5 py-0.5 rounded-md text-xs">{n}</span>
+                                ))}</div>
+                              : <span className="text-gray-300">—</span>}
                           </td>
                         )}
                         <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">

@@ -378,6 +378,17 @@ export function CandidatesPage() {
   const { stageConfigs } = useStagesHook()
   const STAGES: string[] = stageConfigs.map(s => s.name)
 
+  const { data: caSettings } = useQuery({
+    queryKey: ['app-settings', 'cost_approval'],
+    queryFn: async () => {
+      const { data } = await supabase.from('app_settings').select('value').eq('key', 'cost_approval').maybeSingle()
+      if (!data?.value) return { stageName: '' as string }
+      try { return { stageName: (JSON.parse(data.value).stage_name ?? '') as string } } catch { return { stageName: '' as string } }
+    },
+    staleTime: 60_000,
+  })
+  const caStageForCleanup = caSettings?.stageName ?? ''
+
   const [serverFilters, setServerFilters] = useState<CandidateFilters>(() => ({
     job_id: searchParams.get('job') || undefined,
   }))
@@ -500,7 +511,19 @@ const displayed = useMemo(() => {
 
   const updateField = useMutation({
     mutationFn: async({id,field,value}:{id:string;field:string;value:any})=>{
-      const{error}=await supabase.from('candidates').update({[field]:value}).eq('id',id)
+      const updates: Record<string,any> = { [field]: value }
+      if (field === 'current_stage' && value && caStageForCleanup) {
+        const newIdx = STAGES.indexOf(value)
+        const caIdx = STAGES.indexOf(caStageForCleanup)
+        if (caIdx >= 0 && newIdx < caIdx) {
+          const { data: c } = await supabase.from('candidates').select('interview_notes').eq('id', id).maybeSingle()
+          const notes: Record<string,any> = (c as any)?.interview_notes ?? {}
+          const { cost_approval: _ca, cost_approval_comments: _cac, ...cleaned } = notes
+          updates.cost_approval_decision = null
+          updates.interview_notes = cleaned
+        }
+      }
+      const{error}=await supabase.from('candidates').update(updates).eq('id',id)
       if(error){console.error('[upd]',error);throw error}
     },
     onSuccess:()=>qc.invalidateQueries({queryKey:['candidates']}),

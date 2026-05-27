@@ -541,12 +541,8 @@ export function CandidateProfilePage() {
   if (isLoading) return <div className="flex justify-center py-24"><Loader2 className="w-6 h-6 animate-spin text-blue-500"/></div>
   if (!candidate) return <p className="text-gray-500 py-8 text-center">Candidate not found.</p>
 
-  // Stage names — always from hook (hook returns defaults if DB empty)
-  const stages: string[] = (() => {
-    const jobStages = (candidate as any)?.job?.pipeline_stages
-    if (jobStages?.length) return jobStages
-    return stageConfigsRaw.map((s: any) => s.name)
-  })()
+  // Stage names — always from settings hook (same source as CandidatesPage)
+  const stages: string[] = stageConfigsRaw.map((s: any) => s.name)
 
   // Notes sections — all pipeline stages that have notes capability
   // Used for the interview notes panel (left column) and for cost approval history
@@ -672,6 +668,27 @@ export function CandidateProfilePage() {
   const feedbackSubmitted = !!myFeedback?.submitted_at
   const feedbackDecision = (myFeedback as any)?.recommendation as 'yes' | 'no' | null ?? null
 
+  // Stage change: if new stage is before cost approval stage, also clear CA data
+  const handleStageChange = async (newStage: string) => {
+    setStageOpen(false)
+    const newIdx = stages.indexOf(newStage)
+    if (costApprovalPipelineIdx >= 0 && newIdx < costApprovalPipelineIdx) {
+      const existing = (candidate as any)?.interview_notes ?? {}
+      const { cost_approval: _ca, cost_approval_comments: _cac, ...cleanedNotes } = existing as Record<string, any>
+      const { error } = await supabase.from('candidates').update({
+        current_stage: newStage,
+        cost_approval_decision: null,
+        interview_notes: cleanedNotes,
+      }).eq('id', candidate.id)
+      if (error) { console.error('[stage+ca clear]', error); return }
+      qc.invalidateQueries({ queryKey: ['candidate', id] })
+      qc.invalidateQueries({ queryKey: ['candidates'] })
+      qc.invalidateQueries({ queryKey: ['widget'] })
+    } else {
+      updateStage.mutate({ id: candidate.id, stage: newStage })
+    }
+  }
+
   // Google Drive preview: convert share URL to embedded preview
   const drivePreviewUrl = candidate.resume_url
     ? candidate.resume_url.includes('drive.google.com')
@@ -736,7 +753,7 @@ export function CandidateProfilePage() {
                     <div className="fixed inset-0 z-40" onClick={() => setStageOpen(false)}/>
                     <div className="absolute right-0 top-full mt-1 bg-white border border-gray-200 rounded-xl shadow-xl z-50 py-1 w-52 max-h-80 overflow-y-auto">
                       {stages.map((s: string) => (
-                        <button key={s} onClick={() => { updateStage.mutate({ id: candidate.id, stage: s }); setStageOpen(false) }}
+                        <button key={s} onClick={() => handleStageChange(s)}
                           className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50 flex items-center justify-between gap-2">
                           <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${stageColor(s)}`}>{s}</span>
                           {s === candidate.current_stage && <Check className="w-3.5 h-3.5 text-slate-600"/>}
