@@ -78,9 +78,11 @@ export function CandidateProfilePage() {
   const [draftNotes, setDraftNotes] = useState<Record<string, string>>({})
   const [savingNote, setSavingNote] = useState<string | null>(null)
   const [feedbackErr, setFeedbackErr] = useState<string | null>(null)
-  // Note editing: key = `${sectionKey}:${entryIndex}`, value = draft text
   const [editingNote, setEditingNote] = useState<{ section: string; index: number; text: string } | null>(null)
   const [savingEditNote, setSavingEditNote] = useState(false)
+  const [actionError, setActionError] = useState<string | null>(null)
+  // Stage decision
+  const [stageDecisionSaving, setStageDecisionSaving] = useState(false)
   // Cost approval state
   const [caDecision, setCaDecision]   = useState<'go_ahead' | 'rework_required' | ''>('')
   const [caNotes, setCaNotes]         = useState('')
@@ -308,18 +310,97 @@ export function CandidateProfilePage() {
     const draft = draftNotes[sectionKey]?.trim()
     if (!draft) return
     setSavingNote(sectionKey)
+    setActionError(null)
     const existing = (candidate as any)?.interview_notes ?? {}
     const entries: NoteEntry[] = existing[sectionKey] ?? []
     const newEntry: NoteEntry = { text: draft, author: user!.full_name, authorId: user!.id, timestamp: new Date().toISOString() }
-    const newNotes = { ...existing, [sectionKey]: [...entries, newEntry] }
-    const { error } = await supabase.from('candidates').update({ interview_notes: newNotes }).eq('id', id!)
-    if (error) { console.error('[saveNote]', error) }
-    else {
+    const updated = { ...existing, [sectionKey]: [...entries, newEntry] }
+
+    try {
+      // Try RPC first (works for all roles including interviewers)
+      const { data: newNotes, error: rpcError } = await supabase.rpc('submit_interview_note', {
+        p_candidate_id: id!,
+        p_section_key: sectionKey,
+        p_note_text: draft,
+      })
+      if (!rpcError) {
+        const cached = qc.getQueryData<any>(['candidate', id])
+        if (cached) qc.setQueryData(['candidate', id], { ...cached, interview_notes: newNotes })
+        setDraftNotes(p => ({ ...p, [sectionKey]: '' }))
+        setSavingNote(null)
+        return
+      }
+      // RPC not deployed — fall back to direct update
+      if ((rpcError as any).code !== 'PGRST202' && !rpcError.message?.includes('Could not find')) {
+        throw rpcError
+      }
+    } catch (err: any) {
+      setActionError(err?.message ?? 'Failed to save note')
+      setSavingNote(null)
+      return
+    }
+
+    // Direct update fallback (only works for admin/HR/super_admin)
+    try {
+      const { data: rows, error: updateErr } = await supabase.from('candidates')
+        .update({ interview_notes: updated }).eq('id', id!).select('id')
+      if (updateErr) throw updateErr
+      if (!rows?.length) throw new Error('Run supabase-ca-migration.sql in Supabase SQL Editor to enable this for interviewers')
       const cached = qc.getQueryData<any>(['candidate', id])
-      if (cached) qc.setQueryData(['candidate', id], { ...cached, interview_notes: newNotes })
+      if (cached) qc.setQueryData(['candidate', id], { ...cached, interview_notes: updated })
       setDraftNotes(p => ({ ...p, [sectionKey]: '' }))
+    } catch (err: any) {
+      setActionError(err?.message ?? 'Failed to save note')
     }
     setSavingNote(null)
+  }
+
+  const applyStageDecision = async (action: 'next_round' | 'reject') => {
+    setStageDecisionSaving(true)
+    setActionError(null)
+    let newStage = (candidate as any).current_stage
+    let newStatus = (candidate as any).status ?? 'active'
+    if (action === 'next_round') {
+      const idx = stages.indexOf((candidate as any).current_stage)
+      newStage = idx >= 0 && idx < stages.length - 1 ? stages[idx + 1] : newStage
+    } else {
+      newStatus = 'rejected'
+    }
+
+    try {
+      const { error: rpcError } = await supabase.rpc('set_candidate_stage', {
+        p_candidate_id: id!,
+        p_new_stage: newStage,
+        p_new_status: newStatus,
+      })
+      if (!rpcError) {
+        qc.invalidateQueries({ queryKey: ['candidate', id] })
+        qc.invalidateQueries({ queryKey: ['candidates'] })
+        setStageDecisionSaving(false)
+        return
+      }
+      if ((rpcError as any).code !== 'PGRST202' && !rpcError.message?.includes('Could not find')) {
+        throw rpcError
+      }
+    } catch (err: any) {
+      setActionError(err?.message ?? 'Failed to update stage')
+      setStageDecisionSaving(false)
+      return
+    }
+
+    // Direct update fallback
+    try {
+      const { data: rows, error } = await supabase.from('candidates')
+        .update({ current_stage: newStage, status: newStatus, updated_at: new Date().toISOString() })
+        .eq('id', id!).select('id')
+      if (error) throw error
+      if (!rows?.length) throw new Error('Run supabase-ca-migration.sql in Supabase SQL Editor to enable this for interviewers')
+      qc.invalidateQueries({ queryKey: ['candidate', id] })
+      qc.invalidateQueries({ queryKey: ['candidates'] })
+    } catch (err: any) {
+      setActionError(err?.message ?? 'Failed to update stage')
+    }
+    setStageDecisionSaving(false)
   }
 
   // Edit an existing note — only the original author can edit
@@ -962,6 +1043,32 @@ export function CandidateProfilePage() {
               </div>
             )}
           </div>
+
+          {/* Interview Schedule — shown for interviewers (hidden in left sidebar for them) */}
+          {isInterviewer && (
+            <div className={`rounded-xl border px-4 py-3 flex items-center gap-3 ${
+              (candidate as any).interview_date
+                ? 'border-blue-100 bg-blue-50/60'
+                : 'border-gray-100 bg-gray-50/40'
+            }`}>
+              <div className="w-8 h-8 rounded-lg bg-blue-100 flex items-center justify-center flex-shrink-0">
+                <ClipboardList className="w-4 h-4 text-blue-600"/>
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-0.5">Your Interview</p>
+                {(candidate as any).interview_date ? (
+                  <p className="text-sm font-medium text-gray-900">{formatDateTime((candidate as any).interview_date)}</p>
+                ) : (
+                  <p className="text-sm text-gray-400 italic">Not scheduled yet</p>
+                )}
+              </div>
+              <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${
+                feedbackSubmitted ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'
+              }`}>
+                {feedbackSubmitted ? 'Feedback Submitted' : 'Pending Feedback'}
+              </span>
+            </div>
+          )}
 
           {/* General Notes — always visible (except agency) */}
           {!isAgency && (

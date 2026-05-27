@@ -120,3 +120,72 @@ END;
 $$;
 
 GRANT EXECUTE ON FUNCTION public.submit_ca_comment(uuid, text) TO authenticated;
+
+-- 3. RPC: Save an interview note for any stage (bypasses RLS for assigned interviewers)
+CREATE OR REPLACE FUNCTION public.submit_interview_note(
+  p_candidate_id  uuid,
+  p_section_key   text,
+  p_note_text     text
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_existing  jsonb;
+  v_entry     jsonb;
+  v_new_notes jsonb;
+BEGIN
+  -- Any authenticated user who can reach the candidate can save a note
+  SELECT COALESCE(interview_notes, '{}'::jsonb) INTO v_existing
+  FROM public.candidates WHERE id = p_candidate_id;
+
+  v_entry := jsonb_build_object(
+    'text',      p_note_text,
+    'author',    (SELECT full_name FROM public.users WHERE id = auth.uid()),
+    'authorId',  auth.uid()::text,
+    'timestamp', to_char(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+  );
+
+  v_new_notes := v_existing || jsonb_build_object(
+    p_section_key,
+    COALESCE(v_existing->p_section_key, '[]'::jsonb) || jsonb_build_array(v_entry)
+  );
+
+  UPDATE public.candidates
+  SET interview_notes = v_new_notes,
+      updated_at = NOW()
+  WHERE id = p_candidate_id;
+
+  RETURN v_new_notes;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.submit_interview_note(uuid, text, text) TO authenticated;
+
+-- 4. RPC: Advance or reject a candidate stage (bypasses RLS for assigned interviewers)
+DROP FUNCTION IF EXISTS public.set_candidate_stage(uuid, text, text);
+CREATE FUNCTION public.set_candidate_stage(
+  p_candidate_id  uuid,
+  p_new_stage     text,
+  p_new_status    text DEFAULT 'active'
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_status public.candidate_status;
+BEGIN
+  v_status := p_new_status::public.candidate_status;
+  UPDATE public.candidates
+  SET current_stage = p_new_stage,
+      status        = v_status,
+      updated_at    = NOW()
+  WHERE id = p_candidate_id;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.set_candidate_stage(uuid, text, text) TO authenticated;
