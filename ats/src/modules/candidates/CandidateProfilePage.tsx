@@ -490,9 +490,10 @@ export function CandidateProfilePage() {
       .map(stageKeyOf)
   )
 
-  // Declare CA context variables early so visibleNotesSections can use them
+  // Declare CA context variables early so visibleNotesSections and custom fields filter can use them
   const costApprovalPipelineIdxEarly = stages.findIndex(s => stageKeyOf(s) === stageKeyOf(costApprovalStageName))
   const hasReachedOrPassedCAEarly = costApprovalPipelineIdxEarly >= 0 && currentStageIdx >= costApprovalPipelineIdxEarly
+  const isInCostApprovalEarly = stageKeyOf(candidate.current_stage) === stageKeyOf(costApprovalStageName)
   const isCAPanel = costApprovalPanelIds.includes(user?.id ?? '')
 
   const visibleNotesSections = (() => {
@@ -533,7 +534,7 @@ export function CandidateProfilePage() {
     .map(s => ({ key: stageKeyOf(s), label: s }))
 
   // Cost approval context
-  const isInCostApproval = stageKeyOf(candidate.current_stage) === stageKeyOf(costApprovalStageName)
+  const isInCostApproval = isInCostApprovalEarly
   // isCAPanel, costApprovalPipelineIdxEarly, hasReachedOrPassedCAEarly declared above for visibleNotesSections
   const hasCostApprovalRecord = (interviewNotes['cost_approval'] ?? []).length > 0 || !!(candidate as any).cost_approval_decision
   const costApprovalPipelineIdx = costApprovalPipelineIdxEarly
@@ -846,7 +847,7 @@ export function CandidateProfilePage() {
           )}
           {(() => {
             const visibleFields = (customFields as any[]).filter((f: any) =>
-              !isInterviewer || f.show_to_interviewer !== false || (isCAPanel && hasReachedOrPassedCAEarly)
+              !isInterviewer || f.show_to_interviewer !== false || (isCAPanel && (isInCostApprovalEarly || hasReachedOrPassedCAEarly))
             )
             if (visibleFields.length === 0) return null
             const customData = (candidate as any).custom_data ?? {}
