@@ -80,6 +80,7 @@ export function CandidateProfilePage() {
   const [feedbackErr, setFeedbackErr] = useState<string | null>(null)
   const [editingNote, setEditingNote] = useState<{ section: string; index: number; text: string } | null>(null)
   const [savingEditNote, setSavingEditNote] = useState(false)
+  const [actionError, setActionError] = useState<string | null>(null)
   // Stage decision
   const [stageDecisionSaving, setStageDecisionSaving] = useState(false)
   // Cost approval state
@@ -292,63 +293,95 @@ export function CandidateProfilePage() {
     const draft = draftNotes[sectionKey]?.trim()
     if (!draft) return
     setSavingNote(sectionKey)
+    setActionError(null)
+    const existing = (candidate as any)?.interview_notes ?? {}
+    const entries: NoteEntry[] = existing[sectionKey] ?? []
+    const newEntry: NoteEntry = { text: draft, author: user!.full_name, authorId: user!.id, timestamp: new Date().toISOString() }
+    const updated = { ...existing, [sectionKey]: [...entries, newEntry] }
+
     try {
+      // Try RPC first (works for all roles including interviewers)
       const { data: newNotes, error: rpcError } = await supabase.rpc('submit_interview_note', {
         p_candidate_id: id!,
         p_section_key: sectionKey,
         p_note_text: draft,
       })
-      if (rpcError) {
-        if ((rpcError as any).code === 'PGRST202' || rpcError.message?.includes('Could not find')) {
-          // RPC not deployed yet — fall back to direct update (admin/HR only)
-          const existing = (candidate as any)?.interview_notes ?? {}
-          const entries: NoteEntry[] = existing[sectionKey] ?? []
-          const newEntry: NoteEntry = { text: draft, author: user!.full_name, authorId: user!.id, timestamp: new Date().toISOString() }
-          const updated = { ...existing, [sectionKey]: [...entries, newEntry] }
-          const { data: rows, error: updateErr } = await supabase.from('candidates').update({ interview_notes: updated }).eq('id', id!).select('id')
-          if (updateErr) throw updateErr
-          if (!rows?.length) throw new Error('Permission denied — note not saved')
-          const cached = qc.getQueryData<any>(['candidate', id])
-          if (cached) qc.setQueryData(['candidate', id], { ...cached, interview_notes: updated })
-        } else { throw rpcError }
-      } else {
+      if (!rpcError) {
         const cached = qc.getQueryData<any>(['candidate', id])
         if (cached) qc.setQueryData(['candidate', id], { ...cached, interview_notes: newNotes })
+        setDraftNotes(p => ({ ...p, [sectionKey]: '' }))
+        setSavingNote(null)
+        return
       }
+      // RPC not deployed — fall back to direct update
+      if ((rpcError as any).code !== 'PGRST202' && !rpcError.message?.includes('Could not find')) {
+        throw rpcError
+      }
+    } catch (err: any) {
+      setActionError(err?.message ?? 'Failed to save note')
+      setSavingNote(null)
+      return
+    }
+
+    // Direct update fallback (only works for admin/HR/super_admin)
+    try {
+      const { data: rows, error: updateErr } = await supabase.from('candidates')
+        .update({ interview_notes: updated }).eq('id', id!).select('id')
+      if (updateErr) throw updateErr
+      if (!rows?.length) throw new Error('Run supabase-ca-migration.sql in Supabase SQL Editor to enable this for interviewers')
+      const cached = qc.getQueryData<any>(['candidate', id])
+      if (cached) qc.setQueryData(['candidate', id], { ...cached, interview_notes: updated })
       setDraftNotes(p => ({ ...p, [sectionKey]: '' }))
-    } catch (err) {
-      console.error('[saveNote]', err)
+    } catch (err: any) {
+      setActionError(err?.message ?? 'Failed to save note')
     }
     setSavingNote(null)
   }
 
   const applyStageDecision = async (action: 'next_round' | 'reject') => {
     setStageDecisionSaving(true)
+    setActionError(null)
+    let newStage = (candidate as any).current_stage
+    let newStatus = (candidate as any).status ?? 'active'
+    if (action === 'next_round') {
+      const idx = stages.indexOf((candidate as any).current_stage)
+      newStage = idx >= 0 && idx < stages.length - 1 ? stages[idx + 1] : newStage
+    } else {
+      newStatus = 'rejected'
+    }
+
     try {
-      let newStage = (candidate as any).current_stage
-      let newStatus = (candidate as any).status ?? 'active'
-      if (action === 'next_round') {
-        const idx = stages.indexOf((candidate as any).current_stage)
-        newStage = idx >= 0 && idx < stages.length - 1 ? stages[idx + 1] : newStage
-      } else {
-        newStatus = 'rejected'
-      }
-      const { data: savedNotes, error: rpcError } = await supabase.rpc('set_candidate_stage', {
+      const { error: rpcError } = await supabase.rpc('set_candidate_stage', {
         p_candidate_id: id!,
         p_new_stage: newStage,
         p_new_status: newStatus,
       })
-      if (rpcError) {
-        if ((rpcError as any).code === 'PGRST202' || rpcError.message?.includes('Could not find')) {
-          // Fallback for admin/HR (direct update allowed by RLS)
-          const { error } = await supabase.from('candidates').update({ current_stage: newStage, status: newStatus, updated_at: new Date().toISOString() }).eq('id', id!)
-          if (error) throw error
-        } else { throw rpcError }
+      if (!rpcError) {
+        qc.invalidateQueries({ queryKey: ['candidate', id] })
+        qc.invalidateQueries({ queryKey: ['candidates'] })
+        setStageDecisionSaving(false)
+        return
       }
+      if ((rpcError as any).code !== 'PGRST202' && !rpcError.message?.includes('Could not find')) {
+        throw rpcError
+      }
+    } catch (err: any) {
+      setActionError(err?.message ?? 'Failed to update stage')
+      setStageDecisionSaving(false)
+      return
+    }
+
+    // Direct update fallback
+    try {
+      const { data: rows, error } = await supabase.from('candidates')
+        .update({ current_stage: newStage, status: newStatus, updated_at: new Date().toISOString() })
+        .eq('id', id!).select('id')
+      if (error) throw error
+      if (!rows?.length) throw new Error('Run supabase-ca-migration.sql in Supabase SQL Editor to enable this for interviewers')
       qc.invalidateQueries({ queryKey: ['candidate', id] })
       qc.invalidateQueries({ queryKey: ['candidates'] })
-    } catch (err) {
-      console.error('[applyStageDecision]', err)
+    } catch (err: any) {
+      setActionError(err?.message ?? 'Failed to update stage')
     }
     setStageDecisionSaving(false)
   }
@@ -1396,8 +1429,13 @@ export function CandidateProfilePage() {
           {canAddNotes && !isAgency && (
             <div className="rounded-xl border border-gray-200 bg-gray-50/60 px-5 py-4 space-y-3">
               <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Decision</p>
+              {actionError && (
+                <div className="bg-red-50 border border-red-200 rounded-lg px-3 py-2 flex items-start gap-2">
+                  <XCircle className="w-4 h-4 text-red-500 flex-shrink-0 mt-0.5"/>
+                  <p className="text-xs text-red-700">{actionError}</p>
+                </div>
+              )}
               <div className="flex flex-wrap items-center gap-2">
-                {/* Select for next round */}
                 {(() => {
                   const idx = stages.indexOf((candidate as any).current_stage)
                   const nextStage = idx >= 0 && idx < stages.length - 1 ? stages[idx + 1] : null
@@ -1411,7 +1449,6 @@ export function CandidateProfilePage() {
                           className="flex items-center gap-1.5 px-3.5 py-2 bg-green-600 hover:bg-green-700 disabled:bg-gray-300 text-white text-sm font-medium rounded-lg transition-colors">
                           {stageDecisionSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin"/> : <ChevronRight className="w-3.5 h-3.5"/>}
                           Select for Next Round
-                          <span className="text-green-200 text-xs ml-0.5">→ {nextStage}</span>
                         </button>
                       )}
                       {isRejected ? (
