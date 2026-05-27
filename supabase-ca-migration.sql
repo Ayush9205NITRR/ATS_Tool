@@ -178,7 +178,7 @@ AS $$
 BEGIN
   UPDATE public.candidates
   SET current_stage = p_new_stage,
-      status        = p_new_status,
+      status        = p_new_status::candidate_status,
       updated_at    = NOW()
   WHERE id = p_candidate_id;
 END;
