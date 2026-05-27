@@ -5,13 +5,14 @@
 import { useMemo, useState, useRef, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Loader2, CheckCircle, Clock, Briefcase, Calendar, X, ChevronDown } from 'lucide-react'
+import { Loader2, CheckCircle, Clock, Briefcase, Calendar, X, ChevronDown, UserCheck, UserX, ArrowRight } from 'lucide-react'
 import { supabase } from '../../lib/supabaseClient'
 import { useAuthStore } from '../auth/authStore'
 import { formatDateTime } from '../../shared/utils/helpers'
 import { PageHeader } from '../../shared/components/PageHeader'
 
 type FeedbackFilter = 'pending' | 'submitted'
+type AdminTab = 'pending' | 'rejected'
 
 // ─── Airtable-style date filter ──────────────────────────────
 type DateOp =
@@ -83,7 +84,8 @@ export function InterviewsPage() {
   const navigate = useNavigate()
   const qc = useQueryClient()
   const isInterviewer = hasRole(['interviewer'])
-  const [filter, setFilter] = useState<FeedbackFilter>('pending')
+  const [filter, setFilter]     = useState<FeedbackFilter>('pending')
+  const [adminTab, setAdminTab] = useState<AdminTab>('pending')
 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [jobFilter, setJobFilter]     = useState<string>('')
@@ -207,6 +209,59 @@ export function InterviewsPage() {
     },
   })
 
+  // Admin / HR view: candidates reviewed by interviewers
+  const { data: adminData, isLoading: adminLoading } = useQuery({
+    queryKey: ['admin-interview-reviews'],
+    queryFn: async () => {
+      const { data: feedbacks, error } = await supabase
+        .from('interview_feedback')
+        .select('id, candidate_id, interviewer_id, stage, recommendation, submitted_at')
+        .in('recommendation', ['yes', 'no'])
+        .order('submitted_at', { ascending: false })
+      if (error) throw error
+
+      const candidateIds = [...new Set((feedbacks ?? []).map((f: any) => f.candidate_id))]
+      const interviewerIds = [...new Set((feedbacks ?? []).map((f: any) => f.interviewer_id))]
+
+      const [{ data: candidates }, { data: interviewers }] = await Promise.all([
+        candidateIds.length
+          ? supabase.from('candidates').select('id, full_name, current_stage, job_id').in('id', candidateIds)
+          : { data: [] as any[] },
+        interviewerIds.length
+          ? supabase.from('users').select('id, full_name').in('id', interviewerIds)
+          : { data: [] as any[] },
+      ])
+
+      const jobIds = [...new Set((candidates ?? []).map((c: any) => c.job_id).filter(Boolean))]
+      const { data: jobs } = jobIds.length
+        ? await supabase.from('jobs').select('id, title').in('id', jobIds)
+        : { data: [] as any[] }
+
+      const candidateMap = Object.fromEntries((candidates ?? []).map((c: any) => [c.id, c]))
+      const interviewerMap = Object.fromEntries((interviewers ?? []).map((u: any) => [u.id, u.full_name]))
+      const jobMap = Object.fromEntries((jobs ?? []).map((j: any) => [j.id, j.title]))
+
+      const enrich = (f: any) => {
+        const c = candidateMap[f.candidate_id] ?? {}
+        return {
+          ...f,
+          candidateName: c.full_name ?? '—',
+          candidateStage: c.current_stage ?? f.stage,
+          candidateId: f.candidate_id,
+          jobTitle: jobMap[c.job_id] ?? '—',
+          interviewerName: interviewerMap[f.interviewer_id] ?? '—',
+        }
+      }
+
+      return {
+        pending:  (feedbacks ?? []).filter((f: any) => f.recommendation === 'yes').map(enrich),
+        rejected: (feedbacks ?? []).filter((f: any) => f.recommendation === 'no').map(enrich),
+      }
+    },
+    enabled: !isInterviewer && !!user,
+    staleTime: 30_000,
+  })
+
   const rawList = filter === 'pending' ? (data?.pending ?? []) : (data?.submitted ?? [])
 
   // Distinct jobs across ALL assigned candidates (so the dropdown stays stable
@@ -253,10 +308,10 @@ export function InterviewsPage() {
   return (
     <div>
       <PageHeader
-        title={isInterviewer ? 'My Interviews' : 'Reviews'}
+        title={isInterviewer ? 'My Interviews' : 'Interview Reviews'}
         subtitle={isInterviewer
           ? `${data?.all.length ?? 0} assigned · ${pendingCount} pending feedback`
-          : `${pendingCount} pending feedback · ${submittedCount} submitted`
+          : `${adminData?.pending.length ?? 0} pending schedule · ${adminData?.rejected.length ?? 0} rejected`
         }
       />
 
@@ -572,6 +627,124 @@ export function InterviewsPage() {
       )}
 
       </>}
+
+      {/* Admin / HR Manager view */}
+      {!isInterviewer && (
+        <div>
+          <div className="flex items-center gap-1 bg-gray-100 p-1 rounded-xl mb-4 w-fit">
+            <button
+              onClick={() => setAdminTab('pending')}
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                adminTab === 'pending' ? 'bg-white shadow-sm text-gray-900' : 'text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              <UserCheck className="w-3.5 h-3.5"/>
+              Interviews Pending
+              {(adminData?.pending.length ?? 0) > 0 && (
+                <span className={`text-xs px-1.5 py-0.5 rounded-full font-semibold ${
+                  adminTab === 'pending' ? 'bg-green-100 text-green-700' : 'bg-gray-200 text-gray-500'
+                }`}>{adminData!.pending.length}</span>
+              )}
+            </button>
+            <button
+              onClick={() => setAdminTab('rejected')}
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                adminTab === 'rejected' ? 'bg-white shadow-sm text-gray-900' : 'text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              <UserX className="w-3.5 h-3.5"/>
+              Interviews Rejected
+              {(adminData?.rejected.length ?? 0) > 0 && (
+                <span className={`text-xs px-1.5 py-0.5 rounded-full font-semibold ${
+                  adminTab === 'rejected' ? 'bg-red-100 text-red-700' : 'bg-gray-200 text-gray-500'
+                }`}>{adminData!.rejected.length}</span>
+              )}
+            </button>
+          </div>
+
+          {adminLoading ? (
+            <div className="flex justify-center py-16">
+              <Loader2 className="w-6 h-6 animate-spin text-blue-500"/>
+            </div>
+          ) : (() => {
+            const rows = adminTab === 'pending' ? (adminData?.pending ?? []) : (adminData?.rejected ?? [])
+            if (rows.length === 0) {
+              return (
+                <div className="bg-white rounded-xl border border-gray-200 flex flex-col items-center justify-center py-16 text-gray-400">
+                  {adminTab === 'pending' ? (
+                    <>
+                      <UserCheck className="w-8 h-8 mb-2 text-gray-300"/>
+                      <p className="text-sm font-medium text-gray-500">No pending interviews</p>
+                      <p className="text-xs mt-1">Candidates selected for next round will appear here.</p>
+                    </>
+                  ) : (
+                    <>
+                      <UserX className="w-8 h-8 mb-2 text-gray-300"/>
+                      <p className="text-sm font-medium text-gray-500">No rejected candidates</p>
+                      <p className="text-xs mt-1">Candidates rejected by interviewers will appear here.</p>
+                    </>
+                  )}
+                </div>
+              )
+            }
+            return (
+              <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-gray-100 bg-gray-50 text-xs text-gray-500 uppercase tracking-wide">
+                      <th className="text-left px-4 py-3 font-medium">Candidate</th>
+                      <th className="text-left px-4 py-3 font-medium">Job</th>
+                      <th className="text-left px-4 py-3 font-medium">Reviewed At Stage</th>
+                      <th className="text-left px-4 py-3 font-medium">Reviewer</th>
+                      <th className="text-left px-4 py-3 font-medium">Decision Date</th>
+                      <th className="px-4 py-3 font-medium text-right">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-50">
+                    {rows.map((r: any) => (
+                      <tr key={r.id} className="hover:bg-gray-50/40 transition-colors">
+                        <td className="px-4 py-3">
+                          <button onClick={() => navigate(`/candidates/${r.candidateId}`)}
+                            className="font-medium text-blue-600 hover:underline text-left text-sm">
+                            {r.candidateName}
+                          </button>
+                          {adminTab === 'pending' && (
+                            <p className="text-xs text-gray-400 mt-0.5">Current: {r.candidateStage}</p>
+                          )}
+                        </td>
+                        <td className="px-4 py-3 text-xs text-gray-600">{r.jobTitle}</td>
+                        <td className="px-4 py-3">
+                          <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${STAGE_COLOURS[r.stage] ?? 'bg-gray-100 text-gray-600'}`}>
+                            {r.stage}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3 text-xs text-gray-600">{r.interviewerName}</td>
+                        <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">
+                          {r.submitted_at ? formatDateTime(r.submitted_at) : '—'}
+                        </td>
+                        <td className="px-4 py-3 text-right">
+                          <button onClick={() => navigate(`/candidates/${r.candidateId}`)}
+                            className="flex items-center gap-1 text-xs px-3 py-1.5 border border-gray-200 hover:border-blue-300 hover:text-blue-600 text-gray-600 rounded-lg transition-colors ml-auto">
+                            View Profile <ArrowRight className="w-3 h-3"/>
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <div className="px-4 py-2 bg-gray-50 border-t border-gray-100">
+                  <p className="text-xs text-gray-400">
+                    {adminTab === 'pending'
+                      ? `${rows.length} candidate${rows.length !== 1 ? 's' : ''} ready to schedule for next round`
+                      : `${rows.length} candidate${rows.length !== 1 ? 's' : ''} rejected by interviewers`
+                    }
+                  </p>
+                </div>
+              </div>
+            )
+          })()}
+        </div>
+      )}
     </div>
   )
 }

@@ -5,7 +5,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { useState, useCallback, useEffect, useRef } from 'react'
 import {
   ArrowLeft, ExternalLink, Phone, Mail, Linkedin, FileText,
-  Loader2, Send, Pencil, Check, X, ChevronDown, CheckCircle,
+  Loader2, Send, Pencil, Check, X, ChevronDown, CheckCircle, XCircle,
   ClipboardList, ShieldCheck, BookOpen
 } from 'lucide-react'
 import { useCandidate, useUpdateStage } from './useCandidates'
@@ -183,7 +183,7 @@ export function CandidateProfilePage() {
       if (!isInterviewer || !user) return null
       const { data, error } = await supabase
         .from('interview_feedback')
-        .select('id, submitted_at')
+        .select('id, submitted_at, recommendation, stage')
         .eq('candidate_id', id!)
         .eq('interviewer_id', user.id)
         .maybeSingle()
@@ -250,12 +250,12 @@ export function CandidateProfilePage() {
     },
   })
 
-  // Submit feedback — simple: just marks that interviewer submitted feedback
-  // Notes are already saved via interview_notes on candidates table
-  const submitFeedback = useMutation({
-    mutationFn: async () => {
+  // Interviewer decision: select for next round (yes) or reject at current stage (no)
+  const makeDecision = useMutation({
+    mutationFn: async ({ decision, currentStage, targetStage }: {
+      decision: 'yes' | 'no'; currentStage: string; targetStage: string
+    }) => {
       setFeedbackErr(null)
-
       const { data: existing } = await supabase
         .from('interview_feedback')
         .select('id')
@@ -265,22 +265,39 @@ export function CandidateProfilePage() {
 
       let error
       if (existing?.id) {
-        const result = await supabase.from('interview_feedback')
-          .update({ submitted_at: new Date().toISOString() })
-          .eq('id', existing.id)
+        const result = await supabase.from('interview_feedback').update({
+          submitted_at: new Date().toISOString(),
+          stage: currentStage,
+          recommendation: decision,
+          overall_score: 3,
+        }).eq('id', existing.id)
         error = result.error
       } else {
-        const result = await supabase.from('interview_feedback')
-          .insert({ candidate_id: id!, interviewer_id: user!.id, submitted_at: new Date().toISOString() })
+        const result = await supabase.from('interview_feedback').insert({
+          candidate_id: id!,
+          interviewer_id: user!.id,
+          submitted_at: new Date().toISOString(),
+          stage: currentStage,
+          recommendation: decision,
+          overall_score: 3,
+        })
         error = result.error
       }
+      if (error) { console.error('[feedback decision]', error); throw error }
 
-      if (error) { console.error('[feedback submit]', error); throw error }
+      const { error: stageErr } = await supabase.from('candidates')
+        .update({ current_stage: targetStage })
+        .eq('id', id!)
+      if (stageErr) { console.error('[stage update]', stageErr); throw stageErr }
     },
     onSuccess: async () => {
       await refetchFeedback()
       qc.invalidateQueries({ queryKey: ['my-feedback', id, user?.id] })
       qc.invalidateQueries({ queryKey: ['my-interviews'] })
+      qc.invalidateQueries({ queryKey: ['candidate', id] })
+      qc.invalidateQueries({ queryKey: ['candidates'] })
+      qc.invalidateQueries({ queryKey: ['widget'] })
+      qc.invalidateQueries({ queryKey: ['interview-feedback-all', id] })
     },
     onError: (err: any) => {
       setFeedbackErr(err?.message ?? 'Failed. Check browser console.')
@@ -582,6 +599,7 @@ export function CandidateProfilePage() {
     : ((candidate as any).hr_owner ? [(candidate as any).hr_owner] : [])
 
   const feedbackSubmitted = !!myFeedback?.submitted_at
+  const feedbackDecision = (myFeedback as any)?.recommendation as 'yes' | 'no' | null ?? null
 
   // Google Drive preview: convert share URL to embedded preview
   const drivePreviewUrl = candidate.resume_url
@@ -1344,31 +1362,61 @@ export function CandidateProfilePage() {
             </>
           )}
 
-          {/* ── Submit Feedback — Interviewers only, simple button at bottom ── */}
+          {/* ── Interview Decision — Interviewers only ── */}
           {isInterviewer && (
-            <div className={`rounded-xl border-2 px-5 py-4 flex items-center gap-4 ${feedbackSubmitted ? 'border-green-200 bg-green-50/40' : 'border-slate-200 bg-slate-50/40'}`}>
-              {feedbackSubmitted ? (
+            <div className={`rounded-xl border-2 px-5 py-4 ${
+              feedbackDecision === 'yes' ? 'border-green-200 bg-green-50/40' :
+              feedbackDecision === 'no'  ? 'border-red-200 bg-red-50/40' :
+              'border-slate-200 bg-slate-50/40'
+            }`}>
+              {feedbackDecision === 'yes' ? (
                 <div className="flex items-center gap-2.5">
                   <CheckCircle className="w-5 h-5 text-green-600 flex-shrink-0"/>
                   <div>
-                    <p className="text-sm font-semibold text-green-800">Feedback Submitted</p>
-                    <p className="text-xs text-green-600 mt-0.5">Your notes have been recorded.</p>
+                    <p className="text-sm font-semibold text-green-800">Selected for Next Round</p>
+                    <p className="text-xs text-green-600 mt-0.5">Candidate has been advanced to the next stage.</p>
+                  </div>
+                </div>
+              ) : feedbackDecision === 'no' ? (
+                <div className="flex items-center gap-2.5">
+                  <XCircle className="w-5 h-5 text-red-500 flex-shrink-0"/>
+                  <div>
+                    <p className="text-sm font-semibold text-red-700">{(myFeedback as any)?.stage ?? candidate.current_stage} Reject</p>
+                    <p className="text-xs text-red-500 mt-0.5">Candidate was rejected at this stage.</p>
                   </div>
                 </div>
               ) : (
                 <>
-                  <div>
-                    <p className="text-sm font-semibold text-gray-800">Ready to submit?</p>
-                    <p className="text-xs text-gray-500 mt-0.5">Add your interview notes above, then submit feedback.</p>
+                  <p className="text-sm font-semibold text-gray-800 mb-1">Your Decision</p>
+                  <p className="text-xs text-gray-500 mb-3">Add interview notes above, then make a decision.</p>
+                  {feedbackErr && <p className="text-xs text-red-600 mb-2">{feedbackErr}</p>}
+                  <div className="flex gap-3">
+                    <button
+                      onClick={() => {
+                        const idx = stages.indexOf(candidate.current_stage)
+                        const targetStage = stages[idx + 1] ?? candidate.current_stage
+                        makeDecision.mutate({ decision: 'yes', currentStage: candidate.current_stage, targetStage })
+                      }}
+                      disabled={makeDecision.isPending}
+                      className="flex-1 px-4 py-2 bg-green-600 hover:bg-green-700 disabled:bg-gray-300 text-white text-sm font-medium rounded-lg transition-colors flex items-center justify-center gap-2"
+                    >
+                      {makeDecision.isPending ? <Loader2 className="w-4 h-4 animate-spin"/> : <CheckCircle className="w-4 h-4"/>}
+                      Select for Next Round
+                    </button>
+                    <button
+                      onClick={() => {
+                        const stageName = candidate.current_stage
+                        const rejectLabel = `${stageName} Reject`
+                        const targetStage = stages.find(s => s.toLowerCase() === rejectLabel.toLowerCase()) ?? rejectLabel
+                        makeDecision.mutate({ decision: 'no', currentStage: stageName, targetStage })
+                      }}
+                      disabled={makeDecision.isPending}
+                      className="flex-1 px-4 py-2 bg-red-600 hover:bg-red-700 disabled:bg-gray-300 text-white text-sm font-medium rounded-lg transition-colors flex items-center justify-center gap-2"
+                    >
+                      {makeDecision.isPending ? <Loader2 className="w-4 h-4 animate-spin"/> : <XCircle className="w-4 h-4"/>}
+                      {candidate.current_stage} Reject
+                    </button>
                   </div>
-                  {feedbackErr && <p className="text-xs text-red-600">{feedbackErr}</p>}
-                  <button onClick={() => submitFeedback.mutate()} disabled={submitFeedback.isPending}
-                    className="flex-shrink-0 px-4 py-2 bg-slate-800 hover:bg-slate-700 disabled:bg-gray-300 text-white text-sm font-medium rounded-lg transition-colors flex items-center gap-2">
-                    {submitFeedback.isPending
-                      ? <><Loader2 className="w-4 h-4 animate-spin"/>Submitting…</>
-                      : <><CheckCircle className="w-4 h-4"/>Submit Feedback</>
-                    }
-                  </button>
                 </>
               )}
             </div>
