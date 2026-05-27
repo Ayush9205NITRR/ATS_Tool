@@ -964,7 +964,7 @@ export function CandidateProfilePage() {
           </div>
           )}
 
-          {/* ── Cost Approval — inline after General Notes ── */}
+          {/* ── Cost Approval — unified section with interview history + decision + discussion ── */}
           {!isAgency && canSeeCostApprovalLatched && (
             <div className={`rounded-xl border overflow-hidden bg-white ${
               hasCAResult ? caResultGoAhead ? 'border-green-200' : 'border-orange-200' : 'border-amber-200'
@@ -987,67 +987,61 @@ export function CandidateProfilePage() {
                 )}
               </div>
 
-              {/* Interview History Table */}
-              <div className="border-b border-gray-100 overflow-x-auto">
-                <table className="w-full">
-                  <thead>
-                    <tr className="bg-gray-50/60">
-                      <th className="text-left px-4 py-2 text-[10px] font-semibold text-gray-400 uppercase tracking-wide">Stage</th>
-                      <th className="text-left px-4 py-2 text-[10px] font-semibold text-gray-400 uppercase tracking-wide">By</th>
-                      <th className="text-left px-4 py-2 text-[10px] font-semibold text-gray-400 uppercase tracking-wide">Date</th>
-                      <th className="text-left px-4 py-2 text-[10px] font-semibold text-gray-400 uppercase tracking-wide">Notes</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-50">
-                    {ALL_NOTES_SECTIONS.filter(s => s.key !== stageKeyOf(costApprovalStageName)).map(({ key, label }) => {
-                      const entries: NoteEntry[] = interviewNotes[key] ?? []
-                      const stageFeedback = interviewFeedbacks.filter((f: any) => stageKeyOf(f.stage ?? '') === key)
-                      const noteAuthors = [...new Set(entries.map(e => e.author))]
-                      const feedbackAuthors = stageFeedback.map((f: any) => {
-                        const u = allUsers.find(u => u.id === f.interviewer_id)
-                        return u?.full_name ?? null
-                      }).filter(Boolean) as string[]
-                      const allAuthors = [...new Set([...noteAuthors, ...feedbackAuthors])]
-                      const firstTs = entries[0]?.timestamp ?? stageFeedback[0]?.submitted_at ?? null
-                      const stageReached = reachedStageKeys.has(key)
-                      return (
-                        <tr key={key} className={stageReached ? '' : 'opacity-30'}>
-                          <td className="px-4 py-2.5 align-top">
-                            <span className={`text-xs font-medium px-2 py-0.5 rounded whitespace-nowrap ${stageReached ? 'bg-indigo-50 text-indigo-700' : 'bg-gray-100 text-gray-500'}`}>
-                              {label}
-                            </span>
-                          </td>
-                          <td className="px-4 py-2.5 align-top">
-                            {allAuthors.length > 0 ? (
-                              <div className="space-y-1">
-                                {allAuthors.map((author, i) => (
-                                  <div key={i} className="flex items-center gap-1">
-                                    <span className="w-4 h-4 rounded-full bg-slate-200 text-slate-600 text-[9px] font-bold flex items-center justify-center flex-shrink-0">
-                                      {author.charAt(0).toUpperCase()}
-                                    </span>
-                                    <span className="text-xs text-gray-600 whitespace-nowrap">{author}</span>
-                                  </div>
-                                ))}
+              {/* Candidate Interview History — full notes per stage */}
+              <div className="border-b border-gray-100">
+                <div className="px-4 py-2.5 bg-gray-50/60 border-b border-gray-100">
+                  <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Interview History</p>
+                </div>
+                <div className="divide-y divide-gray-100">
+                  {ALL_NOTES_SECTIONS.filter(s => s.key !== stageKeyOf(costApprovalStageName)).map(({ key, label }) => {
+                    const entries: NoteEntry[] = interviewNotes[key] ?? []
+                    const stageFeedback = interviewFeedbacks.filter((f: any) => stageKeyOf(f.stage ?? '') === key)
+                    const noteAuthors = [...new Set(entries.map(e => e.author))]
+                    const feedbackAuthors = stageFeedback.map((f: any) => {
+                      const u = allUsers.find(u => u.id === f.interviewer_id)
+                      return u?.full_name ?? null
+                    }).filter(Boolean) as string[]
+                    const allAuthors = [...new Set([...noteAuthors, ...feedbackAuthors])]
+                    const firstTs = entries[0]?.timestamp ?? stageFeedback[0]?.submitted_at ?? null
+                    const stageReached = reachedStageKeys.has(key)
+                    return (
+                      <div key={key} className={`px-4 py-3 ${stageReached ? '' : 'opacity-30'}`}>
+                        <div className="flex items-center gap-2 mb-1.5">
+                          <span className={`text-xs font-medium px-2 py-0.5 rounded whitespace-nowrap ${stageReached ? 'bg-indigo-50 text-indigo-700' : 'bg-gray-100 text-gray-500'}`}>
+                            {label}
+                          </span>
+                          {allAuthors.length > 0 && (
+                            <div className="flex items-center gap-1.5">
+                              {allAuthors.map((author, i) => (
+                                <div key={i} className="flex items-center gap-1">
+                                  <span className="w-4 h-4 rounded-full bg-slate-200 text-slate-600 text-[9px] font-bold flex items-center justify-center flex-shrink-0">
+                                    {author.charAt(0).toUpperCase()}
+                                  </span>
+                                  <span className="text-xs text-gray-500">{author}</span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                          {firstTs && <span className="text-xs text-gray-400 ml-auto">{formatDate(firstTs)}</span>}
+                        </div>
+                        {entries.length > 0 ? (
+                          <div className="space-y-1.5 pl-1">
+                            {entries.map((e, i) => (
+                              <div key={i} className="bg-gray-50 rounded-lg px-3 py-2">
+                                <p className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">{e.text}</p>
+                                <p className="text-xs text-gray-400 mt-1">
+                                  <span className="font-medium text-gray-500">{e.author}</span> · {formatRelative(e.timestamp)}
+                                </p>
                               </div>
-                            ) : <span className="text-xs text-gray-300">—</span>}
-                          </td>
-                          <td className="px-4 py-2.5 align-top text-xs text-gray-500 whitespace-nowrap">
-                            {firstTs ? formatDate(firstTs) : <span className="text-gray-300">—</span>}
-                          </td>
-                          <td className="px-4 py-2.5 align-top max-w-[180px]">
-                            {entries.length > 0 ? (
-                              <div className="space-y-1">
-                                {entries.map((e, i) => (
-                                  <p key={i} className="text-xs text-gray-600 leading-relaxed line-clamp-3 whitespace-pre-wrap">{e.text}</p>
-                                ))}
-                              </div>
-                            ) : <span className="text-xs text-gray-300 italic">No notes</span>}
-                          </td>
-                        </tr>
-                      )
-                    })}
-                  </tbody>
-                </table>
+                            ))}
+                          </div>
+                        ) : (
+                          <p className="text-xs text-gray-300 italic pl-1">No notes</p>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
               </div>
 
               {/* Decision result */}
@@ -1173,14 +1167,13 @@ export function CandidateProfilePage() {
             </div>
           )}
 
-          {/* Interview Notes — always visible for non-agency */}
-          {!isAgency && (
+          {/* Interview Notes — shown ONLY when Cost Approval section is NOT visible */}
+          {!isAgency && !canSeeCostApprovalLatched && (
           <div>
             <p className="text-sm font-semibold text-gray-700 mb-3 px-1">Interview Notes</p>
 
-            {/* ── Interviewer: Knowledge Base (previous rounds, read-only) ──
-                Hidden for CA panel members since visibleNotesSections already shows all stages ── */}
-            {isInterviewer && !(isCAPanel && hasReachedOrPassedCA) && (() => {
+            {/* ── Interviewer: Knowledge Base (previous rounds, read-only) ── */}
+            {isInterviewer && (() => {
               const currentIdx = stages.indexOf(candidate.current_stage)
               const prevStagesWithNotes = currentIdx > 0
                 ? stages.slice(0, currentIdx)
@@ -1294,9 +1287,8 @@ export function CandidateProfilePage() {
                       </div>
                     )}
 
-                    {/* Input — CA panel at CA stage: read-only (decision goes in CA section)
-                        HR: screening only; other roles: follow canAddNotes */}
-                    {canAddNotes && (!isHR || key === 'screening') && !(isCAPanel && hasReachedOrPassedCA) && (
+                    {/* Input */}
+                    {canAddNotes && (!isHR || key === 'screening') && (
                       <div className="flex gap-2 items-end pb-3 pl-3.5">
                         <textarea rows={3} value={draft}
                           onChange={e => setDraftNotes(p => ({ ...p, [key]: e.target.value }))}
@@ -1309,7 +1301,7 @@ export function CandidateProfilePage() {
                         </button>
                       </div>
                     )}
-                    {entries.length === 0 && (!(canAddNotes && (!isHR || key === 'screening')) || (isCAPanel && hasReachedOrPassedCA)) && (
+                    {entries.length === 0 && !(canAddNotes && (!isHR || key === 'screening')) && (
                       <p className="text-xs text-gray-400 pl-3.5 pb-3 italic">No notes yet.</p>
                     )}
                   </div>
