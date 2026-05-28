@@ -316,7 +316,7 @@ function StaffDashboard({ user, hasRole }: { user: any; hasRole: (r: string[]) =
                   return (
                     <button
                       key={name}
-                      onClick={() => navigate(`/candidates?f=${encodeURIComponent(JSON.stringify([{field:'stage',op:'is',value:name}]))}`)
+                      onClick={() => navigate(`/candidates?f=${encodeURIComponent(JSON.stringify([{id:String(Date.now()),field:'current_stage',op:'is_any_of',value:'',values:[name]}]))}`)
                       }
                       className="w-full flex items-center gap-3 group hover:bg-gray-50/60 -mx-1 px-1 py-1 rounded-lg transition-colors"
                     >
