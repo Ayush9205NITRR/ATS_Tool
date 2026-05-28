@@ -44,26 +44,37 @@ const DATE_OP_LABEL: Record<DateOp, string> = {
 const ymd = (d: Date) => d.toISOString().slice(0, 10)
 const addDays = (d: Date, n: number) => { const x = new Date(d); x.setDate(x.getDate() + n); return x }
 
+// Normalize a filter value (date "2026-05-27" or datetime-local "2026-05-27T16:30")
+// to a comparable string. DB values are ISO UTC; convert to local datetime-local format for comparison.
+function toLocalDT(iso: string): string {
+  const d = new Date(iso)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+function toLocalDate(iso: string): string { return toLocalDT(iso).slice(0, 10) }
+
 function matchesDateFilter(iso: string | null, op: DateOp, a: string, b: string): boolean {
   if (op === 'any')        return true
   if (op === 'empty')      return !iso
   if (op === 'not_empty')  return !!iso
   if (!iso)                return false
-  const d = iso.slice(0, 10)
-  const today = ymd(new Date())
+  // If filter value contains time, compare full datetime-local; otherwise compare date-only
+  const hasTime = (v: string) => v.includes('T') && v.length > 10
+  const cmpVal  = hasTime(a) || hasTime(b) ? toLocalDT(iso) : toLocalDate(iso)
+  const today   = ymd(new Date())
   switch (op) {
-    case 'is':            return !!a && d === a
-    case 'before':        return !!a && d <  a
-    case 'after':         return !!a && d >  a
-    case 'on_or_before':  return !!a && d <= a
-    case 'on_or_after':   return !!a && d >= a
-    case 'between':       return !!a && !!b && d >= a && d <= b
-    case 'today':         return d === today
-    case 'tomorrow':      return d === ymd(addDays(new Date(), 1))
-    case 'yesterday':     return d === ymd(addDays(new Date(), -1))
-    case 'last_7':        return d >= ymd(addDays(new Date(), -7)) && d <= today
-    case 'next_7':        return d >= today && d <= ymd(addDays(new Date(), 7))
-    case 'this_month':    return d.slice(0, 7) === today.slice(0, 7)
+    case 'is':            return !!a && cmpVal === a
+    case 'before':        return !!a && cmpVal <  a
+    case 'after':         return !!a && cmpVal >  a
+    case 'on_or_before':  return !!a && cmpVal <= a
+    case 'on_or_after':   return !!a && cmpVal >= a
+    case 'between':       return !!a && !!b && cmpVal >= a && cmpVal <= b
+    case 'today':         return toLocalDate(iso) === today
+    case 'tomorrow':      return toLocalDate(iso) === ymd(addDays(new Date(), 1))
+    case 'yesterday':     return toLocalDate(iso) === ymd(addDays(new Date(), -1))
+    case 'last_7':        return toLocalDate(iso) >= ymd(addDays(new Date(), -7)) && toLocalDate(iso) <= today
+    case 'next_7':        return toLocalDate(iso) >= today && toLocalDate(iso) <= ymd(addDays(new Date(), 7))
+    case 'this_month':    return toLocalDate(iso).slice(0, 7) === today.slice(0, 7)
     default:              return true
   }
 }
@@ -326,12 +337,18 @@ export function InterviewsPage() {
   const submittedCount = data?.submitted.length ?? 0
   const hasActiveFilters = !!(searchQuery || jobFilter || dateOp !== 'any')
 
-  // Short chip label that appears on the date button
+  // Short chip label — format datetime-local "2026-05-27T16:30" as "27 May, 4:30 pm"
+  const fmtFilterDT = (v: string) => {
+    if (!v) return ''
+    const d = new Date(v)
+    if (isNaN(d.getTime())) return v
+    return d.toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit', hour12: true })
+  }
   const dateChipLabel = (() => {
     if (dateOp === 'any')                       return 'Interview date'
-    if (dateOp === 'between' && dateA && dateB) return `${dateA} → ${dateB}`
+    if (dateOp === 'between' && dateA && dateB) return `${fmtFilterDT(dateA)} → ${fmtFilterDT(dateB)}`
     if (['is','before','after','on_or_before','on_or_after'].includes(dateOp) && dateA) {
-      return `${DATE_OP_LABEL[dateOp].replace('…','')} ${dateA}`
+      return `${DATE_OP_LABEL[dateOp].replace('…','')} ${fmtFilterDT(dateA)}`
     }
     return DATE_OP_LABEL[dateOp]
   })()
@@ -486,21 +503,21 @@ export function InterviewsPage() {
               </select>
 
               {['is','before','after','on_or_before','on_or_after','between'].includes(dateOp) && (
-                <div className="flex items-center gap-2">
+                <div className={`flex ${dateOp === 'between' ? 'flex-col' : 'items-center'} gap-2`}>
                   <input
-                    type="date"
+                    type="datetime-local"
                     value={dateA}
                     onChange={e => { setDateA(e.target.value); setSelectedIds(new Set()) }}
-                    className="flex-1 text-sm border border-gray-200 rounded-lg px-2 py-1.5"
+                    className="w-full text-sm border border-gray-200 rounded-lg px-2 py-1.5"
                   />
                   {dateOp === 'between' && (
                     <>
-                      <span className="text-xs text-gray-400">to</span>
+                      <span className="text-xs text-gray-400 text-center">to</span>
                       <input
-                        type="date"
+                        type="datetime-local"
                         value={dateB}
                         onChange={e => { setDateB(e.target.value); setSelectedIds(new Set()) }}
-                        className="flex-1 text-sm border border-gray-200 rounded-lg px-2 py-1.5"
+                        className="w-full text-sm border border-gray-200 rounded-lg px-2 py-1.5"
                       />
                     </>
                   )}
