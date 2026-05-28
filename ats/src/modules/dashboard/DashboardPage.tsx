@@ -241,16 +241,16 @@ function StaffDashboard({ user, hasRole }: { user: any; hasRole: (r: string[]) =
   }).length, [active, caStage])
 
   const pendingScheduling = useMemo(() =>
-    active.filter((c: any) => !c.interview_date && (c.assigned_interviewers?.length ?? 0) > 0).length,
-    [active]
+    candidates.filter((c: any) => !c.interview_date && (c.assigned_interviewers?.length ?? 0) > 0).length,
+    [candidates]
   )
 
   const fbDoneSet = useMemo(() => new Set(feedbacks.map((f: any) => `${f.candidate_id}:${f.interviewer_id}`)), [feedbacks])
   const pendingFeedback = useMemo(() => {
     let n = 0
-    active.forEach((c: any) => (c.assigned_interviewers ?? []).forEach((iid: string) => { if (!fbDoneSet.has(`${c.id}:${iid}`)) n++ }))
+    candidates.forEach((c: any) => (c.assigned_interviewers ?? []).forEach((iid: string) => { if (!fbDoneSet.has(`${c.id}:${iid}`)) n++ }))
     return n
-  }, [active, fbDoneSet])
+  }, [candidates, fbDoneSet])
 
   const attentionItems = useMemo(() => {
     const items: any[] = []

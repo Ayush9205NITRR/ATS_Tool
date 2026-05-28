@@ -14,13 +14,15 @@ export function JobBreakdownWidget() {
     queryKey: ['widget', 'job-breakdown'],
     queryFn: async () => {
       const [{ data: jobs }, { data: candidates }] = await Promise.all([
-        supabase.from('jobs').select('id, title, status').eq('status', 'open').order('title'),
-        supabase.from('candidates').select('job_id, current_stage, status').eq('status', 'active'),
+        supabase.from('jobs').select('id, title, status').order('title'),
+        supabase.from('candidates').select('job_id, current_stage, status'),
       ])
 
       if (!jobs?.length) return []
 
-      return jobs.map((job) => {
+      return jobs
+        .filter((job) => (candidates ?? []).some((c) => c.job_id === job.id))
+        .map((job) => {
         const jobCandidates = (candidates ?? []).filter((c) => c.job_id === job.id)
         const stageCounts: Record<string, number> = {}
         jobCandidates.forEach((c) => {
