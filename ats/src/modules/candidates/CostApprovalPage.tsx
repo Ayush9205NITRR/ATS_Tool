@@ -67,9 +67,12 @@ export function CostApprovalPage() {
   })
 
   // Filter to candidates that have reached or passed CA stage, or have a CA record
+  // Exclude rejected candidates (current_stage === 'Rejected' or ends with ' Rejected')
   const caCandidates = allCandidates.filter((c: any) => {
+    const stage = (c.current_stage ?? '') as string
+    if (stage === 'Rejected' || stage.endsWith(' Rejected')) return false
     const hasCARec = (c.interview_notes?.cost_approval ?? []).length > 0 || !!c.cost_approval_decision
-    const isAtCA   = stageKeyOf(c.current_stage) === stageKeyOf(costApprovalStageName)
+    const isAtCA   = stageKeyOf(stage) === stageKeyOf(costApprovalStageName)
     return hasCARec || isAtCA
   })
 
