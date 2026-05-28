@@ -5,7 +5,7 @@ import {
   ChevronRight, RefreshCw, XCircle, Eye,
 } from 'lucide-react'
 import { Button } from '../../shared/components/Button'
-import { parseResumeFromUrl, checkDuplicateByEmail } from './resumeParserService'
+import { parseResumeFromUrl } from './resumeParserService'
 import { candidateService, normalizePhone } from '../candidates/candidateService'
 import { useAuthStore } from '../auth/authStore'
 import { supabase } from '../../lib/supabaseClient'
@@ -162,11 +162,17 @@ export function BulkResumeUpload() {
           const parsed = await parseResumeFromUrl(rows[i].csv.resume_url)
           let status: RowStatus = 'parsed'
           let error: string | undefined
-          if (parsed.email) {
-            const dup = await checkDuplicateByEmail(parsed.email)
-            if (dup.exists) {
+          const cleanEmail = parsed.email?.trim().toLowerCase() ?? ''
+          const cleanPhone = normalizePhone(parsed.phone ?? '') ?? ''
+          if (cleanEmail || cleanPhone) {
+            const filters: string[] = []
+            if (cleanEmail) filters.push(`email.ilike.${cleanEmail}`)
+            if (cleanPhone && cleanPhone.length >= 10) filters.push(`phone.ilike.%${cleanPhone.slice(-10)}`)
+            const { data: dupData } = await (supabase as any)
+              .from('candidates').select('id,full_name,email').or(filters.join(',')).limit(1)
+            if (dupData?.length) {
               status = 'duplicate'
-              error = `Duplicate: ${dup.candidateName} (${parsed.email})`
+              error = `Duplicate: ${dupData[0].full_name} (${dupData[0].email ?? cleanPhone})`
             }
           }
           rows[i] = { ...rows[i], status, data: parsed, error }
@@ -240,6 +246,7 @@ export function BulkResumeUpload() {
           assigned_interviewers: [],
           job_id: selectedJobId || null,
           hr_owner: user?.role === 'hr_team' ? user!.id : null,
+          assigned_hr_owners: user?.role === 'hr_team' ? [user!.id] : [],
           notes: null,
           screening_notes: null,
           interview_notes: {},
@@ -581,8 +588,9 @@ export function BulkResumeUpload() {
   )
 }
 
-function normalizeSourceCategory(source: string): 'platform' | 'agency' | 'college' {
+function normalizeSourceCategory(source: string): 'platform' | 'agency' | 'college' | 'referral' {
   const v = (source ?? '').toLowerCase()
+  if (v.includes('referral') || v.includes('employee')) return 'referral'
   if (v.includes('college') || v.includes('campus') || v.includes('university')) return 'college'
   if (v.includes('agency') || v.includes('recruiter')) return 'agency'
   return 'platform'

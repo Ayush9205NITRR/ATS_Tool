@@ -3,12 +3,13 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import { Search, CheckCircle, AlertTriangle, Loader2, Edit3, Link2, RotateCcw } from 'lucide-react'
 import { Button } from '../../shared/components/Button'
-import { parseResumeFromUrl, checkDuplicateByEmail } from './resumeParserService'
+import { parseResumeFromUrl } from './resumeParserService'
 import { candidateService, normalizePhone } from '../candidates/candidateService'
 import { useAuthStore } from '../auth/authStore'
+import { useDuplicateCheck } from '../../shared/hooks/useDuplicateCheck'
 import { supabase } from '../../lib/supabaseClient'
 
-const PLATFORM_SRCS = ['LinkedIn','Naukri','Indeed','Internshala','Shine','Monster','Foundit','Apna','Referral','Website','Other']
+const PLATFORM_SRCS = ['LinkedIn','Naukri','Indeed','Internshala','Shine','Monster','Foundit','Apna','Unstop','Website','Other']
 
 function SubSourceField({ sourceCategory, value, onChange }: {
   sourceCategory: string; value: string; onChange: (v: string) => void
@@ -22,6 +23,16 @@ function SubSourceField({ sourceCategory, value, onChange }: {
     staleTime: 60_000,
     enabled: sourceCategory === 'agency',
   })
+  const { data: employees = [] } = useQuery({
+    queryKey: ['app-settings', 'employee_referral_list'],
+    queryFn: async () => {
+      const { data } = await supabase.from('app_settings').select('value').eq('key','employee_referral_list').maybeSingle()
+      if (!data?.value) return [] as string[]
+      try { return JSON.parse(data.value) as string[] } catch { return [] as string[] }
+    },
+    staleTime: 60_000,
+    enabled: sourceCategory === 'referral',
+  })
   const cls = 'w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-transparent transition-all'
   if (!sourceCategory) return <input disabled placeholder="Select source type first…" className={`${cls} bg-gray-50 text-gray-400 cursor-not-allowed border-gray-100`} />
   if (sourceCategory === 'agency') return (
@@ -34,6 +45,13 @@ function SubSourceField({ sourceCategory, value, onChange }: {
     <select value={value} onChange={e => onChange(e.target.value)} className={cls}>
       <option value="">Select platform…</option>
       {PLATFORM_SRCS.map(p => <option key={p} value={p}>{p}</option>)}
+    </select>
+  )
+  if (sourceCategory === 'referral') return (
+    <select value={value} onChange={e => onChange(e.target.value)} className={cls}>
+      <option value="">Select employee…</option>
+      {(employees as string[]).map(e => <option key={e} value={e}>{e}</option>)}
+      {employees.length === 0 && <option disabled value="">No employees — add in Settings → Employee Referral List</option>}
     </select>
   )
   return <input type="text" value={value} onChange={e => onChange(e.target.value)} placeholder="e.g. IIT Delhi, BITS Pilani…" className={cls} />
@@ -74,8 +92,8 @@ export function SingleResumeUpload() {
   const [selectedJobId, setSelectedJobId] = useState('')
 
   const [parsed, setParsed] = useState(false)
-  const [dupInfo, setDupInfo] = useState<{ exists: boolean; candidateId?: string; candidateName?: string }>({ exists: false })
   const [done, setDone] = useState(false)
+  const { duplicates, check: checkDup, reset: resetDup } = useDuplicateCheck()
 
   useEffect(() => { if (!isAgency) setSourceName('') }, [sourceCategory])
 
@@ -103,14 +121,7 @@ export function SingleResumeUpload() {
     },
   })
 
-  useEffect(() => {
-    if (!email) { setDupInfo({ exists: false }); return }
-    const timer = setTimeout(async () => {
-      const result = await checkDuplicateByEmail(email)
-      setDupInfo(result)
-    }, 600)
-    return () => clearTimeout(timer)
-  }, [email])
+  useEffect(() => { checkDup(email, phone) }, [email, phone])
 
   const saveMutation = useMutation({
     mutationFn: async () => {
@@ -120,14 +131,15 @@ export function SingleResumeUpload() {
         phone: normalizePhone(phone) || null,
         resume_url: resumeUrl.trim() || null,
         linkedin_url: linkedinUrl.trim() || null,
-        source_category: isAgency ? 'agency' : (sourceCategory || 'platform') as 'platform' | 'agency' | 'college',
+        source_category: isAgency ? 'agency' : (sourceCategory || 'platform') as 'platform' | 'agency' | 'college' | 'referral',
         source_name: isAgency ? (user?.full_name ?? '') : (sourceName.trim() || 'Unknown'),
         current_stage: 'Applied',
         status: 'active',
         tags: [],
         assigned_interviewers: [],
         job_id: selectedJobId || null,
-        hr_owner: null,
+        hr_owner: user?.role === 'hr_team' ? user!.id : null,
+        assigned_hr_owners: user?.role === 'hr_team' ? [user!.id] : [],
         notes: null,
         screening_notes: null,
         interview_notes: {},
@@ -156,7 +168,7 @@ export function SingleResumeUpload() {
     setSourceName(isAgency ? (user?.full_name ?? '') : '')
     setFullName(''); setEmail(''); setPhone(''); setLinkedinUrl('')
     setCurrentCompany(''); setCurrentDesignation('')
-    setParsed(false); setDupInfo({ exists: false }); setDone(false); setSelectedJobId('')
+    setParsed(false); resetDup(); setDone(false); setSelectedJobId('')
     parseMutation.reset(); saveMutation.reset()
   }
 
@@ -215,6 +227,7 @@ export function SingleResumeUpload() {
                 <option value="platform">🔗 Platform</option>
                 <option value="agency">🏢 Agency</option>
                 <option value="college">🎓 College</option>
+                <option value="referral">👤 Employee Referral</option>
               </select>
             </Field>
           ) : (
@@ -283,12 +296,12 @@ export function SingleResumeUpload() {
                 <Field label="Full Name" required>
                   <input value={fullName} onChange={e => setFullName(e.target.value)} className={inputCls} placeholder="Candidate's full name" />
                 </Field>
-                <Field label="Email" required error={dupInfo.exists ? `Duplicate: already exists as "${dupInfo.candidateName}"` : undefined}>
+                <Field label="Email" required error={duplicates.length > 0 ? `Duplicate: already exists as "${duplicates[0].full_name}"` : undefined}>
                   <input
                     type="email"
                     value={email}
                     onChange={e => setEmail(e.target.value)}
-                    className={`${inputCls} ${dupInfo.exists ? 'border-red-300 focus:ring-red-400' : ''}`}
+                    className={`${inputCls} ${duplicates.length > 0 ? 'border-red-300 focus:ring-red-400' : ''}`}
                     placeholder="email@example.com"
                   />
                 </Field>
@@ -319,15 +332,16 @@ export function SingleResumeUpload() {
               </div>
             </div>
 
-            {dupInfo.exists && (
+            {duplicates.length > 0 && (
               <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-3 flex items-start gap-2.5">
                 <AlertTriangle className="w-4 h-4 text-red-500 flex-shrink-0 mt-0.5" />
                 <div>
                   <p className="text-sm font-medium text-red-700">Duplicate candidate detected</p>
-                  <p className="text-xs text-red-500 mt-0.5">
-                    A candidate with email <strong>{email}</strong> already exists as <em>{dupInfo.candidateName}</em>.
-                    Update the email or edit the existing record instead.
-                  </p>
+                  {duplicates.map(d => (
+                    <p key={d.id} className="text-xs text-red-500 mt-0.5">
+                      <em>{d.full_name}</em> already exists (matched by {d.match_type}) — currently at <strong>{d.current_stage}</strong>.
+                    </p>
+                  ))}
                 </div>
               </div>
             )}
@@ -342,7 +356,7 @@ export function SingleResumeUpload() {
               <Button variant="secondary" onClick={resetForm}>Reset</Button>
               <Button
                 onClick={() => saveMutation.mutate()}
-                disabled={!fullName.trim() || !email.trim() || dupInfo.exists}
+                disabled={!fullName.trim() || !email.trim() || duplicates.length > 0}
                 loading={saveMutation.isPending}
                 icon={<CheckCircle className="w-4 h-4" />}
               >
