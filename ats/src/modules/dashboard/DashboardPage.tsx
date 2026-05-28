@@ -179,8 +179,10 @@ function StaffDashboard({ user, hasRole }: { user: any; hasRole: (r: string[]) =
   })
 
   // ── Derived ────────────────────────────────────────────────
-  const active  = useMemo(() => candidates.filter((c: any) => c.status === 'active'), [candidates])
-  const hired   = useMemo(() => candidates.filter((c: any) => c.status === 'hired'),  [candidates])
+  // Hired / Rejected are determined by current_stage (this system's convention)
+  const hired    = useMemo(() => candidates.filter((c: any) => c.current_stage === 'Hired'),   [candidates])
+  const rejected = useMemo(() => candidates.filter((c: any) => c.current_stage === 'Rejected'), [candidates])
+  const active   = useMemo(() => candidates.filter((c: any) => c.current_stage !== 'Hired' && c.current_stage !== 'Rejected'), [candidates])
   const caStage = caSettings?.stageName ?? 'Cost Approval'
   const stages  = useMemo(() => stageConfigs.map((s: any) => s.name), [stageConfigs])
 
@@ -219,9 +221,8 @@ function StaffDashboard({ user, hasRole }: { user: any; hasRole: (r: string[]) =
   }, [hired])
 
   const hireRate = useMemo(() => {
-    const t = active.length + hired.length
-    return t ? Math.round((hired.length / t) * 100) : 0
-  }, [active, hired])
+    return candidates.length ? Math.round((hired.length / candidates.length) * 100) : 0
+  }, [candidates, hired])
 
   const jobsMap = useMemo(() => Object.fromEntries(jobs.map((j: any) => [j.id, j.title])), [jobs])
 
@@ -286,7 +287,9 @@ function StaffDashboard({ user, hasRole }: { user: any; hasRole: (r: string[]) =
 
       {/* ── Stats strip ─────────────────────────────────────────── */}
       <div className="flex flex-wrap items-center gap-5">
-        <BigStat n={active.length}    label="active candidates" />
+        <BigStat n={candidates.length} label="total candidates" />
+        <Divider />
+        <BigStat n={active.length}    label="in pipeline" />
         <Divider />
         <BigStat n={hired.length}     label="hired" />
         <Divider />
