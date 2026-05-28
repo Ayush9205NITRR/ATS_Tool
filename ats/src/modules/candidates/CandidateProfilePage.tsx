@@ -401,6 +401,7 @@ export function CandidateProfilePage() {
 
   const submitCostApproval = async () => {
     if (!caDecision) return
+    if (caDecision === 'rework_required' && !caNotes.trim()) return
     setCaSaveStatus('saving')
     try {
       const decisionLabel = caDecision === 'go_ahead' ? 'Go Ahead' : 'Re-work Required'
@@ -613,9 +614,13 @@ export function CandidateProfilePage() {
   const canSeeCostApproval = (isInCostApproval || hasReachedOrPassedCA || hasCostApprovalRecord) && (canEdit || isCAPanel)
   const canSubmitCostApproval = isCAPanel && (isInCostApproval || hasReachedOrPassedCA || hasCostApprovalRecord)
 
-  // Latch: once we've shown this section for this candidate, keep showing it
-  // even during brief cache-refetch windows where conditions might flicker false
-  if (canSeeCostApproval) costApprovalShownForId.current = candidate.id
+  // Latch: keep showing during brief cache-refetch windows, but clear when stage
+  // definitively moves below CA with no record — restores normal UI on backward stage move
+  if (canSeeCostApproval) {
+    costApprovalShownForId.current = candidate.id
+  } else if (!isInCostApproval && !hasReachedOrPassedCA && !hasCostApprovalRecord) {
+    if (costApprovalShownForId.current === candidate.id) costApprovalShownForId.current = null
+  }
   const canSeeCostApprovalLatched = canSeeCostApproval || costApprovalShownForId.current === candidate.id
 
   // Derived variables for the cost approval UI section
@@ -1212,8 +1217,12 @@ export function CandidateProfilePage() {
                     rows={2}
                     value={caNotes}
                     onChange={e => setCaNotes(e.target.value)}
-                    placeholder="Notes (optional)"
-                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-slate-300 resize-y"
+                    placeholder={caDecision === 'rework_required' ? 'Comment (required for Re-work)' : 'Notes (optional)'}
+                    className={`w-full px-3 py-2 border rounded-lg text-sm bg-white focus:outline-none focus:ring-2 resize-y ${
+                      caDecision === 'rework_required' && !caNotes.trim()
+                        ? 'border-orange-300 focus:ring-orange-300'
+                        : 'border-gray-200 focus:ring-slate-300'
+                    }`}
                   />
                   <div className="flex flex-wrap gap-2">
                     <button
@@ -1236,10 +1245,10 @@ export function CandidateProfilePage() {
                   <div className="flex items-center gap-2 flex-wrap">
                     <button
                       onClick={submitCostApproval}
-                      disabled={!caDecision || caSaveStatus === 'saving'}
+                      disabled={!caDecision || (caDecision === 'rework_required' && !caNotes.trim()) || caSaveStatus === 'saving'}
                       className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
                         caSaveStatus === 'saved' ? 'bg-green-500 text-white'
-                        : !caDecision ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                        : !caDecision || (caDecision === 'rework_required' && !caNotes.trim()) ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
                         : 'bg-slate-800 hover:bg-slate-700 text-white'
                       }`}
                     >
