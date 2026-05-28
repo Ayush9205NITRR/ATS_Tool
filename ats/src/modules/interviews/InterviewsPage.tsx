@@ -463,8 +463,8 @@ export function InterviewsPage() {
           </button>
 
           {dateOpen && (
-            <div className="absolute right-0 mt-2 w-80 bg-white border border-gray-200 rounded-xl shadow-lg z-30 p-3">
-              <div className="flex items-center justify-between mb-2">
+            <div className="absolute right-0 mt-2 w-80 bg-white border border-gray-200 rounded-xl shadow-lg z-30 p-3 space-y-3">
+              <div className="flex items-center justify-between">
                 <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Interview Date</p>
                 {dateOp !== 'any' && (
                   <button onClick={clearDate} className="text-xs text-gray-400 hover:text-red-500 flex items-center gap-0.5">
@@ -473,72 +473,87 @@ export function InterviewsPage() {
                 )}
               </div>
 
-              <select
-                value={dateOp}
-                onChange={e => {
-                  const op = e.target.value as DateOp
-                  setDateOp(op)
-                  if (op !== 'between') setDateB('')
-                  if (['any','today','tomorrow','yesterday','last_7','next_7','this_month','empty','not_empty'].includes(op)) {
-                    setDateA(''); setDateB('')
-                  }
-                }}
-                className="w-full text-sm border border-gray-200 rounded-lg px-2 py-1.5 mb-2 bg-white"
-              >
-                <optgroup label="Filter">
-                  {(['any','is','before','after','on_or_before','on_or_after','between'] as DateOp[]).map(op => (
-                    <option key={op} value={op}>{DATE_OP_LABEL[op]}</option>
-                  ))}
-                </optgroup>
-                <optgroup label="Quick presets">
-                  {(['today','tomorrow','yesterday','last_7','next_7','this_month'] as DateOp[]).map(op => (
-                    <option key={op} value={op}>{DATE_OP_LABEL[op]}</option>
-                  ))}
-                </optgroup>
-                <optgroup label="State">
-                  {(['empty','not_empty'] as DateOp[]).map(op => (
-                    <option key={op} value={op}>{DATE_OP_LABEL[op]}</option>
-                  ))}
-                </optgroup>
-              </select>
+              {/* Always-visible datetime input — sets "is" filter directly */}
+              <div>
+                <p className="text-[10px] text-gray-400 mb-1">Pick exact date &amp; time</p>
+                <input
+                  type="datetime-local"
+                  value={['is','any'].includes(dateOp) ? dateA : ''}
+                  onChange={e => {
+                    setDateA(e.target.value)
+                    setDateOp(e.target.value ? 'is' : 'any')
+                    setDateB('')
+                    setSelectedIds(new Set())
+                  }}
+                  className="w-full text-sm border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-400"
+                />
+              </div>
 
-              {['is','before','after','on_or_before','on_or_after','between'].includes(dateOp) && (
-                <div className={`flex ${dateOp === 'between' ? 'flex-col' : 'items-center'} gap-2`}>
-                  <input
-                    type="datetime-local"
-                    value={dateA}
-                    onChange={e => { setDateA(e.target.value); setSelectedIds(new Set()) }}
-                    className="w-full text-sm border border-gray-200 rounded-lg px-2 py-1.5"
-                  />
-                  {dateOp === 'between' && (
-                    <>
-                      <span className="text-xs text-gray-400 text-center">to</span>
+              {/* Quick preset chips */}
+              <div>
+                <p className="text-[10px] text-gray-400 mb-1.5">Quick presets</p>
+                <div className="flex flex-wrap gap-1">
+                  {(['today','tomorrow','last_7','next_7','this_month'] as DateOp[]).map(op => (
+                    <button
+                      key={op}
+                      onClick={() => { setDateOp(op); setDateA(''); setDateB(''); setSelectedIds(new Set()) }}
+                      className={`text-xs px-2.5 py-1 rounded-md border transition-colors ${
+                        dateOp === op
+                          ? 'bg-blue-50 border-blue-300 text-blue-700'
+                          : 'bg-gray-50 border-gray-200 text-gray-600 hover:bg-gray-100'
+                      }`}
+                    >
+                      {DATE_OP_LABEL[op]}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Advanced range filter */}
+              <details className="group">
+                <summary className="text-[10px] text-gray-400 cursor-pointer hover:text-gray-600 list-none flex items-center gap-1">
+                  <ChevronDown className="w-3 h-3 group-open:rotate-180 transition-transform"/> Advanced (before / after / range)
+                </summary>
+                <div className="mt-2 space-y-2">
+                  <select
+                    value={dateOp}
+                    onChange={e => {
+                      const op = e.target.value as DateOp
+                      setDateOp(op)
+                      if (op !== 'between') setDateB('')
+                      if (['any','today','tomorrow','yesterday','last_7','next_7','this_month','empty','not_empty'].includes(op)) {
+                        setDateA(''); setDateB('')
+                      }
+                    }}
+                    className="w-full text-sm border border-gray-200 rounded-lg px-2 py-1.5 bg-white"
+                  >
+                    {(['any','before','after','on_or_before','on_or_after','between','empty','not_empty'] as DateOp[]).map(op => (
+                      <option key={op} value={op}>{DATE_OP_LABEL[op]}</option>
+                    ))}
+                  </select>
+                  {['before','after','on_or_before','on_or_after','between'].includes(dateOp) && (
+                    <div className="flex flex-col gap-2">
                       <input
                         type="datetime-local"
-                        value={dateB}
-                        onChange={e => { setDateB(e.target.value); setSelectedIds(new Set()) }}
+                        value={dateA}
+                        onChange={e => { setDateA(e.target.value); setSelectedIds(new Set()) }}
                         className="w-full text-sm border border-gray-200 rounded-lg px-2 py-1.5"
                       />
-                    </>
+                      {dateOp === 'between' && (
+                        <>
+                          <span className="text-xs text-gray-400 text-center">to</span>
+                          <input
+                            type="datetime-local"
+                            value={dateB}
+                            onChange={e => { setDateB(e.target.value); setSelectedIds(new Set()) }}
+                            className="w-full text-sm border border-gray-200 rounded-lg px-2 py-1.5"
+                          />
+                        </>
+                      )}
+                    </div>
                   )}
                 </div>
-              )}
-
-              <div className="flex flex-wrap gap-1 mt-3 pt-3 border-t border-gray-100">
-                {(['today','tomorrow','last_7','next_7','this_month'] as DateOp[]).map(op => (
-                  <button
-                    key={op}
-                    onClick={() => { setDateOp(op); setDateA(''); setDateB(''); setSelectedIds(new Set()) }}
-                    className={`text-xs px-2 py-1 rounded-md border transition-colors ${
-                      dateOp === op
-                        ? 'bg-blue-50 border-blue-300 text-blue-700'
-                        : 'bg-gray-50 border-gray-200 text-gray-600 hover:bg-gray-100'
-                    }`}
-                  >
-                    {DATE_OP_LABEL[op]}
-                  </button>
-                ))}
-              </div>
+              </details>
             </div>
           )}
         </div>
