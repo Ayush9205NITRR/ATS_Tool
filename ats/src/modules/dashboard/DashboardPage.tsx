@@ -17,7 +17,6 @@ import { useStages as useStagesHook } from '../../shared/hooks/useStages'
 import { SourceFunnelWidget }       from './widgets/SourceFunnelWidget'
 import { FunnelStagesWidget }       from './widgets/FunnelStagesWidget'
 import { JobBreakdownWidget }       from './widgets/JobBreakdownWidget'
-import { SubSourcePipelineWidget }  from './widgets/SubSourcePipelineWidget'
 import { HRTeamWidget }             from './widgets/HRTeamWidget'
 import { InterviewerScheduleWidget } from './widgets/InterviewerScheduleWidget'
 import { JobSourceBreakdownWidget } from './widgets/JobSourceBreakdownWidget'
@@ -416,7 +415,6 @@ function StaffDashboard({ user, hasRole }: { user: any; hasRole: (r: string[]) =
             </div>
             <JobBreakdownWidget />
             <JobSourceBreakdownWidget />
-            {isAdmin && <SubSourcePipelineWidget />}
             {isAdmin && <InterviewerScheduleWidget />}
             {isSuper && <HRTeamWidget />}
           </div>

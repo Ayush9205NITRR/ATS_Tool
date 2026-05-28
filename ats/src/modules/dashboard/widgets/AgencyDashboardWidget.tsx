@@ -7,11 +7,12 @@ import { supabase } from '../../../lib/supabaseClient'
 import { useAuthStore } from '../../auth/authStore'
 import { Loader2 } from 'lucide-react'
 
-// Pipeline stages (ordered) — used to sort active bars
-const PIPELINE_ORDER = [
+// Only these stages are "active pipeline" — everything else is dropoff
+const ACTIVE_STAGES_LIST = [
   'Applied', 'Screening', 'R1', 'Case Study', 'R2', 'R3',
-  'CF (Virtual)', 'CF (In-Person)', 'Cost Approval', 'Offer',
+  'CF (Virtual)', 'CF (In-Person)',
 ]
+const ACTIVE_STAGES = new Set(ACTIVE_STAGES_LIST)
 
 const STAGE_BAR: Record<string, string> = {
   Applied:           'bg-slate-300',
@@ -38,9 +39,6 @@ const STAGE_TEXT: Record<string, string> = {
   Offer:             'text-violet-700',
 }
 
-const isRejected = (stage: string) =>
-  stage?.toLowerCase().includes('reject') || stage === 'Rejected'
-
 const isHired = (stage: string) => stage === 'Hired'
 
 export function AgencyDashboardWidget() {
@@ -63,29 +61,26 @@ export function AgencyDashboardWidget() {
   const candidates = data ?? []
   const total       = candidates.length
   const hiredList   = candidates.filter(c => isHired(c.current_stage))
-  const rejList     = candidates.filter(c => isRejected(c.current_stage))
-  const activeList  = candidates.filter(c => !isHired(c.current_stage) && !isRejected(c.current_stage))
+  const activeList  = candidates.filter(c => ACTIVE_STAGES.has(c.current_stage))
+  const dropoffList = candidates.filter(c => !isHired(c.current_stage) && !ACTIVE_STAGES.has(c.current_stage))
 
   const hired      = hiredList.length
-  const rejected   = rejList.length
+  const dropped    = dropoffList.length
   const inPipeline = activeList.length
   const hireRate   = total > 0 ? Math.round((hired / total) * 100) : 0
-  const rejRate    = total > 0 ? Math.round((rejected / total) * 100) : 0
+  const dropRate   = total > 0 ? Math.round((dropped / total) * 100) : 0
 
-  // Active stage counts — sorted by pipeline order
+  // Active stage counts — sorted by ACTIVE_STAGES_LIST order
   const activeMap: Record<string, number> = {}
   activeList.forEach(c => { activeMap[c.current_stage] = (activeMap[c.current_stage] ?? 0) + 1 })
-  const activeStages = [
-    ...PIPELINE_ORDER.filter(s => activeMap[s]).map(s => ({ stage: s, count: activeMap[s] })),
-    ...Object.entries(activeMap).filter(([s]) => !PIPELINE_ORDER.includes(s)).map(([s, n]) => ({ stage: s, count: n })),
-  ]
+  const activeStages = ACTIVE_STAGES_LIST.filter(s => activeMap[s]).map(s => ({ stage: s, count: activeMap[s] }))
   const maxActive = Math.max(...activeStages.map(s => s.count), 1)
 
-  // Rejection stage counts — sorted by count desc
-  const rejMap: Record<string, number> = {}
-  rejList.forEach(c => { rejMap[c.current_stage] = (rejMap[c.current_stage] ?? 0) + 1 })
-  const rejStages = Object.entries(rejMap).sort(([,a],[,b]) => b - a)
-  const maxRej = Math.max(...rejStages.map(([,n]) => n), 1)
+  // Dropoff stage counts — sorted by count desc
+  const dropMap: Record<string, number> = {}
+  dropoffList.forEach(c => { dropMap[c.current_stage] = (dropMap[c.current_stage] ?? 0) + 1 })
+  const dropStages = Object.entries(dropMap).sort(([,a],[,b]) => b - a)
+  const maxDrop = Math.max(...dropStages.map(([,n]) => n), 1)
 
   if (isLoading) return (
     <div className="flex justify-center py-16"><Loader2 className="w-5 h-5 animate-spin text-gray-300"/></div>
@@ -105,8 +100,8 @@ export function AgencyDashboardWidget() {
         {[
           { value: total,      label: 'Total Submitted', cls: 'text-gray-900',    bg: 'bg-white border border-gray-100' },
           { value: inPipeline, label: 'In Pipeline',     cls: 'text-indigo-600',  bg: 'bg-indigo-50'  },
-          { value: hired,      label: `Hired · ${hireRate}%`, cls: 'text-emerald-700', bg: 'bg-emerald-50' },
-          { value: rejected,   label: `Rejected · ${rejRate}%`, cls: 'text-red-600', bg: 'bg-red-50'  },
+          { value: hired,   label: `Hired · ${hireRate}%`,  cls: 'text-emerald-700', bg: 'bg-emerald-50' },
+          { value: dropped, label: `Dropped off · ${dropRate}%`, cls: 'text-red-600', bg: 'bg-red-50' },
         ].map(({ value, label, cls, bg }) => (
           <div key={label} className={`${bg} rounded-xl px-4 py-3`}>
             <p className={`text-[26px] font-bold tabular-nums leading-none ${cls}`}>{value}</p>
@@ -159,20 +154,18 @@ export function AgencyDashboardWidget() {
             <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400">Where Candidates Dropped Off</p>
           </div>
           <div className="p-4">
-            {rejStages.length === 0 ? (
+            {dropStages.length === 0 ? (
               <div className="flex flex-col items-center py-6 gap-2">
                 <div className="w-8 h-8 rounded-full bg-emerald-50 flex items-center justify-center">
                   <span className="text-emerald-500 text-lg">✓</span>
                 </div>
-                <p className="text-[12px] text-gray-400">No rejections yet</p>
+                <p className="text-[12px] text-gray-400">No drop-offs yet</p>
               </div>
             ) : (
               <div className="space-y-2.5">
-                {rejStages.map(([stage, count]) => {
-                  const barW = Math.round((count / maxRej) * 100)
+                {dropStages.map(([stage, count]) => {
+                  const barW = Math.round((count / maxDrop) * 100)
                   const pct  = Math.round((count / total) * 100)
-                  // Derive stage label without "Rejected" suffix for bar label context
-                  const label = stage.replace(' Rejected', '').replace('Rejected', '').trim() || stage
                   return (
                     <div key={stage} className="flex items-center gap-3">
                       <span className="text-[12px] font-medium text-red-500 w-28 flex-shrink-0 truncate" title={stage}>{stage}</span>
@@ -185,8 +178,8 @@ export function AgencyDashboardWidget() {
                   )
                 })}
                 <div className="pt-2 border-t border-gray-50 flex justify-between">
-                  <span className="text-[11px] text-gray-400">Total rejected</span>
-                  <span className="text-[12px] font-bold text-red-500 tabular-nums">{rejected}</span>
+                  <span className="text-[11px] text-gray-400">Total dropped off</span>
+                  <span className="text-[12px] font-bold text-red-500 tabular-nums">{dropped}</span>
                 </div>
               </div>
             )}
