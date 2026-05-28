@@ -284,6 +284,14 @@ export function CandidateProfilePage() {
         error = result.error
       }
       if (error) { console.error('[feedback decision]', error); throw error }
+
+      // Rejection: auto-update stage to "{stage} Rejected" and clear interview date
+      if (decision === 'no') {
+        const { error: stageErr } = await supabase.from('candidates')
+          .update({ current_stage: `${currentStage} Rejected`, interview_date: null })
+          .eq('id', id!)
+        if (stageErr) console.error('[rejection stage]', stageErr)
+      }
     },
     onSuccess: async () => {
       setDecisionEditMode(false)

@@ -209,72 +209,72 @@ export function InterviewsPage() {
     },
   })
 
-  // Admin / HR view: candidates in interview stages
+  // Admin / HR view — feedback-driven: approved candidates split by date presence; rejected auto-stage
   const { data: adminData, isLoading: adminLoading } = useQuery({
     queryKey: ['admin-interviews-v2'],
     queryFn: async () => {
-      // Fetch all active candidates in interview stages
+      // All feedbacks with recommendation, latest per candidate
+      const { data: allFeedbacks } = await supabase
+        .from('interview_feedback')
+        .select('candidate_id, stage, recommendation, submitted_at, interviewer_id')
+        .in('recommendation', ['yes', 'no'])
+        .order('submitted_at', { ascending: false })
+
+      const latestMap = new Map<string, any>()
+      for (const f of allFeedbacks ?? []) {
+        if (!latestMap.has(f.candidate_id)) latestMap.set(f.candidate_id, f)
+      }
+
+      const approvedFeedbacks = [...latestMap.values()].filter(f => f.recommendation === 'yes')
+      const rejectedFeedbacks  = [...latestMap.values()].filter(f => f.recommendation === 'no')
+
+      const allIds = [...latestMap.keys()]
+      if (!allIds.length) return { toSchedule: [], scheduled: [], rejected: [] }
+
+      // Fetch all candidate records (active only — rejected-stage candidates may be active too)
       const { data: candidates } = await supabase
         .from('candidates')
         .select('id, full_name, current_stage, interview_date, job_id, assigned_interviewers')
-        .eq('status', 'active')
-        .in('current_stage', INTERVIEW_STAGE_LIST)
+        .in('id', allIds)
 
-      // Fetch latest rejection feedback per candidate (for rejected tab)
-      const { data: rejFeedbacks } = await supabase
-        .from('interview_feedback')
-        .select('candidate_id, stage, submitted_at, interviewer_id')
-        .eq('recommendation', 'no')
-        .order('submitted_at', { ascending: false })
+      const candidateMap = Object.fromEntries((candidates ?? []).map((c: any) => [c.id, c]))
 
-      const latestRejMap = new Map<string, any>()
-      for (const f of rejFeedbacks ?? []) {
-        if (!latestRejMap.has(f.candidate_id)) latestRejMap.set(f.candidate_id, f)
-      }
-
-      // Some rejected candidates may not be in interview stages anymore — fetch them too
-      const existingIds = new Set((candidates ?? []).map((c: any) => c.id))
-      const missingRejIds = [...latestRejMap.keys()].filter(id => !existingIds.has(id))
-      let allCandidates: any[] = [...(candidates ?? [])]
-      if (missingRejIds.length) {
-        const { data: rejCands } = await supabase
-          .from('candidates')
-          .select('id, full_name, current_stage, interview_date, job_id, assigned_interviewers')
-          .in('id', missingRejIds)
-        allCandidates = [...allCandidates, ...(rejCands ?? [])]
-      }
-
-      const jobIds = [...new Set(allCandidates.map((c: any) => c.job_id).filter(Boolean))]
-      const allInterviewerIds = [...new Set(allCandidates.flatMap((c: any) => c.assigned_interviewers ?? []))]
+      const jobIds = [...new Set((candidates ?? []).map((c: any) => c.job_id).filter(Boolean))]
+      const panelIds = [...new Set((candidates ?? []).flatMap((c: any) => c.assigned_interviewers ?? []))]
+      const reviewerIds = [...new Set([...latestMap.values()].map((f: any) => f.interviewer_id))]
+      const allUserIds = [...new Set([...panelIds, ...reviewerIds])]
 
       const [{ data: jobs }, { data: users }] = await Promise.all([
-        jobIds.length ? supabase.from('jobs').select('id,title').in('id', jobIds) : { data: [] as any[] },
-        allInterviewerIds.length ? supabase.from('users').select('id,full_name').in('id', allInterviewerIds) : { data: [] as any[] },
+        jobIds.length    ? supabase.from('jobs').select('id,title').in('id', jobIds) : { data: [] as any[] },
+        allUserIds.length ? supabase.from('users').select('id,full_name').in('id', allUserIds) : { data: [] as any[] },
       ])
 
-      const jobMap = Object.fromEntries((jobs ?? []).map((j: any) => [j.id, j.title]))
+      const jobMap  = Object.fromEntries((jobs  ?? []).map((j: any) => [j.id, j.title]))
       const userMap = Object.fromEntries((users ?? []).map((u: any) => [u.id, u.full_name]))
 
-      const enrich = (c: any) => ({
-        ...c,
-        jobTitle: jobMap[c.job_id] ?? '—',
-        panelNames: ((c.assigned_interviewers ?? []) as string[]).map((uid: string) => userMap[uid]).filter(Boolean) as string[],
-      })
+      const enrichFeedback = (f: any) => {
+        const c = candidateMap[f.candidate_id] ?? {}
+        return {
+          id: f.candidate_id,
+          full_name: (c as any).full_name ?? '—',
+          current_stage: (c as any).current_stage ?? '—',
+          interview_date: (c as any).interview_date ?? null,
+          job_id: (c as any).job_id ?? null,
+          jobTitle: jobMap[(c as any).job_id] ?? '—',
+          panelNames: (((c as any).assigned_interviewers ?? []) as string[]).map((uid: string) => userMap[uid]).filter(Boolean) as string[],
+          feedbackStage: f.stage,
+          feedbackAt: f.submitted_at,
+          reviewerName: userMap[f.interviewer_id] ?? '—',
+        }
+      }
 
-      const enriched = allCandidates.map(enrich)
-      const enrichedMap = Object.fromEntries(enriched.map((c: any) => [c.id, c]))
-
-      const rejectedList = [...latestRejMap.entries()].map(([cid, f]) => ({
-        ...(enrichedMap[cid] ?? { id: cid, full_name: '—', current_stage: '—', interview_date: null, panelNames: [], jobTitle: '—' }),
-        rejectedStage: f.stage,
-        rejectedAt: f.submitted_at,
-        rejectedByName: userMap[f.interviewer_id] ?? '—',
-      }))
+      const approvedEnriched = approvedFeedbacks.map(enrichFeedback).filter(r => candidateMap[r.id])
+      const rejectedEnriched  = rejectedFeedbacks.map(enrichFeedback)
 
       return {
-        toSchedule: enriched.filter((c: any) => !c.interview_date && INTERVIEW_STAGE_LIST.includes(c.current_stage)),
-        scheduled:  enriched.filter((c: any) =>  c.interview_date && INTERVIEW_STAGE_LIST.includes(c.current_stage)),
-        rejected:   rejectedList,
+        toSchedule: approvedEnriched.filter(r => !r.interview_date),
+        scheduled:  approvedEnriched.filter(r =>  r.interview_date),
+        rejected:   rejectedEnriched,
       }
     },
     enabled: !isInterviewer && !!user,
@@ -722,7 +722,7 @@ export function InterviewsPage() {
             const rows = rawRows.filter((r: any) => {
               if (adminSearch && !r.full_name?.toLowerCase().includes(adminSearch.toLowerCase())) return false
               if (adminJobFilter && r.job_id !== adminJobFilter) return false
-              if (adminStageFilter && r.current_stage !== adminStageFilter) return false
+              if (adminStageFilter && r.feedbackStage !== adminStageFilter) return false
               if (adminPanelFilter && !(r.panelNames ?? []).includes(adminPanelFilter)) return false
               return true
             })
@@ -734,13 +734,13 @@ export function InterviewsPage() {
                     <>
                       <UserCheck className="w-8 h-8 mb-2 text-gray-300"/>
                       <p className="text-sm font-medium text-gray-500">No interviews to schedule</p>
-                      <p className="text-xs mt-1">Active candidates in interview stages without a date will appear here.</p>
+                      <p className="text-xs mt-1">Candidates approved by interviewers will appear here.</p>
                     </>
                   ) : adminTab === 'scheduled' ? (
                     <>
                       <Calendar className="w-8 h-8 mb-2 text-gray-300"/>
                       <p className="text-sm font-medium text-gray-500">No interviews scheduled</p>
-                      <p className="text-xs mt-1">Candidates with an interview date set will appear here.</p>
+                      <p className="text-xs mt-1">Approved candidates with an interview date set will appear here.</p>
                     </>
                   ) : (
                     <>
@@ -753,68 +753,104 @@ export function InterviewsPage() {
               )
             }
 
+            // Helper: shared candidate row render
+            const CandidateRow = ({ r, showDate }: { r: any; showDate?: boolean }) => (
+              <tr key={r.id} className="hover:bg-gray-50/40 transition-colors">
+                <td className="px-4 py-3">
+                  <button onClick={() => navigate(`/candidates/${r.id}`)}
+                    className="font-medium text-blue-600 hover:underline text-left text-sm">
+                    {r.full_name}
+                  </button>
+                  {r.reviewerName && <p className="text-xs text-gray-400 mt-0.5">by {r.reviewerName}</p>}
+                </td>
+                <td className="px-4 py-3 text-xs text-gray-600">{r.jobTitle}</td>
+                <td className="px-4 py-3">
+                  <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${stageColour(r.feedbackStage ?? r.current_stage)}`}>
+                    {r.feedbackStage ?? r.current_stage}
+                  </span>
+                </td>
+                <td className="px-4 py-3 text-xs text-gray-600">
+                  {(r.panelNames ?? []).length > 0
+                    ? <div className="flex flex-wrap gap-1">{(r.panelNames as string[]).map((n: string) => (
+                        <span key={n} className="bg-indigo-50 text-indigo-700 border border-indigo-100 px-1.5 py-0.5 rounded-md text-xs">{n}</span>
+                      ))}</div>
+                    : <span className="text-gray-300">—</span>}
+                </td>
+                {showDate && (
+                  <td className="px-4 py-3 text-xs text-gray-600 whitespace-nowrap">
+                    {r.interview_date ? formatDateTime(r.interview_date) : <span className="text-gray-300">—</span>}
+                  </td>
+                )}
+                {adminTab === 'rejected' && (
+                  <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">
+                    <span className="font-medium text-red-600">{r.current_stage}</span>
+                    {r.feedbackAt && <span className="ml-1 text-gray-400">· {formatDateTime(r.feedbackAt)}</span>}
+                  </td>
+                )}
+                <td className="px-4 py-3 text-right">
+                  <button onClick={() => navigate(`/candidates/${r.id}`)}
+                    className="flex items-center gap-1 text-xs px-3 py-1.5 border border-gray-200 hover:border-blue-300 hover:text-blue-600 text-gray-600 rounded-lg transition-colors ml-auto">
+                    View <ArrowRight className="w-3 h-3"/>
+                  </button>
+                </td>
+              </tr>
+            )
+
+            const TableHead = ({ showDate }: { showDate?: boolean }) => (
+              <thead>
+                <tr className="border-b border-gray-100 bg-gray-50 text-xs text-gray-500 uppercase tracking-wide">
+                  <th className="text-left px-4 py-3 font-medium">Candidate</th>
+                  <th className="text-left px-4 py-3 font-medium">Job</th>
+                  <th className="text-left px-4 py-3 font-medium">Approved At</th>
+                  <th className="text-left px-4 py-3 font-medium">Panel</th>
+                  {showDate && <th className="text-left px-4 py-3 font-medium">Interview Date</th>}
+                  {adminTab === 'rejected' && <th className="text-left px-4 py-3 font-medium">Stage (Auto-updated)</th>}
+                  <th className="px-4 py-3 font-medium text-right">Action</th>
+                </tr>
+              </thead>
+            )
+
+            // "To be Scheduled" — split into two sub-sections
+            if (adminTab === 'to_schedule') {
+              const screeningApproved = rows.filter((r: any) => r.feedbackStage === 'Screening')
+              const interviewApproved = rows.filter((r: any) => r.feedbackStage !== 'Screening')
+              return (
+                <div className="space-y-4">
+                  {screeningApproved.length > 0 && (
+                    <div className="bg-white rounded-xl border border-blue-100 overflow-hidden">
+                      <div className="px-4 py-2.5 bg-blue-50/60 border-b border-blue-100 flex items-center gap-2">
+                        <span className="text-xs font-semibold text-blue-700 uppercase tracking-wide">Screening Approved</span>
+                        <span className="text-xs text-blue-500 bg-blue-100 px-1.5 py-0.5 rounded-full">{screeningApproved.length}</span>
+                      </div>
+                      <table className="w-full text-sm"><TableHead/><tbody className="divide-y divide-gray-50">{screeningApproved.map((r: any) => <CandidateRow key={r.id} r={r}/>)}</tbody></table>
+                    </div>
+                  )}
+                  {interviewApproved.length > 0 && (
+                    <div className="bg-white rounded-xl border border-indigo-100 overflow-hidden">
+                      <div className="px-4 py-2.5 bg-indigo-50/60 border-b border-indigo-100 flex items-center gap-2">
+                        <span className="text-xs font-semibold text-indigo-700 uppercase tracking-wide">Interview Approved</span>
+                        <span className="text-xs text-indigo-500 bg-indigo-100 px-1.5 py-0.5 rounded-full">{interviewApproved.length}</span>
+                      </div>
+                      <table className="w-full text-sm"><TableHead/><tbody className="divide-y divide-gray-50">{interviewApproved.map((r: any) => <CandidateRow key={r.id} r={r}/>)}</tbody></table>
+                    </div>
+                  )}
+                  <p className="text-xs text-gray-400 px-1">{rows.length} candidate{rows.length !== 1 ? 's' : ''} approved — set an interview date to move them to Scheduled</p>
+                </div>
+              )
+            }
+
             return (
               <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
                 <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b border-gray-100 bg-gray-50 text-xs text-gray-500 uppercase tracking-wide">
-                      <th className="text-left px-4 py-3 font-medium">Candidate</th>
-                      <th className="text-left px-4 py-3 font-medium">Job</th>
-                      <th className="text-left px-4 py-3 font-medium">Stage</th>
-                      <th className="text-left px-4 py-3 font-medium">Panel</th>
-                      {adminTab === 'scheduled' && <th className="text-left px-4 py-3 font-medium">Interview Date</th>}
-                      {adminTab === 'rejected' && <th className="text-left px-4 py-3 font-medium">Rejected At</th>}
-                      <th className="px-4 py-3 font-medium text-right">Action</th>
-                    </tr>
-                  </thead>
+                  <TableHead showDate={adminTab === 'scheduled'}/>
                   <tbody className="divide-y divide-gray-50">
-                    {rows.map((r: any) => (
-                      <tr key={r.id} className="hover:bg-gray-50/40 transition-colors">
-                        <td className="px-4 py-3">
-                          <button onClick={() => navigate(`/candidates/${r.id}`)}
-                            className="font-medium text-blue-600 hover:underline text-left text-sm">
-                            {r.full_name}
-                          </button>
-                        </td>
-                        <td className="px-4 py-3 text-xs text-gray-600">{r.jobTitle}</td>
-                        <td className="px-4 py-3">
-                          <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${stageColour(adminTab === 'rejected' ? r.rejectedStage ?? r.current_stage : r.current_stage)}`}>
-                            {adminTab === 'rejected' ? (r.rejectedStage ?? r.current_stage) : r.current_stage}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3 text-xs text-gray-600">
-                          {(r.panelNames ?? []).length > 0
-                            ? <div className="flex flex-wrap gap-1">{(r.panelNames as string[]).map((n: string) => (
-                                <span key={n} className="bg-indigo-50 text-indigo-700 border border-indigo-100 px-1.5 py-0.5 rounded-md text-xs">{n}</span>
-                              ))}</div>
-                            : <span className="text-gray-300">—</span>
-                          }
-                        </td>
-                        {adminTab === 'scheduled' && (
-                          <td className="px-4 py-3 text-xs text-gray-600 whitespace-nowrap">
-                            {r.interview_date ? formatDateTime(r.interview_date) : <span className="text-gray-300">—</span>}
-                          </td>
-                        )}
-                        {adminTab === 'rejected' && (
-                          <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">
-                            {r.rejectedAt ? formatDateTime(r.rejectedAt) : '—'}
-                            {r.rejectedByName ? <span className="ml-1 text-gray-400">by {r.rejectedByName}</span> : null}
-                          </td>
-                        )}
-                        <td className="px-4 py-3 text-right">
-                          <button onClick={() => navigate(`/candidates/${r.id}`)}
-                            className="flex items-center gap-1 text-xs px-3 py-1.5 border border-gray-200 hover:border-blue-300 hover:text-blue-600 text-gray-600 rounded-lg transition-colors ml-auto">
-                            View <ArrowRight className="w-3 h-3"/>
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
+                    {rows.map((r: any) => <CandidateRow key={r.id} r={r} showDate={adminTab === 'scheduled'}/>)}
                   </tbody>
                 </table>
                 <div className="px-4 py-2 bg-gray-50 border-t border-gray-100">
                   <p className="text-xs text-gray-400">
                     {rows.length} candidate{rows.length !== 1 ? 's' : ''}
-                    {adminTab === 'to_schedule' ? ' awaiting an interview date' : adminTab === 'scheduled' ? ' with interview scheduled' : ' rejected by interviewers'}
+                    {adminTab === 'scheduled' ? ' with interview scheduled' : ' rejected — stage auto-updated'}
                   </p>
                 </div>
               </div>
