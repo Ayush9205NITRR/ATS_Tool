@@ -23,6 +23,7 @@ import { HRTeamWidget }             from './widgets/HRTeamWidget'
 import { InterviewerScheduleWidget } from './widgets/InterviewerScheduleWidget'
 import { JobSourceBreakdownWidget } from './widgets/JobSourceBreakdownWidget'
 import { AgencyDashboardWidget }    from './widgets/AgencyDashboardWidget'
+import { HRActivityWidget }         from './widgets/HRActivityWidget'
 
 // ─── Helpers ────────────────────────────────────────────────────────
 function greeting() {
@@ -440,6 +441,9 @@ function StaffDashboard({ user, hasRole }: { user: any; hasRole: (r: string[]) =
           ))}
         </div>
       </div>
+
+      {/* ── HR Activity tracker ─────────────────────────────────── */}
+      <HRActivityWidget />
 
       {/* ── Detailed analytics (collapsible) ────────────────────── */}
       <div className="rounded-xl border border-gray-100 overflow-hidden">

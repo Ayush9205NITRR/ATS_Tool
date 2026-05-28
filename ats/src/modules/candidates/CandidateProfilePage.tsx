@@ -663,6 +663,7 @@ export function CandidateProfilePage() {
   // Stage change: always clears interview_date; resets CA data if new stage is at/before CA stage
   const handleStageChange = async (newStage: string) => {
     setStageOpen(false)
+    const fromStage = candidate.current_stage
     const newIdx = stages.indexOf(newStage)
     const updates: Record<string, any> = { current_stage: newStage, interview_date: null }
 
@@ -686,9 +687,19 @@ export function CandidateProfilePage() {
 
     const { error } = await supabase.from('candidates').update(updates).eq('id', candidate.id)
     if (error) { console.error('[stage change]', error); return }
+    // Log the stage change for HR activity tracking (fire-and-forget)
+    if (user?.id && fromStage !== newStage) {
+      supabase.rpc('log_stage_change', {
+        p_candidate_id: candidate.id,
+        p_from_stage:   fromStage,
+        p_to_stage:     newStage,
+        p_changed_by:   user.id,
+      }).then()
+    }
     qc.invalidateQueries({ queryKey: ['candidate', id] })
     qc.invalidateQueries({ queryKey: ['candidates'] })
     qc.invalidateQueries({ queryKey: ['widget'] })
+    qc.invalidateQueries({ queryKey: ['hr-activity'] })
   }
 
   // Google Drive preview: convert share URL to embedded preview
