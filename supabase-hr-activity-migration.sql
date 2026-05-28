@@ -24,10 +24,12 @@ CREATE INDEX IF NOT EXISTS idx_csh_changed_at  ON public.candidate_stage_history
 ALTER TABLE public.candidate_stage_history ENABLE ROW LEVEL SECURITY;
 
 -- HR sees only their own activity
+DROP POLICY IF EXISTS "hr_own_history" ON public.candidate_stage_history;
 CREATE POLICY "hr_own_history" ON public.candidate_stage_history
   FOR SELECT USING (changed_by = auth.uid());
 
 -- Admin / super_admin / hr_team see everything
+DROP POLICY IF EXISTS "admin_all_history" ON public.candidate_stage_history;
 CREATE POLICY "admin_all_history" ON public.candidate_stage_history
   FOR SELECT USING (
     EXISTS (
@@ -98,6 +100,6 @@ BEGIN
 END;
 $$;
 
--- Grant execute to authenticated users
-GRANT EXECUTE ON FUNCTION public.log_stage_change  TO authenticated;
-GRANT EXECUTE ON FUNCTION public.get_hr_activity   TO authenticated;
+-- Grant execute to authenticated users (explicit signatures to avoid ambiguity)
+GRANT EXECUTE ON FUNCTION public.log_stage_change(uuid, text, text, uuid) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.get_hr_activity(timestamptz, timestamptz) TO authenticated;
