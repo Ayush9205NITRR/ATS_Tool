@@ -553,10 +553,19 @@ const displayed = useMemo(() => {
   }, [displayed, groupBy, hrUsers])
 
   const updateField = useMutation({
-    mutationFn: async({id,field,value}:{id:string;field:string;value:any})=>{
+    mutationFn: async({id,field,value,fromStage}:{id:string;field:string;value:any;fromStage?:string})=>{
       const updates: Record<string,any> = { [field]: value }
       if (field === 'current_stage' && value) {
         updates.interview_date = null
+        // Log stage change for HR activity tracker (fire-and-forget)
+        if (user?.id && fromStage && fromStage !== value) {
+          supabase.rpc('log_stage_change', {
+            p_candidate_id: id,
+            p_from_stage:   fromStage,
+            p_to_stage:     value,
+            p_changed_by:   user.id,
+          }).then()
+        }
         if (caStageForCleanup) {
           const newIdx = STAGES.indexOf(value)
           const caIdx = STAGES.indexOf(caStageForCleanup)
@@ -603,9 +612,28 @@ const displayed = useMemo(() => {
 
       const { error } = await supabase.from('candidates').update(payload).in('id', ids)
       if (error) { console.error('[bulkUpdate]', field, error); throw error }
+
+      // Log bulk stage changes for HR activity tracker (fire-and-forget)
+      if (field === 'current_stage' && value && user?.id) {
+        const stageMap = Object.fromEntries(
+          (candidates as any[]).filter((c:any) => ids.includes(c.id)).map((c:any) => [c.id, c.current_stage])
+        )
+        ids.forEach(cid => {
+          const fromStage = stageMap[cid]
+          if (fromStage && fromStage !== value) {
+            supabase.rpc('log_stage_change', {
+              p_candidate_id: cid,
+              p_from_stage:   fromStage,
+              p_to_stage:     value,
+              p_changed_by:   user.id,
+            }).then()
+          }
+        })
+      }
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['candidates'] })
+      qc.invalidateQueries({ queryKey: ['hr-activity'] })
       setSelectedIds(new Set())
       setBulkField(null)
       setBulkSelectValue('')
@@ -621,7 +649,12 @@ const displayed = useMemo(() => {
     onSuccess:()=>{qc.invalidateQueries({queryKey:['candidates']});setSelectedIds(new Set())},
   })
 
-  const onUpdate  = useCallback((id:string,field:string,value:any)=>updateField.mutate({id,field,value}),[updateField])
+  const onUpdate  = useCallback((id:string,field:string,value:any)=>{
+    const fromStage = field === 'current_stage'
+      ? (candidates as any[]).find((c:any) => c.id === id)?.current_stage
+      : undefined
+    updateField.mutate({id,field,value,fromStage})
+  },[updateField, candidates])
   const toggleSel = useCallback((id:string)=>setSelectedIds(p=>{const n=new Set(p);n.has(id)?n.delete(id):n.add(id);return n}),[])
   const toggleAll = useCallback(()=>setSelectedIds(s=>s.size===displayed.length?new Set():new Set(displayed.map((c:any)=>c.id))),[displayed])
   const getName   = useCallback((list:any[], id:string|null) => {
