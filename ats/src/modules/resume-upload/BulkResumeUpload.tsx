@@ -100,6 +100,36 @@ function downloadCsv(content: string, filename: string) {
   URL.revokeObjectURL(url)
 }
 
+function buildResultsCsv(rows: ProcessedRow[]): string {
+  const esc = (v: string | null | undefined) => {
+    const s = (v ?? '').replace(/"/g, '""')
+    return s.includes(',') || s.includes('"') || s.includes('\n') ? `"${s}"` : s
+  }
+  const statusLabel: Record<RowStatus, string> = {
+    saved: 'Saved', parsed: 'Ready', parsing: 'Processing',
+    pending: 'Pending', failed: 'Failed', duplicate: 'Duplicate',
+  }
+  const header = ['#','Status','Name','Email','Phone','Current Company','Designation','LinkedIn','Source','Sub-Source','Resume URL','Notes']
+  const lines = [header.join(',')]
+  for (const r of rows) {
+    lines.push([
+      r.index + 1,
+      statusLabel[r.status],
+      esc(r.data?.full_name),
+      esc(r.data?.email),
+      esc(r.data?.phone),
+      esc(r.data?.current_company),
+      esc(r.data?.current_designation),
+      esc(r.data?.linkedin_url),
+      esc(r.csv.source),
+      esc(r.csv.sub_source),
+      esc(r.csv.resume_url),
+      esc(r.error),
+    ].join(','))
+  }
+  return lines.join('\n')
+}
+
 const STATUS_BADGE: Record<RowStatus, { bg: string; text: string; label: string }> = {
   pending:   { bg: 'bg-gray-100', text: 'text-gray-600', label: 'Pending' },
   parsing:   { bg: 'bg-blue-100', text: 'text-blue-700', label: 'Parsing...' },
@@ -141,7 +171,7 @@ export function BulkResumeUpload() {
     setProgress({ current: 0, total: rows.length })
     setStep('processing')
 
-    const CONCURRENCY = 4
+    const CONCURRENCY = 6
     let completed = 0
 
     for (let batchStart = 0; batchStart < rows.length; batchStart += CONCURRENCY) {
@@ -546,10 +576,18 @@ export function BulkResumeUpload() {
           </div>
         )}
 
-        <div className="flex justify-between items-center">
-          <Button variant="secondary" onClick={resetAll} icon={<RefreshCw className="w-4 h-4" />}>
-            Start over
-          </Button>
+        <div className="flex justify-between items-center flex-wrap gap-2">
+          <div className="flex items-center gap-2">
+            <Button variant="secondary" onClick={resetAll} icon={<RefreshCw className="w-4 h-4" />}>
+              Start over
+            </Button>
+            <button
+              onClick={() => downloadCsv(buildResultsCsv(processedRows), `resume_results_${new Date().toISOString().slice(0,10)}.csv`)}
+              className="flex items-center gap-1.5 text-xs text-blue-600 hover:text-blue-700 font-medium px-3 py-2 border border-blue-200 rounded-lg hover:bg-blue-50 transition-colors"
+            >
+              <Download className="w-3.5 h-3.5"/> Download results CSV
+            </button>
+          </div>
           <div className="text-right">
             {(failedRows.length > 0 || dupRows.length > 0) && (
               <p className="text-xs text-gray-500 mb-1">
@@ -574,16 +612,30 @@ export function BulkResumeUpload() {
   }
 
   // Done step
+  const savedRows   = processedRows.filter(r => r.status === 'saved')
   return (
-    <div className="flex flex-col items-center justify-center py-12 px-6 gap-3">
+    <div className="flex flex-col items-center justify-center py-12 px-6 gap-4">
       <CheckCircle className="w-12 h-12 text-green-500" />
       <p className="text-lg font-semibold text-gray-900">Bulk Upload Complete!</p>
-      <p className="text-sm text-gray-500">
-        {parsedRows.length} candidate{parsedRows.length !== 1 ? 's' : ''} saved.
-        {failedRows.length > 0 && ` ${failedRows.length} failed.`}
-        {dupRows.length > 0 && ` ${dupRows.length} duplicates skipped.`}
-      </p>
-      <Button variant="secondary" onClick={resetAll}>Upload another batch</Button>
+      <div className="flex items-center gap-4 text-sm text-center">
+        <span className="text-green-700 font-semibold">{savedRows.length} saved</span>
+        {dupRows.length > 0 && <span className="text-yellow-600">{dupRows.length} duplicate{dupRows.length > 1 ? 's' : ''}</span>}
+        {failedRows.length > 0 && <span className="text-red-600">{failedRows.length} failed</span>}
+      </div>
+      {(dupRows.length > 0 || failedRows.length > 0) && (
+        <p className="text-xs text-gray-400 text-center max-w-xs">
+          Download the results CSV to see which candidates failed or were duplicates — fix and re-import.
+        </p>
+      )}
+      <div className="flex gap-3 flex-wrap justify-center">
+        <button
+          onClick={() => downloadCsv(buildResultsCsv(processedRows), `resume_results_${new Date().toISOString().slice(0,10)}.csv`)}
+          className="flex items-center gap-1.5 text-sm text-blue-600 hover:text-blue-700 font-medium px-4 py-2 border border-blue-200 rounded-lg hover:bg-blue-50 transition-colors"
+        >
+          <Download className="w-4 h-4"/> Download results CSV
+        </button>
+        <Button variant="secondary" onClick={resetAll}>Upload another batch</Button>
+      </div>
     </div>
   )
 }
