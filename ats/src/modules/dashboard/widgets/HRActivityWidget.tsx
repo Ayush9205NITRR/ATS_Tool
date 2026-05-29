@@ -115,7 +115,7 @@ export function HRActivityWidget() {
         <div className="flex-1 px-5 py-3">
           <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400 mb-1">Interviews Scheduled</p>
           <p className="text-[22px] font-bold text-gray-900 tabular-nums leading-none">{isLoading ? '—' : totals.interviews}</p>
-          <p className="text-[11px] text-gray-400 mt-0.5">Moved to R1 / R2 / R3 / CF</p>
+          <p className="text-[11px] text-gray-400 mt-0.5">First entry into interview rounds</p>
         </div>
       </div>
 
@@ -187,7 +187,7 @@ export function HRActivityWidget() {
       {/* Footer note */}
       <div className="px-4 py-2.5 border-t border-gray-50 bg-gray-50/30">
         <p className="text-[10px] text-gray-300">
-          Screened = moved from Applied stage. Interviews = moved to R1/R2/R3/CF rounds. Moves = all stage changes.
+          Screened = moved forward from Applied (excludes direct rejections). Interviews = entered interview pipeline for the first time. Moves = all stage changes.
         </p>
       </div>
     </div>

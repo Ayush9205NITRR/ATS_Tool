@@ -83,10 +83,14 @@ BEGIN
   SELECT
     h.changed_by,
     u.full_name,
-    COUNT(*)            FILTER (WHERE h.from_stage = 'Applied')::bigint              AS screened,
-    COUNT(*)            FILTER (WHERE h.to_stage IN (
-                          'R1','R2','R3','CF (Virtual)','CF (In-Person)'
-                        ))::bigint                                                    AS interviews,
+    -- Screened = moved OUT of Applied to a forward stage (not rejected/withdrawn directly)
+    COUNT(*)            FILTER (WHERE h.from_stage = 'Applied'
+                          AND h.to_stage NOT IN ('Rejected','Withdrawn')
+                        )::bigint                                                    AS screened,
+    -- Interviews = first entry into an interview round (not an inter-round promotion like R1→R2)
+    COUNT(*)            FILTER (WHERE h.to_stage IN ('R1','R2','R3','CF (Virtual)','CF (In-Person)')
+                          AND h.from_stage NOT IN ('R1','R2','R3','CF (Virtual)','CF (In-Person)')
+                        )::bigint                                                    AS interviews,
     COUNT(*)::bigint                                                                  AS total_moves
   FROM public.candidate_stage_history h
   LEFT JOIN public.users u ON u.id = h.changed_by
