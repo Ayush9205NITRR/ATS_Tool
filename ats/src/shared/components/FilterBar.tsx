@@ -1,5 +1,5 @@
 import React from 'react'
-import { X, Plus } from 'lucide-react'
+import { X, Plus, Filter, Trash2 } from 'lucide-react'
 import { INTERVIEW_STAGES } from '../../types/database.types'
 
 // ── Types ─────────────────────────────────────────────────────
@@ -96,7 +96,90 @@ const OPS_FOR: Record<FieldType, { op: FilterOp; label: string }[]> = {
 
 const SOURCES = ['platform', 'agency', 'college']
 
-// ── Apply filters ──────────────────────────────────────────────
+// ── Option + label resolution (shared by FilterBar & FilterChips) ──
+export interface FilterContext {
+  jobs?: { id: string; title: string }[]
+  interviewers?: { id: string; full_name: string }[]
+  hrUsers?: { id: string; full_name: string }[]
+  stages?: string[]
+  customFieldDefs?: CustomFieldDef[]
+}
+
+function resolveOptions(field: string, ctx: FilterContext): { label: string; value: string }[] {
+  if (field === 'current_stage')   return (ctx.stages ?? (INTERVIEW_STAGES as unknown as string[])).map(s => ({ label: s, value: s }))
+  if (field === 'source_category') return SOURCES.map(s => ({ label: s.charAt(0).toUpperCase() + s.slice(1), value: s }))
+  if (field === 'job_id')          return (ctx.jobs ?? []).map(j => ({ label: j.title, value: j.id }))
+  if (field === 'interviewer_id')  return (ctx.interviewers ?? []).map(u => ({ label: u.full_name, value: u.id }))
+  if (field === 'hr_owner')        return (ctx.hrUsers ?? []).map(u => ({ label: u.full_name, value: u.id }))
+  return []
+}
+
+function fieldType(field: string, customFieldDefs: CustomFieldDef[] = []): FieldType {
+  const sys = SYSTEM_FIELDS.find(f => f.key === field)
+  if (sys) return sys.type
+  const cf = customFieldDefs.find(c => `cf_${c.field_name}` === field)
+  if (cf) return cf.field_type === 'number' ? 'number' : cf.field_type === 'date' ? 'datetime' : cf.field_type === 'boolean' ? 'boolean' : 'text'
+  return 'text'
+}
+
+function fieldLabel(field: string, customFieldDefs: CustomFieldDef[] = []): string {
+  const sys = SYSTEM_FIELDS.find(f => f.key === field)
+  if (sys) return sys.label
+  const cf = customFieldDefs.find(c => `cf_${c.field_name}` === field)
+  return cf?.field_label ?? field
+}
+
+const NO_VALUE_OPS = ['is_empty','is_not_empty','date_within_week','date_within_month','is_checked','is_unchecked']
+
+// Human-readable one-line summary of a single filter, e.g. "Stage: R1, R2"
+export function describeFilter(f: ActiveFilter, ctx: FilterContext): string {
+  const label = fieldLabel(f.field, ctx.customFieldDefs)
+  const type  = fieldType(f.field, ctx.customFieldDefs)
+  const ops   = OPS_FOR[type] ?? OPS_FOR.text
+  const opLbl = ops.find(o => o.op === f.op)?.label ?? f.op
+  if (NO_VALUE_OPS.includes(f.op)) return `${label} ${opLbl}`
+  if (f.op === 'is_any_of' || f.op === 'is_none_of') {
+    const opts = resolveOptions(f.field, ctx)
+    const names = f.values.map(v => opts.find(o => o.value === v)?.label ?? v)
+    const shown = names.slice(0, 3).join(', ') + (names.length > 3 ? ` +${names.length - 3}` : '')
+    return `${label}: ${shown || 'none'}`
+  }
+  const opts = resolveOptions(f.field, ctx)
+  const valLbl = opts.length ? (opts.find(o => o.value === f.value)?.label ?? f.value) : f.value
+  return `${label} ${opLbl} ${valLbl || '…'}`
+}
+
+// ── Active-filter chips — at-a-glance, individually removable ──
+interface ChipsProps extends FilterContext {
+  filters: ActiveFilter[]
+  onChange: (f: ActiveFilter[]) => void
+  mode?: FilterMode
+  onClear?: () => void
+}
+export function FilterChips({ filters, onChange, mode, onClear, ...ctx }: ChipsProps) {
+  if (!filters.length) return null
+  const remove = (id: string) => onChange(filters.filter(f => f.id !== id))
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      {filters.map((f, i) => (
+        <React.Fragment key={f.id}>
+          {i > 0 && <span className="text-[10px] font-bold uppercase tracking-wide text-gray-300">{mode ?? 'and'}</span>}
+          <span className="inline-flex items-center gap-1 pl-2.5 pr-1 py-1 rounded-full bg-indigo-50 text-indigo-700 text-xs font-medium border border-indigo-100 max-w-[260px]">
+            <span className="truncate">{describeFilter(f, ctx)}</span>
+            <button onClick={() => remove(f.id)} className="flex-shrink-0 rounded-full p-0.5 hover:bg-indigo-200/60 transition-colors" title="Remove filter">
+              <X className="w-3 h-3"/>
+            </button>
+          </span>
+        </React.Fragment>
+      ))}
+      {onClear && filters.length > 1 && (
+        <button onClick={onClear} className="text-xs text-gray-400 hover:text-gray-600 px-1.5 py-1 rounded-lg hover:bg-gray-100 transition-colors">
+          Clear all
+        </button>
+      )}
+    </div>
+  )
+}
 
 // ── Apply filters ──────────────────────────────────────────────
 export function applyFilters(
@@ -250,35 +333,43 @@ export function FilterBar({ filters, onChange, jobs, interviewers, hrUsers, mode
     upd(id, { values: f.values.includes(val) ? f.values.filter(v => v !== val) : [...f.values, val] })
   }
 
-  const getOpts = (field: string) => {
-    if (field === 'current_stage')   return (stages ?? INTERVIEW_STAGES as unknown as string[]).map(s => ({ label: s, value: s }))
-    if (field === 'source_category') return SOURCES.map(s => ({ label: s.charAt(0).toUpperCase()+s.slice(1), value: s }))
-    if (field === 'job_id')          return jobs.map(j => ({ label: j.title, value: j.id }))
-    if (field === 'interviewer_id')  return interviewers.map(u => ({ label: u.full_name, value: u.id }))
-    if (field === 'hr_owner')        return hrUsers.map(u => ({ label: u.full_name, value: u.id }))
-    return []
-  }
+  const getOpts = (field: string) => resolveOptions(field, { jobs, interviewers, hrUsers, stages })
 
-  const inputCls = 'flex-1 px-2.5 py-1.5 border border-gray-200 rounded-lg text-xs bg-white focus:outline-none focus:ring-2 focus:ring-blue-400'
+  const inputCls = 'flex-1 min-w-0 px-2.5 py-1.5 border border-gray-200 rounded-lg text-xs bg-white focus:outline-none focus:ring-2 focus:ring-indigo-400'
 
   return (
-    <div className="bg-white border border-gray-200 rounded-xl shadow-xl p-4 z-50" style={{ width: '540px' }}>
+    <div className="bg-white border border-gray-200 rounded-xl shadow-xl p-4 z-50 w-[min(540px,calc(100vw-1.5rem))]">
       {/* Header */}
-      <div className="flex items-center justify-between mb-3">
+      <div className="flex items-center justify-between gap-2 mb-3">
         <p className="text-xs font-bold text-gray-400 uppercase tracking-wider">Filter Candidates</p>
-        {filters.length > 1 && (
-          <div className="flex items-center gap-1 bg-gray-100 p-0.5 rounded-lg">
-            {(['and','or'] as FilterMode[]).map(m => (
-              <button key={m} onClick={() => onModeChange(m)}
-                className={`px-3 py-1 rounded-md text-xs font-bold uppercase transition-all ${
-                  mode === m ? 'bg-white shadow text-gray-800' : 'text-gray-400 hover:text-gray-600'
-                }`}>{m}</button>
-            ))}
-          </div>
-        )}
+        <div className="flex items-center gap-2">
+          {filters.length > 1 && (
+            <div className="flex items-center gap-1 bg-gray-100 p-0.5 rounded-lg">
+              {(['and','or'] as FilterMode[]).map(m => (
+                <button key={m} onClick={() => onModeChange(m)}
+                  className={`px-3 py-1 rounded-md text-xs font-bold uppercase transition-all ${
+                    mode === m ? 'bg-white shadow text-gray-800' : 'text-gray-400 hover:text-gray-600'
+                  }`}>{m}</button>
+              ))}
+            </div>
+          )}
+          {filters.length > 0 && (
+            <button onClick={() => onChange([])} title="Clear all filters"
+              className="flex items-center gap-1 text-xs text-gray-400 hover:text-red-500 transition-colors p-1 rounded-lg hover:bg-red-50">
+              <Trash2 className="w-3.5 h-3.5"/>
+            </button>
+          )}
+        </div>
       </div>
 
-      {!filters.length && <p className="text-xs text-gray-400 mb-3">No filters yet. Click + Add filter.</p>}
+      {!filters.length && (
+        <div className="flex flex-col items-center gap-2 py-6 text-center">
+          <div className="w-9 h-9 rounded-full bg-gray-50 flex items-center justify-center">
+            <Filter className="w-4 h-4 text-gray-300"/>
+          </div>
+          <p className="text-xs text-gray-400 max-w-[220px]">No filters yet — add one to narrow down the list.</p>
+        </div>
+      )}
 
       <div className="space-y-3 max-h-96 overflow-y-auto pr-1">
         {filters.map((f, idx) => {
@@ -369,7 +460,7 @@ export function FilterBar({ filters, onChange, jobs, interviewers, hrUsers, mode
                     return (
                       <button key={o.value} onClick={() => togglePill(f.id, o.value)}
                         className={`px-2.5 py-1 rounded-full text-xs font-medium border transition-all ${
-                          sel ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-200 hover:border-blue-300'
+                          sel ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-gray-600 border-gray-200 hover:border-indigo-300'
                         }`}>
                         {o.label}
                       </button>
@@ -386,7 +477,7 @@ export function FilterBar({ filters, onChange, jobs, interviewers, hrUsers, mode
       </div>
 
       <button onClick={add}
-        className="mt-3 flex items-center gap-1.5 text-xs text-blue-600 hover:text-blue-700 font-medium">
+        className="mt-3 flex items-center gap-1.5 text-xs text-indigo-600 hover:text-indigo-700 font-medium">
         <Plus className="w-3.5 h-3.5"/> Add filter
       </button>
     </div>

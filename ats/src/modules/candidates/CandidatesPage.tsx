@@ -21,7 +21,7 @@ import { PageHeader } from '../../shared/components/PageHeader'
 import { Button } from '../../shared/components/Button'
 import { EmptyState } from '../../shared/components/EmptyState'
 import { Modal } from '../../shared/components/Modal'
-import { FilterBar, applyFilters } from '../../shared/components/FilterBar'
+import { FilterBar, FilterChips, applyFilters } from '../../shared/components/FilterBar'
 import type { ActiveFilter } from '../../shared/components/FilterBar'
 import { useAuthStore } from '../auth/authStore'
 import { supabase } from '../../lib/supabaseClient'
@@ -509,8 +509,10 @@ export function CandidatesPage() {
 
   useEffect(() => {
     const fn = (e:MouseEvent) => { if (filterRef.current && !filterRef.current.contains(e.target as Node)) setShowFilterBar(false) }
+    const esc = (e:KeyboardEvent) => { if (e.key === 'Escape') setShowFilterBar(false) }
     document.addEventListener('mousedown', fn)
-    return () => document.removeEventListener('mousedown', fn)
+    document.addEventListener('keydown', esc)
+    return () => { document.removeEventListener('mousedown', fn); document.removeEventListener('keydown', esc) }
   }, [])
 
   const sensors = useSensors(
@@ -729,7 +731,7 @@ const displayed = useMemo(() => {
         title={showArchived?'Archived':'Candidates'}
         subtitle={`${displayed.length} candidate${displayed.length!==1?'s':''}${selectedIds.size>0?` · ${selectedIds.size} selected`:''}`}
         action={
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <button onClick={()=>{setShowArchived(a=>!a);setSelectedIds(new Set())}}
               className={`flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg border transition-all ${showArchived?'bg-amber-50 border-amber-200 text-amber-700':'border-gray-200 text-gray-600 hover:border-gray-300 hover:bg-gray-50'}`}>
               <Archive className="w-3.5 h-3.5"/>
@@ -922,21 +924,21 @@ const displayed = useMemo(() => {
         }
       />
 
-      <div className="flex items-center gap-2">
-        <div className="relative flex-1 max-w-xs">
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="relative flex-1 min-w-[160px] max-w-xs">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400"/>
           <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search name or email…"
-            className="w-full pl-9 pr-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"/>
+            className="w-full pl-9 pr-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"/>
         </div>
 
         <div ref={filterRef} className="relative">
           <button onClick={()=>setShowFilterBar(o=>!o)}
-            className={`flex items-center gap-1.5 px-3 py-2 text-sm rounded-lg border transition-all ${activeFilters.length>0?'bg-blue-600 text-white border-blue-600 hover:bg-blue-700':'border-gray-200 text-gray-600 hover:border-gray-300 hover:bg-gray-50'}`}>
+            className={`flex items-center gap-1.5 px-3 py-2 text-sm rounded-lg border transition-all ${activeFilters.length>0?'bg-indigo-600 text-white border-indigo-600 hover:bg-indigo-700':'border-gray-200 text-gray-600 hover:border-gray-300 hover:bg-gray-50'}`}>
             <Filter className="w-3.5 h-3.5"/>
             {activeFilters.length>0?`${activeFilters.length} filter${activeFilters.length>1?'s':''}` : 'Filter'}
           </button>
           {showFilterBar&&(
-            <div className="absolute left-0 top-full mt-1.5 z-50">
+            <div className="absolute left-0 top-full mt-1.5 z-50 max-w-[calc(100vw-1rem)]">
               <FilterBar filters={activeFilters} onChange={setActiveFilters}
                 jobs={jobs as any[]}
                 interviewers={isAgency ? [] : interviewers as any[]}
@@ -952,7 +954,7 @@ const displayed = useMemo(() => {
         </div>
 
         <select value={serverFilters.job_id??''} onChange={e=>setServerFilters(p=>({...p,job_id:e.target.value||undefined}))}
-          className="px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-600">
+          className="px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500 text-gray-600 max-w-[180px]">
           <option value="">All jobs</option>
           {(jobs as any[]).map(j=><option key={j.id} value={j.id}>{j.title}</option>)}
         </select>
@@ -964,6 +966,23 @@ const displayed = useMemo(() => {
           </button>
         )}
       </div>
+
+      {/* Active-filter chips — see & remove filters at a glance */}
+      {activeFilters.length>0 && (
+        <FilterChips
+          filters={activeFilters}
+          onChange={setActiveFilters}
+          onClear={()=>setActiveFilters([])}
+          mode={filterMode}
+          jobs={jobs as any[]}
+          interviewers={isAgency ? [] : interviewers as any[]}
+          hrUsers={isAgency ? [] : hrUsers as any[]}
+          stages={STAGES}
+          customFieldDefs={(customFields as any[])
+            .filter((f:any) => !isAgency || f.show_to_agency !== false)
+            .map(f=>({field_name:f.field_name,field_label:f.field_label,field_type:f.field_type}))}
+        />
+      )}
 
       {isLoading ? (
         <div className="flex justify-center py-16"><Loader2 className="w-5 h-5 animate-spin text-gray-400"/></div>

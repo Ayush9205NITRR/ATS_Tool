@@ -119,45 +119,66 @@ export function InterviewsPage() {
   const { data, isLoading, refetch } = useQuery({
     queryKey: ['my-interviews', user?.id],
     queryFn: async () => {
-      // Fetch all candidates assigned to me
-      const { data: candidates, error: cErr } = await supabase
+      // Fetch all feedback submitted by this interviewer (not limited to current assignments)
+      const { data: feedback, error: fErr } = await supabase
+        .from('interview_feedback')
+        .select('candidate_id, submitted_at, recommendation')
+        .eq('interviewer_id', user!.id)
+      if (fErr) throw fErr
+
+      const doneMap = new Map((feedback ?? []).map(f => [f.candidate_id, f.submitted_at as string]))
+      const recMap  = new Map((feedback ?? []).map(f => [f.candidate_id, f.recommendation as string]))
+      const feedbackIds = new Set((feedback ?? []).map(f => f.candidate_id))
+
+      // Fetch currently assigned candidates (drives the "pending" tab)
+      const { data: assignedCandidates, error: cErr } = await supabase
         .from('candidates')
         .select('id, full_name, current_stage, interview_date, job_id')
         .contains('assigned_interviewers', [user!.id])
         .eq('status', 'active')
-
       if (cErr) throw cErr
 
-      // Fetch job titles separately (no join needed)
-      const jobIds = [...new Set((candidates ?? []).map(c => c.job_id).filter(Boolean))]
+      // Fetch extra candidates that only have feedback records (no longer in assigned panel)
+      // so the interviewer can still navigate to them and edit their feedback
+      const assignedIds = new Set((assignedCandidates ?? []).map(c => c.id))
+      const extraIds = [...feedbackIds].filter(id => !assignedIds.has(id))
+      let extraCandidates: any[] = []
+      if (extraIds.length) {
+        const { data: ec } = await supabase
+          .from('candidates')
+          .select('id, full_name, current_stage, interview_date, job_id')
+          .in('id', extraIds)
+        extraCandidates = ec ?? []
+      }
+
+      const allCandidates = [...(assignedCandidates ?? []), ...extraCandidates]
+
+      // Build job titles map across all candidates
+      const jobIds = [...new Set(allCandidates.map(c => c.job_id).filter(Boolean))]
       const jobsMap: Record<string, string> = {}
       if (jobIds.length) {
         const { data: jobs } = await supabase.from('jobs').select('id,title').in('id', jobIds)
         ;(jobs ?? []).forEach(j => { jobsMap[j.id] = j.title })
       }
 
-      // Attach job title + id to each candidate
-      const candidatesWithJob = (candidates ?? []).map(c => ({
+      const withJob = (cs: any[]) => cs.map(c => ({
         ...c,
         job: c.job_id ? { id: c.job_id, title: jobsMap[c.job_id] ?? null } : null,
       }))
 
-      // Fetch my submitted feedback
-      const { data: feedback, error: fErr } = await supabase
-        .from('interview_feedback')
-        .select('candidate_id, submitted_at')
-        .eq('interviewer_id', user!.id)
+      const assignedWithJob = withJob(assignedCandidates ?? [])
+      const allWithJob      = withJob(allCandidates)
 
-      if (fErr) throw fErr
+      // Stages that count as "active" — pending candidates must be in one of these
+      const ACTIVE_STAGES = new Set(['Screening', 'R1', 'Case Study', 'R2', 'R3', 'CF (Virtual)', 'CF (In-Person)'])
 
-      const doneMap = new Map((feedback ?? []).map(f => [f.candidate_id, f.submitted_at as string]))
-
-      // Pending/submitted must use the enriched list so the Job column renders
       return {
-        all: candidatesWithJob,
+        all:   assignedWithJob,
         doneMap,
-        pending:   candidatesWithJob.filter(c => !doneMap.has(c.id)),
-        submitted: candidatesWithJob.filter(c =>  doneMap.has(c.id)),
+        // Pending: assigned, not yet reviewed, still in an active interview stage
+        pending:   assignedWithJob.filter(c => !doneMap.has(c.id) && ACTIVE_STAGES.has(c.current_stage)),
+        // Submitted: candidates this interviewer approved ("yes") — includes ex-assigned so they can edit
+        submitted: allWithJob.filter(c => recMap.get(c.id) === 'yes'),
       }
     },
     enabled: !!user,

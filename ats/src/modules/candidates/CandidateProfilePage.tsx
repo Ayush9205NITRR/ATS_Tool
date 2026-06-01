@@ -569,16 +569,37 @@ export function CandidateProfilePage() {
   const isInCostApprovalEarly = stageKeyOf(candidate.current_stage) === stageKeyOf(costApprovalStageName)
   const isCAPanel = costApprovalPanelIds.includes(user?.id ?? '')
 
+  // interviewNotes needed by visibleNotesSections (must precede it)
+  const interviewNotes = (candidate as any).interview_notes ?? {}
+
   const visibleNotesSections = (() => {
     // CA panel members at cost approval stage: show ALL reached stages as context
     if (isInterviewer && isCAPanel && hasReachedOrPassedCAEarly) {
       return ALL_NOTES_SECTIONS.filter(s => reachedStageKeys.has(s.key))
     }
     if (isInterviewer) {
-      // Regular interviewers see ONLY their current stage
-      const key = stageKeyOf(candidate.current_stage)
-      const match = ALL_NOTES_SECTIONS.find(s => s.key === key)
-      return match ? [match] : []
+      const isOnCurrentPanel = ((candidate as any).assigned_interviewers ?? []).includes(user?.id ?? '')
+      const currentKey = stageKeyOf(candidate.current_stage)
+
+      // Always include sections where this interviewer has existing notes — so they can always edit
+      const myNotesSections = ALL_NOTES_SECTIONS.filter(({ key }) =>
+        (interviewNotes[key] ?? []).some((e: NoteEntry) => e.authorId === user?.id)
+      )
+
+      if (isOnCurrentPanel) {
+        // On panel: show past notes sections + current stage section (for new notes)
+        const currentSection = ALL_NOTES_SECTIONS.find(s => s.key === currentKey)
+        const map = new Map(myNotesSections.map(s => [s.key, s]))
+        if (currentSection) map.set(currentKey, currentSection)
+        return Array.from(map.values())
+      }
+
+      // Not on current panel (e.g., R1 interviewer after candidate advanced to R2):
+      // show only sections with their existing notes so they can still edit
+      if (myNotesSections.length > 0) return myNotesSections
+      // Fallback for first visit before any notes are written
+      const fallback = ALL_NOTES_SECTIONS.find(s => s.key === currentKey)
+      return fallback ? [fallback] : []
     }
     // HR and admin/super: show reached stages only (progressive reveal as candidate advances)
     return ALL_NOTES_SECTIONS.filter(s => reachedStageKeys.has(s.key))
@@ -599,8 +620,7 @@ export function CandidateProfilePage() {
     return fmt[sectionKey] ?? []
   }
 
-  // interviewNotes must be declared before visibleNotesSections (HR branch uses it)
-  const interviewNotes = (candidate as any).interview_notes ?? {}
+  // interviewNotes declared above (before visibleNotesSections)
 
   // History stages: every pipeline stage except cost approval itself
   const HISTORY_STAGES: { key: string; label: string }[] = stages
@@ -1446,8 +1466,9 @@ export function CandidateProfilePage() {
                       </div>
                     )}
 
-                    {/* Input */}
-                    {canAddNotes && (!isHR || key === 'screening') && (
+                    {/* Input — interviewers can only add notes on current stage while on panel */}
+                    {canAddNotes && (!isHR || key === 'screening') &&
+                      (!isInterviewer || (key === stageKeyOf(candidate.current_stage) && assignedInterviewers.includes(user?.id ?? ''))) && (
                       <div className="flex gap-2 items-end pb-3 pl-3.5">
                         <textarea rows={3} value={draft}
                           onChange={e => setDraftNotes(p => ({ ...p, [key]: e.target.value }))}
@@ -1460,7 +1481,7 @@ export function CandidateProfilePage() {
                         </button>
                       </div>
                     )}
-                    {entries.length === 0 && !(canAddNotes && (!isHR || key === 'screening')) && (
+                    {entries.length === 0 && !(canAddNotes && (!isHR || key === 'screening') && (!isInterviewer || (key === stageKeyOf(candidate.current_stage) && assignedInterviewers.includes(user?.id ?? '')))) && (
                       <p className="text-xs text-gray-400 pl-3.5 pb-3 italic">No notes yet.</p>
                     )}
                   </div>

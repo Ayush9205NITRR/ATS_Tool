@@ -12,13 +12,11 @@ import {
 import { supabase } from '../../lib/supabaseClient'
 import { useAuthStore } from '../auth/authStore'
 import { useStages as useStagesHook } from '../../shared/hooks/useStages'
-import { formatRelative, formatDateTime } from '../../shared/utils/helpers'
 
 // Existing widgets — used in collapsible "Detailed Analytics"
 import { SourceFunnelWidget }       from './widgets/SourceFunnelWidget'
 import { FunnelStagesWidget }       from './widgets/FunnelStagesWidget'
 import { JobBreakdownWidget }       from './widgets/JobBreakdownWidget'
-import { SubSourcePipelineWidget }  from './widgets/SubSourcePipelineWidget'
 import { HRTeamWidget }             from './widgets/HRTeamWidget'
 import { InterviewerScheduleWidget } from './widgets/InterviewerScheduleWidget'
 import { JobSourceBreakdownWidget } from './widgets/JobSourceBreakdownWidget'
@@ -151,15 +149,6 @@ function StaffDashboard({ user, hasRole }: { user: any; hasRole: (r: string[]) =
     staleTime: 60_000,
   })
 
-  const { data: jobs = [] } = useQuery({
-    queryKey: ['dash-jobs-list'],
-    queryFn: async () => {
-      const { data } = await supabase.from('jobs').select('id,title').eq('status', 'open')
-      return (data ?? []) as { id: string; title: string }[]
-    },
-    staleTime: 60_000,
-  })
-
   const { data: caSettings } = useQuery({
     queryKey: ['app-settings', 'cost_approval'],
     queryFn: async () => {
@@ -224,14 +213,6 @@ function StaffDashboard({ user, hasRole }: { user: any; hasRole: (r: string[]) =
   const hireRate = useMemo(() => {
     return candidates.length ? Math.round((hired.length / candidates.length) * 100) : 0
   }, [candidates, hired])
-
-  const jobsMap = useMemo(() => Object.fromEntries(jobs.map((j: any) => [j.id, j.title])), [jobs])
-
-  const recentCandidates = useMemo(() =>
-    [...candidates].sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
-      .slice(0, 6).map((c: any) => ({ ...c, jobTitle: jobsMap[c.job_id] ?? null })),
-    [candidates, jobsMap]
-  )
 
   // Needs attention
   const pendingCA = useMemo(() => active.filter((c: any) => {
@@ -413,35 +394,6 @@ function StaffDashboard({ user, hasRole }: { user: any; hasRole: (r: string[]) =
         ))}
       </div>
 
-      {/* ── Recent candidates ────────────────────────────────────── */}
-      <div className="bg-white rounded-xl border border-gray-100 overflow-hidden">
-        <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-50">
-          <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400">Recent additions</p>
-          <button onClick={() => navigate('/candidates')}
-            className="flex items-center gap-0.5 text-[11px] text-indigo-500 hover:text-indigo-700 transition-colors">
-            View all <ArrowUpRight className="w-3 h-3"/>
-          </button>
-        </div>
-        <div className="divide-y divide-gray-50">
-          {recentCandidates.length === 0 ? (
-            <p className="text-[12px] text-gray-400 text-center py-6">No candidates yet</p>
-          ) : recentCandidates.map((c: any) => (
-            <button key={c.id} onClick={() => navigate(`/candidates/${c.id}`)}
-              className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-gray-50/60 transition-colors text-left group">
-              <div className="w-7 h-7 rounded-full bg-indigo-100 flex items-center justify-center flex-shrink-0">
-                <span className="text-[10px] font-bold text-indigo-600">{c.full_name.charAt(0).toUpperCase()}</span>
-              </div>
-              <span className="flex-1 text-[13px] font-medium text-gray-800 truncate group-hover:text-indigo-700 transition-colors">{c.full_name}</span>
-              <span className="text-[12px] text-gray-400 truncate max-w-[140px] hidden md:block">{c.jobTitle ?? '—'}</span>
-              <span className={`text-[10px] px-2 py-0.5 rounded font-semibold flex-shrink-0 ${stagePill(c.current_stage, stageConfigs)}`}>
-                {c.current_stage}
-              </span>
-              <span className="text-[11px] text-gray-300 flex-shrink-0 hidden sm:block w-16 text-right">{formatRelative(c.created_at)}</span>
-            </button>
-          ))}
-        </div>
-      </div>
-
       {/* ── HR Activity tracker ─────────────────────────────────── */}
       <HRActivityWidget />
 
@@ -463,7 +415,6 @@ function StaffDashboard({ user, hasRole }: { user: any; hasRole: (r: string[]) =
             </div>
             <JobBreakdownWidget />
             <JobSourceBreakdownWidget />
-            {isAdmin && <SubSourcePipelineWidget />}
             {isAdmin && <InterviewerScheduleWidget />}
             {isSuper && <HRTeamWidget />}
           </div>

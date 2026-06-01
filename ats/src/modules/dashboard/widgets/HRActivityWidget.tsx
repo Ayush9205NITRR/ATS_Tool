@@ -3,7 +3,7 @@
 // ============================================================
 import { useState, useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { UserCheck, Calendar, BarChart2, Loader2 } from 'lucide-react'
+import { UserCheck, BarChart2, Loader2, AlertTriangle } from 'lucide-react'
 import { supabase } from '../../../lib/supabaseClient'
 import { useAuthStore } from '../../auth/authStore'
 
@@ -59,7 +59,12 @@ export function HRActivityWidget() {
     },
     enabled: !!user,
     staleTime: 30_000,
+    retry: false,
   })
+
+  // Detect "RPC not deployed yet" (migration not run) vs a real failure
+  const errMsg = (error as any)?.message ?? ''
+  const setupNeeded = /get_hr_activity|function|does not exist|schema cache|PGRST202|404/i.test(errMsg)
 
   const PERIODS: { key: Period; label: string }[] = [
     { key: 'today', label: 'Today'      },
@@ -110,7 +115,7 @@ export function HRActivityWidget() {
         <div className="flex-1 px-5 py-3">
           <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400 mb-1">Interviews Scheduled</p>
           <p className="text-[22px] font-bold text-gray-900 tabular-nums leading-none">{isLoading ? '—' : totals.interviews}</p>
-          <p className="text-[11px] text-gray-400 mt-0.5">Moved to R1 / R2 / R3 / CF</p>
+          <p className="text-[11px] text-gray-400 mt-0.5">First entry into interview rounds</p>
         </div>
       </div>
 
@@ -120,7 +125,18 @@ export function HRActivityWidget() {
           <Loader2 className="w-4 h-4 animate-spin text-gray-300"/>
         </div>
       ) : error ? (
-        <p className="text-[12px] text-red-400 text-center py-6">Could not load activity data</p>
+        setupNeeded ? (
+          <div className="flex flex-col items-center py-8 gap-2 px-6">
+            <AlertTriangle className="w-6 h-6 text-amber-400"/>
+            <p className="text-[12px] font-medium text-gray-600">Tracker not set up yet</p>
+            <p className="text-[11px] text-gray-400 text-center max-w-[340px] leading-relaxed">
+              Run the migration <code className="text-[10px] bg-gray-100 px-1 py-0.5 rounded text-gray-600">supabase-hr-activity-migration.sql</code> in
+              your Supabase SQL editor to enable activity logging. Stage changes will be tracked from that point onward.
+            </p>
+          </div>
+        ) : (
+          <p className="text-[12px] text-red-400 text-center py-6">Could not load activity data</p>
+        )
       ) : data.length === 0 ? (
         <div className="flex flex-col items-center py-8 gap-2">
           <UserCheck className="w-6 h-6 text-gray-200"/>
@@ -171,7 +187,7 @@ export function HRActivityWidget() {
       {/* Footer note */}
       <div className="px-4 py-2.5 border-t border-gray-50 bg-gray-50/30">
         <p className="text-[10px] text-gray-300">
-          Screened = moved from Applied stage. Interviews = moved to R1/R2/R3/CF rounds. Moves = all stage changes.
+          Screened = moved forward from Applied (excludes direct rejections). Interviews = entered interview pipeline for the first time. Moves = all stage changes.
         </p>
       </div>
     </div>
