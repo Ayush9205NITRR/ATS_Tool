@@ -91,6 +91,9 @@ export function CandidateProfilePage() {
   // Latch: once cost approval section is shown for this candidate, keep it shown
   // even during brief cache-refetch windows where conditions might flicker false.
   const costApprovalShownForId = useRef<string | null>(null)
+  // Interview date inline auto-save
+  const [interviewDateSaving, setInterviewDateSaving] = useState(false)
+  const interviewDateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // Edit mode drafts
   const [contactDraft, setContactDraft] = useState({
@@ -156,6 +159,13 @@ export function CandidateProfilePage() {
     }
   }, [(candidate as any)?.id])
 
+  // Keep interviewDateDraft in sync with DB value when not in edit mode
+  useEffect(() => {
+    if (!editMode && candidate) {
+      setInterviewDateDraft(toDatetimeLocal((candidate as any).interview_date))
+    }
+  }, [(candidate as any)?.interview_date, editMode])
+
   // Stage config — shared hook (same queryKey as OrgSettingsTab + CandidatesPage)
   const { stageConfigs: stageConfigsRaw } = useStagesHook()
 
@@ -215,15 +225,26 @@ export function CandidateProfilePage() {
     setEditMode(true)
   }
 
-  // updateField — always invalidates both lists
+  // updateField — optimistic update + surgical cache patch, no visible flicker
   const updateField = useMutation({
     mutationFn: async ({ field, value }: { field: string; value: unknown }) => {
+      // Apply optimistically to the profile cache immediately
+      const prev = qc.getQueryData<any>(['candidate', id])
+      if (prev) qc.setQueryData(['candidate', id], { ...prev, [field]: value })
       const { error } = await supabase.from('candidates').update({ [field]: value }).eq('id', id!)
-      if (error) { console.error('[updateField]', field, error); throw error }
+      if (error) {
+        // Revert on failure
+        if (prev) qc.setQueryData(['candidate', id], prev)
+        console.error('[updateField]', field, error)
+        throw error
+      }
     },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['candidate', id] })
-      qc.invalidateQueries({ queryKey: ['candidates'] })
+    onSuccess: (_, { field, value }) => {
+      qc.setQueriesData<any[]>({ queryKey: ['candidates'] }, old =>
+        Array.isArray(old) ? old.map(c => c.id === id ? { ...c, [field]: value } : c) : old
+      )
+      qc.invalidateQueries({ queryKey: ['candidates'], refetchType: 'none' })
+      qc.invalidateQueries({ queryKey: ['candidate', id], refetchType: 'none' })
     },
   })
 
@@ -531,6 +552,28 @@ export function CandidateProfilePage() {
     setCaSavingComment(false)
   }
 
+  // Debounced interview date save — fires 800 ms after last keystroke, optimistic
+  const saveInterviewDateInline = useCallback((val: string) => {
+    if (interviewDateTimerRef.current) clearTimeout(interviewDateTimerRef.current)
+    interviewDateTimerRef.current = setTimeout(async () => {
+      setInterviewDateSaving(true)
+      const isoVal = val ? toISO(val) : null
+      const prev = qc.getQueryData<any>(['candidate', id])
+      if (prev) qc.setQueryData(['candidate', id], { ...prev, interview_date: isoVal })
+      const { error } = await supabase.from('candidates').update({ interview_date: isoVal }).eq('id', id!)
+      if (error) {
+        console.error('[interview date inline save]', error)
+        if (prev) qc.setQueryData(['candidate', id], prev)
+      } else {
+        qc.setQueriesData<any[]>({ queryKey: ['candidates'] }, old =>
+          Array.isArray(old) ? old.map(c => c.id === id ? { ...c, interview_date: isoVal } : c) : old
+        )
+        qc.invalidateQueries({ queryKey: ['candidates'], refetchType: 'none' })
+      }
+      setInterviewDateSaving(false)
+    }, 800)
+  }, [id, qc])
+
   const toggleInterviewer = useCallback((uid: string) => {
     const curr: string[] = (candidate as any)?.assigned_interviewers ?? []
     const next = curr.includes(uid) ? curr.filter(i => i !== uid) : [...curr, uid]
@@ -730,8 +773,16 @@ export function CandidateProfilePage() {
       }
     }
 
+    // Optimistic: apply stage badge change instantly — no waiting for DB round-trip
+    const prev = qc.getQueryData<any>(['candidate', id])
+    if (prev) qc.setQueryData(['candidate', id], { ...prev, ...updates })
+
     const { error } = await supabase.from('candidates').update(updates).eq('id', candidate.id)
-    if (error) { console.error('[stage change]', error); return }
+    if (error) {
+      console.error('[stage change]', error)
+      if (prev) qc.setQueryData(['candidate', id], prev)  // revert on failure
+      return
+    }
     // Log the stage change for HR activity tracking (fire-and-forget)
     if (user?.id && fromStage !== newStage) {
       supabase.rpc('log_stage_change', {
@@ -741,8 +792,11 @@ export function CandidateProfilePage() {
         p_changed_by:   user.id,
       }).then()
     }
-    qc.invalidateQueries({ queryKey: ['candidate', id] })
-    qc.invalidateQueries({ queryKey: ['candidates'] })
+    qc.setQueriesData<any[]>({ queryKey: ['candidates'] }, old =>
+      Array.isArray(old) ? old.map(c => c.id === candidate.id ? { ...c, ...updates } : c) : old
+    )
+    qc.invalidateQueries({ queryKey: ['candidates'], refetchType: 'none' })
+    qc.invalidateQueries({ queryKey: ['candidate', id], refetchType: 'none' })
     qc.invalidateQueries({ queryKey: ['widget'] })
     qc.invalidateQueries({ queryKey: ['hr-activity'] })
   }
@@ -995,13 +1049,22 @@ export function CandidateProfilePage() {
                 )}
               </div>
 
-              {/* Interview Date — only editable in edit mode */}
+              {/* Interview Date — always editable inline for canEdit; auto-saves 800 ms after change */}
               <div>
-                <p className="text-xs text-gray-500 mb-2">Interview Date & Time</p>
-                {editMode && canEdit ? (
-                  <input type="datetime-local" value={interviewDateDraft}
-                    onChange={e => setInterviewDateDraft(e.target.value)}
-                    className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-slate-400"/>
+                <div className="flex items-center justify-between mb-2">
+                  <p className="text-xs text-gray-500">Interview Date & Time</p>
+                  {interviewDateSaving && <Loader2 className="w-3 h-3 animate-spin text-gray-400"/>}
+                </div>
+                {canEdit ? (
+                  <input
+                    type="datetime-local"
+                    value={interviewDateDraft}
+                    onChange={e => {
+                      setInterviewDateDraft(e.target.value)
+                      if (!editMode) saveInterviewDateInline(e.target.value)
+                    }}
+                    className="w-full px-2.5 py-1.5 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-slate-400"
+                  />
                 ) : (
                   <p className="text-sm text-gray-700">
                     {(candidate as any).interview_date ? formatDateTime((candidate as any).interview_date) : <span className="text-gray-400 italic text-xs">Not set</span>}
