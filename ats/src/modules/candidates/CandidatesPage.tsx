@@ -3,7 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   Search, Upload, UserPlus, Loader2, ExternalLink, FileText,
   Eye, X, Archive, Trash2, Filter, ChevronDown, Check,
-  Layers, GripVertical, Download
+  Layers, GripVertical, Download, Bookmark
 } from 'lucide-react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
@@ -30,6 +30,14 @@ import type { CandidateFilters } from './candidateService'
 import { INTERVIEW_STAGES } from '../../types/database.types'
 import { useStages as useStagesHook } from '../../shared/hooks/useStages'
 import { formatDate, formatDateTime } from '../../shared/utils/helpers'
+
+// ── Saved views ───────────────────────────────────────────────
+const VIEWS_LS_KEY = 'ats_saved_views_v1'
+type SavedView = {
+  id: string; name: string
+  search: string; activeFilters: ActiveFilter[]; filterMode: 'and'|'or'
+  jobId?: string; groupBy: string
+}
 
 // ── Stage colours ─────────────────────────────────────────────
 const STAGE_PILL: Record<string,string> = {
@@ -407,7 +415,7 @@ function GroupRow({ label, count, collapsed, onToggle }: { label:string; count:n
 function ActionBtn({ onClick, title, children, danger }: { onClick:()=>void; title:string; children:React.ReactNode; danger?:boolean }) {
   return (
     <button onClick={onClick} title={title}
-      className={`p-1.5 rounded-lg transition-all opacity-50 group-hover/row:opacity-100 focus:opacity-100 ${danger?'hover:bg-red-50 hover:text-red-500 text-gray-400':'hover:bg-gray-100 text-gray-400 hover:text-gray-700'}`}>
+      className={`p-1.5 rounded-lg transition-all opacity-0 group-hover/row:opacity-100 ${danger?'hover:bg-red-50 hover:text-red-500 text-gray-300':'hover:bg-gray-100 text-gray-300 hover:text-gray-600'}`}>
       {children}
     </button>
   )
@@ -494,6 +502,31 @@ export function CandidatesPage() {
   const [groupBy, setGroupBy] = useState('')
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set())
   const toggleGroup = useCallback((k:string)=>setCollapsedGroups(p=>{const n=new Set(p);n.has(k)?n.delete(k):n.add(k);return n}),[])
+
+  // ── Saved views (persisted filter/group presets) ──────────────
+  const [savedViews, setSavedViews] = useState<SavedView[]>(()=>{
+    try { return JSON.parse(localStorage.getItem(VIEWS_LS_KEY) ?? '[]') } catch { return [] }
+  })
+  const [showViews, setShowViews]     = useState(false)
+  const [newViewName, setNewViewName] = useState('')
+  useEffect(()=>{ try { localStorage.setItem(VIEWS_LS_KEY, JSON.stringify(savedViews)) } catch {} }, [savedViews])
+
+  const applyView = (v: SavedView) => {
+    setSearch(v.search ?? '')
+    setActiveFilters(v.activeFilters ?? [])
+    setFilterMode(v.filterMode ?? 'and')
+    setServerFilters(p=>({ ...p, job_id: v.jobId || undefined }))
+    setGroupBy(v.groupBy ?? '')
+    setShowViews(false)
+  }
+  const saveView = () => {
+    const name = newViewName.trim()
+    if (!name) return
+    const id = (globalThis.crypto?.randomUUID?.() ?? `v_${Date.now()}`)
+    setSavedViews(p=>[...p, { id, name, search, activeFilters, filterMode, jobId: serverFilters.job_id, groupBy }])
+    setNewViewName('')
+  }
+  const deleteView = (id: string) => setSavedViews(p=>p.filter(v=>v.id!==id))
   const LS_KEY = 'ats_col_layout_v1'
   const savedLayout = (() => {
     try { return JSON.parse(localStorage.getItem(LS_KEY) ?? '{}') } catch { return {} }
@@ -800,12 +833,37 @@ const displayed = useMemo(() => {
               </select>
             </div>
 
+            <div className="relative">
+              <button onClick={()=>setShowViews(o=>!o)}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-gray-200 rounded-lg text-gray-600 hover:border-gray-300 hover:bg-gray-50 transition-all">
+                <Bookmark className="w-3.5 h-3.5"/>Views
+              </button>
+              {showViews&&(
+                <>
+                  <div className="fixed inset-0 z-40" onClick={()=>setShowViews(false)}/>
+                  <div className="absolute right-0 top-full mt-1.5 bg-white border border-gray-100 rounded-xl shadow-lg z-50 p-2 w-64">
+                    <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide px-2 py-1">Saved views</p>
+                    {savedViews.length===0 && <p className="text-xs text-gray-400 italic px-2 py-2">No saved views yet. Set up filters & grouping, then save below.</p>}
+                    {savedViews.map(v=>(
+                      <div key={v.id} className="flex items-center gap-1 group">
+                        <button onClick={()=>applyView(v)} className="flex-1 text-left text-sm px-2 py-1.5 rounded-lg text-gray-700 hover:bg-gray-50 truncate">{v.name}</button>
+                        <button onClick={()=>deleteView(v.id)} title="Delete view" className="p-1 rounded text-gray-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"><X className="w-3.5 h-3.5"/></button>
+                      </div>
+                    ))}
+                    <div className="border-t border-gray-100 mt-1 pt-2 px-1 flex items-center gap-1.5" onClick={e=>e.stopPropagation()}>
+                      <input value={newViewName} onChange={e=>setNewViewName(e.target.value)} onKeyDown={e=>{if(e.key==='Enter')saveView()}}
+                        placeholder="Save current as…"
+                        className="flex-1 min-w-0 px-2 py-1.5 border border-gray-200 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-indigo-400"/>
+                      <button onClick={saveView} disabled={!newViewName.trim()}
+                        className="px-2.5 py-1.5 bg-gray-900 text-white rounded-lg text-xs font-medium hover:bg-gray-800 disabled:opacity-40 transition-colors">Save</button>
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+
             {selectedIds.size>0 && !isAgency &&(
-              <div className="relative flex items-center gap-2">
-                <button onClick={()=>setAssignTargets(displayed.filter((c:any)=>selectedIds.has(c.id)))}
-                  className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-white border border-blue-200 text-blue-700 rounded-lg hover:bg-blue-50 transition-colors">
-                  <UserPlus className="w-3.5 h-3.5"/> Assign
-                </button>
+              <div className="relative">
                 <button onClick={()=>setShowBulkMenu(o=>!o)}
                   className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">
                   {selectedIds.size} selected
@@ -827,6 +885,10 @@ const displayed = useMemo(() => {
                           {lbl}
                         </button>
                       ))}
+                      <button onClick={()=>{setAssignTargets(displayed.filter((c:any)=>selectedIds.has(c.id)));setShowBulkMenu(false);setBulkField(null)}}
+                        className="w-full text-left text-sm px-3 py-2 rounded-lg text-gray-700 hover:bg-gray-50 transition-colors flex items-center gap-2">
+                        <UserPlus className="w-3.5 h-3.5 text-gray-400"/>Assign Panel / HR Owner
+                      </button>
                       <div className="border-t border-gray-100 mt-1 pt-1">
                         <button onClick={()=>bulkArchive.mutate(!showArchived)}
                           className="w-full text-left text-sm px-3 py-2 rounded-lg text-amber-700 hover:bg-amber-50 transition-colors">
@@ -1074,14 +1136,6 @@ const displayed = useMemo(() => {
                             })}
                             <td className="px-3 py-2.5">
                               <div className="flex items-center gap-0.5 justify-end">
-                                <ActionBtn onClick={()=>navigate(`/candidates/${c.id}`)} title="Open profile">
-                                  <Eye className="w-3.5 h-3.5"/>
-                                </ActionBtn>
-                                {canEdit && !isAgency && (
-                                  <ActionBtn onClick={()=>setAssignTargets([c])} title="Assign panel / HR owner">
-                                    <UserPlus className="w-3.5 h-3.5"/>
-                                  </ActionBtn>
-                                )}
                                 {canEdit && !isAgency && (
                                   <ActionBtn onClick={()=>archiveOne.mutate({id:c.id,archive:!c.archived_at})} title={c.archived_at?'Unarchive':'Archive'}>
                                     <Archive className="w-3.5 h-3.5"/>
