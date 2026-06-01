@@ -388,13 +388,16 @@ function SortableHeader({ id, label }: { id:string; label:string }) {
   )
 }
 
-// ── Group section header ──────────────────────────────────────
-function GroupRow({ label, count }: { label:string; count:number }) {
+// ── Group section header (collapsible) ────────────────────────
+function GroupRow({ label, count, collapsed, onToggle }: { label:string; count:number; collapsed?:boolean; onToggle?:()=>void }) {
   return (
     <tr>
-      <td colSpan={99} className="px-4 py-2 bg-gray-50/80 border-y border-gray-100 first:border-t-0">
-        <span className="text-xs font-semibold text-gray-500">{label}</span>
-        <span className="ml-2 text-xs text-gray-400 font-normal">{count} candidate{count!==1?'s':''}</span>
+      <td colSpan={99} className="p-0 bg-gray-50/80 border-y border-gray-100 first:border-t-0">
+        <button onClick={onToggle} className="w-full flex items-center gap-2 px-4 py-2 text-left hover:bg-gray-100/60 transition-colors">
+          <ChevronDown className={`w-3.5 h-3.5 text-gray-400 transition-transform ${collapsed?'-rotate-90':''}`}/>
+          <span className="text-xs font-semibold text-gray-600">{label}</span>
+          <span className="text-xs text-gray-400 font-normal">{count} candidate{count!==1?'s':''}</span>
+        </button>
       </td>
     </tr>
   )
@@ -404,7 +407,7 @@ function GroupRow({ label, count }: { label:string; count:number }) {
 function ActionBtn({ onClick, title, children, danger }: { onClick:()=>void; title:string; children:React.ReactNode; danger?:boolean }) {
   return (
     <button onClick={onClick} title={title}
-      className={`p-1.5 rounded-lg transition-all opacity-0 group-hover/row:opacity-100 ${danger?'hover:bg-red-50 hover:text-red-500 text-gray-300':'hover:bg-gray-100 text-gray-300 hover:text-gray-600'}`}>
+      className={`p-1.5 rounded-lg transition-all opacity-50 group-hover/row:opacity-100 focus:opacity-100 ${danger?'hover:bg-red-50 hover:text-red-500 text-gray-400':'hover:bg-gray-100 text-gray-400 hover:text-gray-700'}`}>
       {children}
     </button>
   )
@@ -485,10 +488,12 @@ export function CandidatesPage() {
   const [showFilterBar, setShowFilterBar] = useState(false)
   const [showColPicker, setShowColPicker] = useState(false)
   const [showBulkMenu, setShowBulkMenu]   = useState(false)
-  const [assignOpen, setAssignOpen]       = useState(false)
+  const [assignTargets, setAssignTargets] = useState<any[]|null>(null)
   const [bulkField, setBulkField]         = useState<string|null>(null)
   const [confirmDelete, setConfirmDelete] = useState<string|null>(null)
   const [groupBy, setGroupBy] = useState('')
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set())
+  const toggleGroup = useCallback((k:string)=>setCollapsedGroups(p=>{const n=new Set(p);n.has(k)?n.delete(k):n.add(k);return n}),[])
   const LS_KEY = 'ats_col_layout_v1'
   const savedLayout = (() => {
     try { return JSON.parse(localStorage.getItem(LS_KEY) ?? '{}') } catch { return {} }
@@ -797,7 +802,7 @@ const displayed = useMemo(() => {
 
             {selectedIds.size>0 && !isAgency &&(
               <div className="relative flex items-center gap-2">
-                <button onClick={()=>setAssignOpen(true)}
+                <button onClick={()=>setAssignTargets(displayed.filter((c:any)=>selectedIds.has(c.id)))}
                   className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-white border border-blue-200 text-blue-700 rounded-lg hover:bg-blue-50 transition-colors">
                   <UserPlus className="w-3.5 h-3.5"/> Assign
                 </button>
@@ -1022,8 +1027,8 @@ const displayed = useMemo(() => {
                 <tbody>
                   {grouped.map(({key:gk,label:gl,items})=>(
                     <>
-                      {groupBy&&<GroupRow key={`g_${gk}`} label={gl||'Unknown'} count={items.length}/>}
-                      {items.map((c:any)=>{
+                      {groupBy&&<GroupRow key={`g_${gk}`} label={gl||'Unknown'} count={items.length} collapsed={collapsedGroups.has(gk)} onToggle={()=>toggleGroup(gk)}/>}
+                      {(groupBy&&collapsedGroups.has(gk)?[]:items).map((c:any)=>{
                         const isSel = selectedIds.has(c.id)
                         return (
                           <tr key={c.id}
@@ -1069,6 +1074,14 @@ const displayed = useMemo(() => {
                             })}
                             <td className="px-3 py-2.5">
                               <div className="flex items-center gap-0.5 justify-end">
+                                <ActionBtn onClick={()=>navigate(`/candidates/${c.id}`)} title="Open profile">
+                                  <Eye className="w-3.5 h-3.5"/>
+                                </ActionBtn>
+                                {canEdit && !isAgency && (
+                                  <ActionBtn onClick={()=>setAssignTargets([c])} title="Assign panel / HR owner">
+                                    <UserPlus className="w-3.5 h-3.5"/>
+                                  </ActionBtn>
+                                )}
                                 {canEdit && !isAgency && (
                                   <ActionBtn onClick={()=>archiveOne.mutate({id:c.id,archive:!c.archived_at})} title={c.archived_at?'Unarchive':'Archive'}>
                                     <Archive className="w-3.5 h-3.5"/>
@@ -1112,15 +1125,15 @@ const displayed = useMemo(() => {
       </Modal>
 
       <BulkAssignDrawer
-        open={assignOpen}
-        onClose={()=>setAssignOpen(false)}
-        candidates={displayed.filter((c:any)=>selectedIds.has(c.id)).map((c:any)=>({
+        open={!!assignTargets}
+        onClose={()=>setAssignTargets(null)}
+        candidates={(assignTargets ?? []).map((c:any)=>({
           id:c.id, full_name:c.full_name, assigned_interviewers:c.assigned_interviewers??[], hr_owner:c.hr_owner??null,
         }))}
         interviewers={interviewers as any[]}
         hrUsers={hrUsers as any[]}
         canAssignHR={canAssignHR}
-        onApplied={()=>{ setSelectedIds(new Set()); setAssignOpen(false) }}
+        onApplied={()=>{ if((assignTargets?.length ?? 0) > 1) setSelectedIds(new Set()); setAssignTargets(null) }}
       />
 
     </div>
