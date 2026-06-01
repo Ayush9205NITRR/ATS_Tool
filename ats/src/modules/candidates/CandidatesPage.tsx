@@ -17,6 +17,7 @@ import {
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import { useCandidates } from './useCandidates'
+import { BulkAssignDrawer } from './BulkAssignDrawer'
 import { PageHeader } from '../../shared/components/PageHeader'
 import { Button } from '../../shared/components/Button'
 import { EmptyState } from '../../shared/components/EmptyState'
@@ -484,6 +485,7 @@ export function CandidatesPage() {
   const [showFilterBar, setShowFilterBar] = useState(false)
   const [showColPicker, setShowColPicker] = useState(false)
   const [showBulkMenu, setShowBulkMenu]   = useState(false)
+  const [assignOpen, setAssignOpen]       = useState(false)
   const [bulkField, setBulkField]         = useState<string|null>(null)
   const [confirmDelete, setConfirmDelete] = useState<string|null>(null)
   const [groupBy, setGroupBy] = useState('')
@@ -794,7 +796,11 @@ const displayed = useMemo(() => {
             </div>
 
             {selectedIds.size>0 && !isAgency &&(
-              <div className="relative">
+              <div className="relative flex items-center gap-2">
+                <button onClick={()=>setAssignOpen(true)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-white border border-blue-200 text-blue-700 rounded-lg hover:bg-blue-50 transition-colors">
+                  <UserPlus className="w-3.5 h-3.5"/> Assign
+                </button>
                 <button onClick={()=>setShowBulkMenu(o=>!o)}
                   className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">
                   {selectedIds.size} selected
@@ -810,8 +816,6 @@ const displayed = useMemo(() => {
                         ['source_category',     'Change Source'],
                         ['source_name',         'Change Sub-Source'],
                         ['interview_date',      'Set Interview Date'],
-                        ...(canAssignHR ? [['hr_owner','Assign HR Owner']] : [] as any),
-                        ['assigned_interviewers','Assign Interviewer'],
                       ].map(([f,lbl])=>(
                         <button key={f} onClick={()=>{setBulkField(f);setBulkSelectValue('')}}
                           className={`w-full text-left text-sm px-3 py-2 rounded-lg transition-colors ${bulkField===f?'bg-blue-50 text-blue-700':'text-gray-700 hover:bg-gray-50'}`}>
@@ -1106,6 +1110,18 @@ const displayed = useMemo(() => {
           <Button variant="danger" loading={deleteOne.isPending} onClick={()=>confirmDelete&&deleteOne.mutate(confirmDelete)}>Delete</Button>
         </div>
       </Modal>
+
+      <BulkAssignDrawer
+        open={assignOpen}
+        onClose={()=>setAssignOpen(false)}
+        candidates={displayed.filter((c:any)=>selectedIds.has(c.id)).map((c:any)=>({
+          id:c.id, full_name:c.full_name, assigned_interviewers:c.assigned_interviewers??[], hr_owner:c.hr_owner??null,
+        }))}
+        interviewers={interviewers as any[]}
+        hrUsers={hrUsers as any[]}
+        canAssignHR={canAssignHR}
+        onApplied={()=>{ setSelectedIds(new Set()); setAssignOpen(false) }}
+      />
 
     </div>
   )
