@@ -336,9 +336,13 @@ export function InterviewsPage() {
           continue
         }
 
-        // Any 'yes' feedback → To be Scheduled
-        if (approvalsByCand.has(c.id)) {
-          toSchedule.push(enrichCand(c, approvalsByCand.get(c.id)))
+        // To be Scheduled: only when there is an approval AT THE CURRENT STAGE.
+        // This excludes candidates whose only 'yes' was from an earlier round
+        // (e.g. moved to R2, R2 feedback still pending), and ensures "Approved By"
+        // lists only the interviewers who approved THIS round.
+        const currentStageApprovals = (approvalsByCand.get(c.id) ?? []).filter((f: any) => f.stage === stage)
+        if (currentStageApprovals.length > 0) {
+          toSchedule.push(enrichCand(c, currentStageApprovals))
         }
       }
 
