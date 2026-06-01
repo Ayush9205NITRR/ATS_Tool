@@ -82,7 +82,7 @@ export function CandidateProfilePage() {
   const [savingEditNote, setSavingEditNote] = useState(false)
   const [decisionEditMode, setDecisionEditMode] = useState(false)
   // Cost approval state
-  const [caDecision, setCaDecision]   = useState<'go_ahead' | 'rework_required' | ''>('')
+  const [caDecision, setCaDecision]   = useState<'go_ahead' | 'rework_required' | 'rejected' | ''>('')
   const [caNotes, setCaNotes]         = useState('')
   const [caSaveStatus, setCaSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
   const [caComment, setCaComment]     = useState('')
@@ -406,7 +406,9 @@ export function CandidateProfilePage() {
     if (caDecision === 'rework_required' && !caNotes.trim()) return
     setCaSaveStatus('saving')
     try {
-      const decisionLabel = caDecision === 'go_ahead' ? 'Go Ahead' : 'Re-work Required'
+      const decisionLabel = caDecision === 'go_ahead' ? 'Go Ahead'
+        : caDecision === 'rejected' ? 'Rejected at CA'
+        : 'Re-work Required'
 
       // Use SECURITY DEFINER RPC so interviewers (CA panel) can bypass the
       // candidates UPDATE RLS policy which only allows admin/hr_team/super_admin.
@@ -444,9 +446,27 @@ export function CandidateProfilePage() {
         if (cached) qc.setQueryData(['candidate', id], { ...cached, interview_notes: savedNotes })
       }
 
+      // When CA decision is rejection, auto-advance stage to "{CA stage} Rejected"
+      if (caDecision === 'rejected') {
+        const caRejectedStage = `${costApprovalStageName} Rejected`
+        const { error: stageErr } = await supabase.from('candidates')
+          .update({ current_stage: caRejectedStage, interview_date: null })
+          .eq('id', id!)
+        if (stageErr) console.error('[CA rejection stage update]', stageErr)
+        else if (user?.id && candidate.current_stage !== caRejectedStage) {
+          supabase.rpc('log_stage_change', {
+            p_candidate_id: id!,
+            p_from_stage: candidate.current_stage,
+            p_to_stage: caRejectedStage,
+            p_changed_by: user.id,
+          }).then()
+        }
+      }
+
       // Force refetch to confirm DB state persisted
       qc.invalidateQueries({ queryKey: ['candidate', id] })
       qc.invalidateQueries({ queryKey: ['candidates'] })
+      qc.invalidateQueries({ queryKey: ['widget'] })
 
       // Notify super_admin + admin + hr_team (non-blocking — ignore errors)
       supabase.from('users').select('id')
@@ -633,8 +653,10 @@ export function CandidateProfilePage() {
   const hasCostApprovalRecord = (interviewNotes['cost_approval'] ?? []).length > 0 || !!(candidate as any).cost_approval_decision
   const costApprovalPipelineIdx = costApprovalPipelineIdxEarly
   const hasReachedOrPassedCA = hasReachedOrPassedCAEarly
-  // Rejected candidates never show Cost Approval — even if they reached/passed CA earlier
-  const isRejectedStage = candidate.current_stage === 'Rejected' || (candidate.current_stage ?? '').endsWith(' Rejected')
+  // CA-rejected stage: candidate was rejected AT the cost approval step — CA view must stay visible
+  const isCARejectedStage = candidate.current_stage === `${costApprovalStageName} Rejected`
+  // Rejected candidates never show Cost Approval — EXCEPT when rejection happened at the CA stage itself
+  const isRejectedStage = !isCARejectedStage && (candidate.current_stage === 'Rejected' || (candidate.current_stage ?? '').endsWith(' Rejected'))
   const canSeeCostApproval = !isRejectedStage && (isInCostApproval || hasReachedOrPassedCA || hasCostApprovalRecord) && (canEdit || isCAPanel)
   const canSubmitCostApproval = !isRejectedStage && isCAPanel && (isInCostApproval || hasReachedOrPassedCA || hasCostApprovalRecord)
 
@@ -655,6 +677,7 @@ export function CandidateProfilePage() {
   const hasCAResult = !!(latestCAEntry?.decision || costApprovalDecision)
   const caResultDecision: string = latestCAEntry?.decision ?? costApprovalDecision ?? ''
   const caResultGoAhead = caResultDecision === 'go_ahead'
+  const caResultRejected = caResultDecision === 'rejected'
   const caResultAuthor = latestCAEntry?.author ?? ''
   const caResultTs = latestCAEntry?.timestamp ?? ''
   const caResultNotes = latestCAEntry?.text ?? ''
@@ -773,9 +796,13 @@ export function CandidateProfilePage() {
             <span className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${
               costApprovalDecision === 'go_ahead'
                 ? 'bg-green-100 text-green-700 border border-green-200'
+                : costApprovalDecision === 'rejected'
+                ? 'bg-red-100 text-red-700 border border-red-200'
                 : 'bg-orange-100 text-orange-700 border border-orange-200'
             }`}>
-              {costApprovalDecision === 'go_ahead' ? '✅ Go Ahead' : '🔁 Re-work Required'}
+              {costApprovalDecision === 'go_ahead' ? '✅ Go Ahead'
+              : costApprovalDecision === 'rejected' ? '❌ CA Rejected'
+              : '🔁 Re-work Required'}
             </span>
           )}
           <div className="relative">
@@ -1144,22 +1171,42 @@ export function CandidateProfilePage() {
           {/* ── Cost Approval — unified section with interview history + decision + discussion ── */}
           {!isAgency && canSeeCostApprovalLatched && (
             <div className={`rounded-xl border overflow-hidden bg-white ${
-              hasCAResult ? caResultGoAhead ? 'border-green-200' : 'border-orange-200' : 'border-amber-200'
+              hasCAResult
+                ? caResultGoAhead ? 'border-green-200'
+                : caResultRejected ? 'border-red-200'
+                : 'border-orange-200'
+                : 'border-amber-200'
             }`}>
               {/* Header */}
               <div className={`px-4 py-3 border-b flex items-center justify-between ${
-                hasCAResult ? caResultGoAhead ? 'bg-green-50 border-green-100' : 'bg-orange-50 border-orange-100' : 'bg-amber-50/40 border-amber-100'
+                hasCAResult
+                  ? caResultGoAhead ? 'bg-green-50 border-green-100'
+                  : caResultRejected ? 'bg-red-50 border-red-100'
+                  : 'bg-orange-50 border-orange-100'
+                  : 'bg-amber-50/40 border-amber-100'
               }`}>
                 <div className="flex items-center gap-2">
-                  <ShieldCheck className={`w-4 h-4 flex-shrink-0 ${hasCAResult ? caResultGoAhead ? 'text-green-600' : 'text-orange-500' : 'text-amber-500'}`}/>
+                  <ShieldCheck className={`w-4 h-4 flex-shrink-0 ${
+                    hasCAResult
+                      ? caResultGoAhead ? 'text-green-600'
+                      : caResultRejected ? 'text-red-500'
+                      : 'text-orange-500'
+                      : 'text-amber-500'
+                  }`}/>
                   <p className="text-sm font-semibold text-gray-800">Cost Approval</p>
                   {!hasCAResult && (isInCostApproval || hasReachedOrPassedCA) && (
                     <span className="text-xs text-amber-600">· Awaiting decision</span>
                   )}
                 </div>
                 {hasCAResult && (
-                  <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${caResultGoAhead ? 'bg-green-100 text-green-700' : 'bg-orange-100 text-orange-700'}`}>
-                    {caResultGoAhead ? '✓ Go Ahead' : '↺ Re-work Required'}
+                  <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${
+                    caResultGoAhead ? 'bg-green-100 text-green-700'
+                    : caResultRejected ? 'bg-red-100 text-red-700'
+                    : 'bg-orange-100 text-orange-700'
+                  }`}>
+                    {caResultGoAhead ? '✓ Go Ahead'
+                    : caResultRejected ? '✗ Rejected'
+                    : '↺ Re-work Required'}
                   </span>
                 )}
               </div>
@@ -1223,7 +1270,11 @@ export function CandidateProfilePage() {
 
               {/* Decision result */}
               {hasCAResult && !caEditMode && (
-                <div className={`px-4 py-3 border-b ${caResultGoAhead ? 'bg-green-50/20 border-green-100' : 'bg-orange-50/20 border-orange-100'}`}>
+                <div className={`px-4 py-3 border-b ${
+                  caResultGoAhead ? 'bg-green-50/20 border-green-100'
+                  : caResultRejected ? 'bg-red-50/20 border-red-100'
+                  : 'bg-orange-50/20 border-orange-100'
+                }`}>
                   <div className="flex items-start justify-between gap-2">
                     <div>
                       <p className="text-xs text-gray-500">
@@ -1275,6 +1326,14 @@ export function CandidateProfilePage() {
                       }`}
                     >
                       <X className="w-3.5 h-3.5"/> Re-work
+                    </button>
+                    <button
+                      onClick={() => setCaDecision('rejected')}
+                      className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold border-2 transition-all ${
+                        caDecision === 'rejected' ? 'bg-red-600 text-white border-red-600' : 'bg-white text-red-700 border-red-200 hover:border-red-400'
+                      }`}
+                    >
+                      <XCircle className="w-3.5 h-3.5"/> Reject
                     </button>
                   </div>
                   <div className="flex items-center gap-2 flex-wrap">

@@ -3,7 +3,7 @@
 // Name | Role | Status | Review button
 // ============================================================
 import { useNavigate } from 'react-router-dom'
-import { ShieldCheck, Loader2, ExternalLink, CheckCircle, RefreshCw, Clock } from 'lucide-react'
+import { ShieldCheck, Loader2, ExternalLink, CheckCircle, RefreshCw, Clock, XCircle } from 'lucide-react'
 import { useQuery } from '@tanstack/react-query'
 import { useAuthStore } from '../auth/authStore'
 import { supabase } from '../../lib/supabaseClient'
@@ -66,21 +66,26 @@ export function CostApprovalPage() {
     staleTime: 60_000,
   })
 
-  // Filter to candidates that have reached or passed CA stage, or have a CA record
-  // Exclude rejected candidates (current_stage === 'Rejected' or ends with ' Rejected')
+  const caRejectedStageName = `${costApprovalStageName} Rejected`
+
+  // Filter to candidates that have reached or passed CA stage, or have a CA record.
+  // Exclude candidates rejected at other stages (R1 Rejected, R2 Rejected, etc.)
+  // BUT include candidates rejected specifically at the CA stage — they still have a CA record to review.
   const caCandidates = allCandidates.filter((c: any) => {
     const stage = (c.current_stage ?? '') as string
-    if (stage === 'Rejected' || stage.endsWith(' Rejected')) return false
+    const isCARejected = stage === caRejectedStageName
+    if (!isCARejected && (stage === 'Rejected' || stage.endsWith(' Rejected'))) return false
     const hasCARec = (c.interview_notes?.cost_approval ?? []).length > 0 || !!c.cost_approval_decision
     const isAtCA   = stageKeyOf(stage) === stageKeyOf(costApprovalStageName)
-    return hasCARec || isAtCA
+    return hasCARec || isAtCA || isCARejected
   })
 
-  const getCAStatus = (c: any): 'go_ahead' | 'rework_required' | 'awaiting' => {
+  const getCAStatus = (c: any): 'go_ahead' | 'rework_required' | 'rejected' | 'awaiting' => {
     const caEntries: any[] = c.interview_notes?.cost_approval ?? []
     const decision = caEntries[caEntries.length - 1]?.decision ?? c.cost_approval_decision ?? ''
     if (decision === 'go_ahead') return 'go_ahead'
     if (decision === 'rework_required') return 'rework_required'
+    if (decision === 'rejected') return 'rejected'
     return 'awaiting'
   }
 
@@ -154,6 +159,11 @@ export function CostApprovalPage() {
                         {status === 'rework_required' && (
                           <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-semibold bg-orange-100 text-orange-700">
                             <RefreshCw className="w-3 h-3"/> Re-work Required
+                          </span>
+                        )}
+                        {status === 'rejected' && (
+                          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-semibold bg-red-100 text-red-700">
+                            <XCircle className="w-3 h-3"/> Rejected
                           </span>
                         )}
                         {status === 'awaiting' && (
