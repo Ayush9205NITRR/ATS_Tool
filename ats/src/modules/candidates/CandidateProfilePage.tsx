@@ -633,14 +633,16 @@ export function CandidateProfilePage() {
   const hasCostApprovalRecord = (interviewNotes['cost_approval'] ?? []).length > 0 || !!(candidate as any).cost_approval_decision
   const costApprovalPipelineIdx = costApprovalPipelineIdxEarly
   const hasReachedOrPassedCA = hasReachedOrPassedCAEarly
-  const canSeeCostApproval = (isInCostApproval || hasReachedOrPassedCA || hasCostApprovalRecord) && (canEdit || isCAPanel)
-  const canSubmitCostApproval = isCAPanel && (isInCostApproval || hasReachedOrPassedCA || hasCostApprovalRecord)
+  // Rejected candidates never show Cost Approval — even if they reached/passed CA earlier
+  const isRejectedStage = candidate.current_stage === 'Rejected' || (candidate.current_stage ?? '').endsWith(' Rejected')
+  const canSeeCostApproval = !isRejectedStage && (isInCostApproval || hasReachedOrPassedCA || hasCostApprovalRecord) && (canEdit || isCAPanel)
+  const canSubmitCostApproval = !isRejectedStage && isCAPanel && (isInCostApproval || hasReachedOrPassedCA || hasCostApprovalRecord)
 
   // Latch: keep showing during brief cache-refetch windows, but clear when stage
-  // definitively moves below CA with no record — restores normal UI on backward stage move
+  // definitively moves below CA with no record (or is rejected) — restores normal UI
   if (canSeeCostApproval) {
     costApprovalShownForId.current = candidate.id
-  } else if (!isInCostApproval && !hasReachedOrPassedCA && !hasCostApprovalRecord) {
+  } else if (isRejectedStage || (!isInCostApproval && !hasReachedOrPassedCA && !hasCostApprovalRecord)) {
     if (costApprovalShownForId.current === candidate.id) costApprovalShownForId.current = null
   }
   const canSeeCostApprovalLatched = canSeeCostApproval || costApprovalShownForId.current === candidate.id
