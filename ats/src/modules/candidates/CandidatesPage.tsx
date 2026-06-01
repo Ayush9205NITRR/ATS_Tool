@@ -294,35 +294,60 @@ const SelectCell = memo(({ cid, field, display, options, canEdit, onUpdate }: {
   )
 })
 
-// ── Multi-select cell ─────────────────────────────────────────
+// ── Multi-select cell — local buffered state, single debounced write ──────────
 const MultiCell = memo(({ cid, field, ids, options, canEdit, onUpdate }: {
   cid:string; field:string; ids:string[]
   options:{label:string;value:string}[]
   canEdit:boolean; onUpdate:(id:string,f:string,v:string[])=>void
 }) => {
-  const names = options.filter(o=>ids.includes(o.value)).map(o=>o.label)
+  const [local, setLocal] = useState<string[]>(ids)
+  const [dirty, setDirty] = useState(false)
+  const timerRef = useRef<ReturnType<typeof setTimeout>>()
+
+  // Sync when server data changes (e.g. after refetch), but only if not mid-edit
+  useEffect(()=>{ if(!dirty) setLocal(ids) }, [ids.join(',')])
+
+  const toggle = useCallback((val:string, e:React.MouseEvent) => {
+    e.stopPropagation()
+    const next = local.includes(val) ? local.filter(i=>i!==val) : [...local, val]
+    setLocal(next)
+    setDirty(true)
+    clearTimeout(timerRef.current)
+    timerRef.current = setTimeout(()=>{ onUpdate(cid, field, next); setDirty(false) }, 500)
+  }, [local, cid, field, onUpdate])
+
+  const clearAll = useCallback((e:React.MouseEvent) => {
+    e.stopPropagation()
+    setLocal([])
+    setDirty(true)
+    clearTimeout(timerRef.current)
+    timerRef.current = setTimeout(()=>{ onUpdate(cid, field, []); setDirty(false) }, 500)
+  }, [cid, field, onUpdate])
+
+  const names = options.filter(o=>local.includes(o.value)).map(o=>o.label)
   if (!canEdit) return <span className="text-xs text-gray-500">{names.join(', ')||<span className="text-gray-300">—</span>}</span>
   return (
     <Popup trigger={
       <button className="text-xs text-gray-600 hover:text-gray-900 flex items-center gap-1 group max-w-[150px]">
         <span className="truncate">{names.length?names.join(', '):<span className="text-gray-300">—</span>}</span>
-        <ChevronDown className="w-3 h-3 text-gray-300 group-hover:text-gray-500 flex-shrink-0"/>
+        {dirty
+          ? <Loader2 className="w-3 h-3 text-blue-400 animate-spin flex-shrink-0"/>
+          : <ChevronDown className="w-3 h-3 text-gray-300 group-hover:text-gray-500 flex-shrink-0"/>}
       </button>
     }>
       {options.map(o=>{
-        const sel = ids.includes(o.value)
+        const sel = local.includes(o.value)
         return (
-          <button key={o.value}
-            onClick={e=>{e.stopPropagation();const next=sel?ids.filter(i=>i!==o.value):[...ids,o.value];onUpdate(cid,field,next)}}
-            className="w-full text-left px-3 py-1.5 text-xs hover:bg-gray-50 flex items-center gap-2.5">
-            <span className={`w-3.5 h-3.5 rounded flex-shrink-0 border ${sel?'bg-blue-500 border-blue-500':'border-gray-300'} flex items-center justify-center`}>
+          <button key={o.value} onClick={e=>toggle(o.value,e)}
+            className="w-full text-left px-3 py-1.5 text-xs hover:bg-gray-50 flex items-center gap-2.5 transition-colors">
+            <span className={`w-3.5 h-3.5 rounded flex-shrink-0 border transition-colors ${sel?'bg-blue-500 border-blue-500':'border-gray-300'} flex items-center justify-center`}>
               {sel&&<Check className="w-2.5 h-2.5 text-white"/>}
             </span>
             <span className={`truncate ${sel?'text-gray-900 font-medium':'text-gray-600'}`}>{o.label}</span>
           </button>
         )
       })}
-      {ids.length>0&&<button onClick={()=>onUpdate(cid,field,[])} className="w-full text-left px-3 py-1.5 text-xs text-red-400 hover:bg-red-50 border-t border-gray-50 mt-1">Clear all</button>}
+      {local.length>0&&<button onClick={clearAll} className="w-full text-left px-3 py-1.5 text-xs text-red-400 hover:bg-red-50 border-t border-gray-50 mt-1 transition-colors">Clear all</button>}
     </Popup>
   )
 })
@@ -581,7 +606,15 @@ const displayed = useMemo(() => {
       const{error}=await supabase.from('candidates').update(updates).eq('id',id)
       if(error){console.error('[upd]',error);throw error}
     },
-    onSuccess:()=>qc.invalidateQueries({queryKey:['candidates']}),
+    onSuccess:(_, vars)=>{
+      // Surgical cache patch — avoids re-fetching the entire list for each cell edit
+      qc.setQueriesData<any[]>({ queryKey: ['candidates'] }, (old) => {
+        if (!Array.isArray(old)) return old
+        return old.map((c:any) => c.id === vars.id ? { ...c, [vars.field]: vars.value } : c)
+      })
+      // Background re-sync so the cache stays accurate
+      qc.invalidateQueries({ queryKey: ['candidates'], refetchType: 'none' })
+    },
   })
 
   const archiveOne = useMutation({

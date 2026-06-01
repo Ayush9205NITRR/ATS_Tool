@@ -220,73 +220,108 @@ export function InterviewsPage() {
     },
   })
 
-  // Admin / HR view — feedback-driven: approved candidates split by date presence; rejected auto-stage
+  // Admin / HR view — any-approver logic + candidates-with-date for scheduled
   const { data: adminData, isLoading: adminLoading } = useQuery({
     queryKey: ['admin-interviews-v2'],
     queryFn: async () => {
-      // All feedbacks with recommendation, latest per candidate
+      // All feedbacks (yes/no), not just latest per candidate
       const { data: allFeedbacks } = await supabase
         .from('interview_feedback')
         .select('candidate_id, stage, recommendation, submitted_at, interviewer_id')
         .in('recommendation', ['yes', 'no'])
         .order('submitted_at', { ascending: false })
 
-      const latestMap = new Map<string, any>()
+      // Group ALL feedbacks by candidate; track which have any 'yes'
+      const feedbackByCand = new Map<string, any[]>()
+      const approvalsByCand = new Map<string, any[]>()
       for (const f of allFeedbacks ?? []) {
-        if (!latestMap.has(f.candidate_id)) latestMap.set(f.candidate_id, f)
+        if (!feedbackByCand.has(f.candidate_id)) feedbackByCand.set(f.candidate_id, [])
+        feedbackByCand.get(f.candidate_id)!.push(f)
+        if (f.recommendation === 'yes') {
+          if (!approvalsByCand.has(f.candidate_id)) approvalsByCand.set(f.candidate_id, [])
+          approvalsByCand.get(f.candidate_id)!.push(f)
+        }
       }
 
-      const approvedFeedbacks = [...latestMap.values()].filter(f => f.recommendation === 'yes')
-      const rejectedFeedbacks  = [...latestMap.values()].filter(f => f.recommendation === 'no')
+      const feedbackCandIds = [...feedbackByCand.keys()]
 
-      const allIds = [...latestMap.keys()]
-      if (!allIds.length) return { toSchedule: [], scheduled: [], rejected: [] }
+      // Also fetch candidates with interview_date set (may have no feedback yet)
+      const { data: scheduledCands } = await supabase
+        .from('candidates')
+        .select('id, full_name, current_stage, interview_date, job_id, assigned_interviewers')
+        .not('interview_date', 'is', null)
+        .eq('status', 'active')
 
-      // Fetch all candidate records (active only — rejected-stage candidates may be active too)
+      const scheduledIds = (scheduledCands ?? []).map((c: any) => c.id)
+      const allCandIds = [...new Set([...feedbackCandIds, ...scheduledIds])]
+      if (!allCandIds.length) return { toSchedule: [], scheduled: [], rejected: [] }
+
       const { data: candidates } = await supabase
         .from('candidates')
         .select('id, full_name, current_stage, interview_date, job_id, assigned_interviewers')
-        .in('id', allIds)
+        .in('id', allCandIds)
 
       const candidateMap = Object.fromEntries((candidates ?? []).map((c: any) => [c.id, c]))
 
-      const jobIds = [...new Set((candidates ?? []).map((c: any) => c.job_id).filter(Boolean))]
-      const panelIds = [...new Set((candidates ?? []).flatMap((c: any) => c.assigned_interviewers ?? []))]
-      const reviewerIds = [...new Set([...latestMap.values()].map((f: any) => f.interviewer_id))]
+      const jobIds     = [...new Set((candidates ?? []).map((c: any) => c.job_id).filter(Boolean))]
+      const panelIds   = [...new Set((candidates ?? []).flatMap((c: any) => c.assigned_interviewers ?? []))]
+      const reviewerIds= [...new Set((allFeedbacks ?? []).map((f: any) => f.interviewer_id))]
       const allUserIds = [...new Set([...panelIds, ...reviewerIds])]
 
       const [{ data: jobs }, { data: users }] = await Promise.all([
-        jobIds.length    ? supabase.from('jobs').select('id,title').in('id', jobIds) : { data: [] as any[] },
+        jobIds.length     ? supabase.from('jobs').select('id,title').in('id', jobIds)       : { data: [] as any[] },
         allUserIds.length ? supabase.from('users').select('id,full_name').in('id', allUserIds) : { data: [] as any[] },
       ])
 
       const jobMap  = Object.fromEntries((jobs  ?? []).map((j: any) => [j.id, j.title]))
       const userMap = Object.fromEntries((users ?? []).map((u: any) => [u.id, u.full_name]))
 
-      const enrichFeedback = (f: any) => {
-        const c = candidateMap[f.candidate_id] ?? {}
+      const enrichCand = (c: any, approvals?: any[]) => {
+        const latest = approvals?.[0] ?? feedbackByCand.get(c.id)?.[0]
         return {
-          id: f.candidate_id,
-          full_name: (c as any).full_name ?? '—',
-          current_stage: (c as any).current_stage ?? '—',
-          interview_date: (c as any).interview_date ?? null,
-          job_id: (c as any).job_id ?? null,
-          jobTitle: jobMap[(c as any).job_id] ?? '—',
-          panelNames: (((c as any).assigned_interviewers ?? []) as string[]).map((uid: string) => userMap[uid]).filter(Boolean) as string[],
-          feedbackStage: f.stage,
-          feedbackAt: f.submitted_at,
-          reviewerName: userMap[f.interviewer_id] ?? '—',
+          id:            c.id,
+          full_name:     c.full_name ?? '—',
+          current_stage: c.current_stage ?? '—',
+          interview_date:c.interview_date ?? null,
+          job_id:        c.job_id ?? null,
+          jobTitle:      jobMap[c.job_id] ?? '—',
+          panelNames:    ((c.assigned_interviewers ?? []) as string[]).map((uid: string) => userMap[uid]).filter(Boolean) as string[],
+          feedbackStage: latest?.stage ?? c.current_stage,
+          feedbackAt:    latest?.submitted_at ?? null,
+          reviewerName:  latest ? (userMap[latest.interviewer_id] ?? '—') : '—',
+          // ALL names who gave 'yes' — displayed in "Approved By" column
+          approvedBy:    (approvals ?? []).map((f: any) => userMap[f.interviewer_id]).filter(Boolean) as string[],
         }
       }
 
-      const approvedEnriched = approvedFeedbacks.map(enrichFeedback).filter(r => candidateMap[r.id])
-      const rejectedEnriched  = rejectedFeedbacks.map(enrichFeedback)
+      const toSchedule: any[] = []
+      const scheduled:  any[] = []
+      const rejected:   any[] = []
 
-      return {
-        toSchedule: approvedEnriched.filter(r => !r.interview_date),
-        scheduled:  approvedEnriched.filter(r =>  r.interview_date),
-        rejected:   rejectedEnriched,
+      const seen = new Set<string>()
+
+      for (const c of candidates ?? []) {
+        seen.add(c.id)
+        const stage = (c.current_stage ?? '') as string
+        const isRejected = stage === 'Rejected' || stage.endsWith(' Rejected')
+
+        if (isRejected) {
+          rejected.push(enrichCand(c))
+          continue
+        }
+
+        if (c.interview_date) {
+          scheduled.push(enrichCand(c, approvalsByCand.get(c.id)))
+          continue
+        }
+
+        // Any 'yes' feedback → To be Scheduled
+        if (approvalsByCand.has(c.id)) {
+          toSchedule.push(enrichCand(c, approvalsByCand.get(c.id)))
+        }
       }
+
+      return { toSchedule, scheduled, rejected }
     },
     enabled: !isInterviewer && !!user,
     staleTime: 30_000,
@@ -793,30 +828,46 @@ export function InterviewsPage() {
                     className="font-medium text-blue-600 hover:underline text-left text-sm">
                     {r.full_name}
                   </button>
-                  {r.reviewerName && <p className="text-xs text-gray-400 mt-0.5">by {r.reviewerName}</p>}
                 </td>
                 <td className="px-4 py-3 text-xs text-gray-600">{r.jobTitle}</td>
+                {/* Stage */}
                 <td className="px-4 py-3">
                   <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${stageColour(r.feedbackStage ?? r.current_stage)}`}>
                     {r.feedbackStage ?? r.current_stage}
                   </span>
                 </td>
-                <td className="px-4 py-3 text-xs text-gray-600">
-                  {(r.panelNames ?? []).length > 0
-                    ? <div className="flex flex-wrap gap-1">{(r.panelNames as string[]).map((n: string) => (
-                        <span key={n} className="bg-indigo-50 text-indigo-700 border border-indigo-100 px-1.5 py-0.5 rounded-md text-xs">{n}</span>
-                      ))}</div>
-                    : <span className="text-gray-300">—</span>}
-                </td>
-                {showDate && (
-                  <td className="px-4 py-3 text-xs text-gray-600 whitespace-nowrap">
-                    {r.interview_date ? formatDateTime(r.interview_date) : <span className="text-gray-300">—</span>}
+                {/* Approved By — only on to_schedule tab */}
+                {adminTab === 'to_schedule' && (
+                  <td className="px-4 py-3 text-xs text-gray-600">
+                    {(r.approvedBy ?? []).length > 0
+                      ? <div className="flex flex-wrap gap-1">
+                          {(r.approvedBy as string[]).map((n: string) => (
+                            <span key={n} className="bg-green-50 text-green-700 border border-green-100 px-1.5 py-0.5 rounded-md text-xs font-medium">{n}</span>
+                          ))}
+                        </div>
+                      : <span className="text-gray-300">—</span>}
                   </td>
                 )}
+                {/* Panel — only on scheduled tab */}
+                {adminTab === 'scheduled' && (
+                  <td className="px-4 py-3 text-xs text-gray-600">
+                    {(r.panelNames ?? []).length > 0
+                      ? <div className="flex flex-wrap gap-1">{(r.panelNames as string[]).map((n: string) => (
+                          <span key={n} className="bg-indigo-50 text-indigo-700 border border-indigo-100 px-1.5 py-0.5 rounded-md text-xs">{n}</span>
+                        ))}</div>
+                      : <span className="text-gray-300">—</span>}
+                  </td>
+                )}
+                {/* Rejected stage */}
                 {adminTab === 'rejected' && (
                   <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">
                     <span className="font-medium text-red-600">{r.current_stage}</span>
                     {r.feedbackAt && <span className="ml-1 text-gray-400">· {formatDateTime(r.feedbackAt)}</span>}
+                  </td>
+                )}
+                {showDate && (
+                  <td className="px-4 py-3 text-xs text-gray-600 whitespace-nowrap">
+                    {r.interview_date ? formatDateTime(r.interview_date) : <span className="text-gray-300">—</span>}
                   </td>
                 )}
                 <td className="px-4 py-3 text-right">
@@ -833,10 +884,11 @@ export function InterviewsPage() {
                 <tr className="border-b border-gray-100 bg-gray-50 text-xs text-gray-500 uppercase tracking-wide">
                   <th className="text-left px-4 py-3 font-medium">Candidate</th>
                   <th className="text-left px-4 py-3 font-medium">Job</th>
-                  <th className="text-left px-4 py-3 font-medium">Approved At</th>
-                  <th className="text-left px-4 py-3 font-medium">Panel</th>
+                  <th className="text-left px-4 py-3 font-medium">Stage</th>
+                  {adminTab === 'to_schedule' && <th className="text-left px-4 py-3 font-medium">Approved By</th>}
+                  {adminTab === 'scheduled'   && <th className="text-left px-4 py-3 font-medium">Panel</th>}
+                  {adminTab === 'rejected'    && <th className="text-left px-4 py-3 font-medium">Rejected Stage</th>}
                   {showDate && <th className="text-left px-4 py-3 font-medium">Interview Date</th>}
-                  {adminTab === 'rejected' && <th className="text-left px-4 py-3 font-medium">Stage (Auto-updated)</th>}
                   <th className="px-4 py-3 font-medium text-right">Action</th>
                 </tr>
               </thead>
