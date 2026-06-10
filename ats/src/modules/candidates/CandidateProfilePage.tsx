@@ -269,6 +269,9 @@ export function CandidateProfilePage() {
       qc.invalidateQueries({ queryKey: ['candidates'] })
       setEditMode(false)
     },
+    onError: (err: any) => {
+      console.error('[saveAll error]', err)
+    },
   })
 
   // Interviewer decision: records feedback only — HR advances stage separately
@@ -820,9 +823,18 @@ export function CandidateProfilePage() {
         <div className="flex items-center gap-2">
           {canEdit && (
             editMode ? (
-              <div className="flex gap-2">
-                <Button variant="secondary" size="sm" icon={<X className="w-3.5 h-3.5"/>} onClick={() => setEditMode(false)}>Cancel</Button>
-                <Button size="sm" loading={saveAll.isPending} icon={<Check className="w-3.5 h-3.5"/>} onClick={() => saveAll.mutate()}>Save</Button>
+              <div className="flex flex-col items-end gap-1">
+                <div className="flex gap-2">
+                  <Button variant="secondary" size="sm" icon={<X className="w-3.5 h-3.5"/>} onClick={() => setEditMode(false)}>Cancel</Button>
+                  <Button size="sm" loading={saveAll.isPending} icon={<Check className="w-3.5 h-3.5"/>} onClick={() => saveAll.mutate()}>Save</Button>
+                </div>
+                {saveAll.isError && (
+                  <p className="text-xs text-red-500 max-w-xs text-right">
+                    {(saveAll.error as any)?.message?.includes('source_category')
+                      ? 'DB migration needed — run supabase-referral-enum-fix.sql in Supabase SQL Editor'
+                      : ((saveAll.error as any)?.message ?? 'Save failed — please try again')}
+                  </p>
+                )}
               </div>
             ) : (
               <Button variant="secondary" size="sm" icon={<Pencil className="w-3.5 h-3.5"/>} onClick={enterEditMode}>Edit</Button>
@@ -1836,12 +1848,24 @@ function ProfileSubSource({ sourceCategory, value, onChange }: {
       {_PLATFORM_SOURCES.map(p => <option key={p} value={p}>{p}</option>)}
     </select>
   )
-  if (sourceCategory === 'referral') return (
-    <select value={value} onChange={e => onChange(e.target.value)} className={cls}>
-      <option value="">Select employee…</option>
-      {employees.map(e => <option key={e} value={e}>{e}</option>)}
-    </select>
-  )
+  if (sourceCategory === 'referral') {
+    if ((employees as string[]).length === 0) return (
+      <div className="space-y-1">
+        <input type="text" value={value} onChange={e => onChange(e.target.value)}
+          placeholder="Type referrer's name…" className={cls}/>
+        <p className="text-[11px] text-gray-400">
+          No employee list configured.{' '}
+          <a href="/settings" className="text-blue-500 hover:underline">Add employees in Settings →</a>
+        </p>
+      </div>
+    )
+    return (
+      <select value={value} onChange={e => onChange(e.target.value)} className={cls}>
+        <option value="">Select employee…</option>
+        {(employees as string[]).map(e => <option key={e} value={e}>{e}</option>)}
+      </select>
+    )
+  }
   if (sourceCategory === 'college') return (
     <input type="text" value={value} onChange={e => onChange(e.target.value)}
       placeholder="e.g. IIT Delhi…" className={cls}/>
