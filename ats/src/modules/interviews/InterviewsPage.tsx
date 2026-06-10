@@ -172,13 +172,20 @@ export function InterviewsPage() {
       // Stages that count as "active" — pending candidates must be in one of these
       const ACTIVE_STAGES = new Set(['Screening', 'R1', 'Case Study', 'R2', 'R3', 'CF (Virtual)', 'CF (In-Person)'])
 
+      // Pending: assigned, not yet reviewed, still in an active interview stage
+      const pending = assignedWithJob.filter(c => !doneMap.has(c.id) && ACTIVE_STAGES.has(c.current_stage))
+      const pendingIds = new Set(pending.map(c => c.id))
+
       return {
-        all:   assignedWithJob,
+        all: assignedWithJob,
         doneMap,
-        // Pending: assigned, not yet reviewed, still in an active interview stage
-        pending:   assignedWithJob.filter(c => !doneMap.has(c.id) && ACTIVE_STAGES.has(c.current_stage)),
-        // Submitted: candidates this interviewer approved ("yes") — includes ex-assigned so they can edit
-        submitted: allWithJob.filter(c => recMap.get(c.id) === 'yes'),
+        recMap,
+        pending,
+        // Everything else this interviewer is/was assigned to: feedback already given
+        // (yes or no), moved past an active stage without feedback (e.g. a custom
+        // "R1 Rejected" stage), or an ex-assigned candidate who still has a feedback
+        // record. Ensures every assigned candidate appears in exactly one tab.
+        submitted: allWithJob.filter(c => !pendingIds.has(c.id)),
       }
     },
     enabled: !!user,
@@ -646,7 +653,10 @@ export function InterviewsPage() {
                 <th className="text-left px-4 py-3 font-medium">Stage</th>
                 <th className="text-left px-4 py-3 font-medium">Interview Date</th>
                 {filter === 'submitted' && (
-                  <th className="text-left px-4 py-3 font-medium">Decision Date</th>
+                  <>
+                    <th className="text-left px-4 py-3 font-medium">Your Decision</th>
+                    <th className="text-left px-4 py-3 font-medium">Decision Date</th>
+                  </>
                 )}
               </tr>
             </thead>
@@ -681,11 +691,26 @@ export function InterviewsPage() {
                       {c.interview_date ? formatDateTime(c.interview_date) : <span className="text-gray-300">—</span>}
                     </td>
 
-                    {/* Decision Date (submitted tab only) */}
+                    {/* Your Decision + Decision Date (submitted tab only) */}
                     {filter === 'submitted' && (
-                      <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">
-                        {submittedAt ? formatDateTime(submittedAt) : '—'}
-                      </td>
+                      <>
+                        <td className="px-4 py-3">
+                          {data?.recMap.get(c.id) === 'yes' ? (
+                            <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-medium bg-green-100 text-green-700">
+                              <UserCheck className="w-3 h-3"/>Recommended
+                            </span>
+                          ) : data?.recMap.get(c.id) === 'no' ? (
+                            <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-medium bg-red-100 text-red-700">
+                              <UserX className="w-3 h-3"/>Not Recommended
+                            </span>
+                          ) : (
+                            <span className="text-gray-300 text-xs">—</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">
+                          {submittedAt ? formatDateTime(submittedAt) : '—'}
+                        </td>
+                      </>
                     )}
                   </tr>
                 )
@@ -698,7 +723,7 @@ export function InterviewsPage() {
             <p className="text-xs text-gray-400">
               {filter === 'pending'
                 ? `${displayed.length} candidate${displayed.length !== 1 ? 's' : ''} awaiting your decision — click a name to open their profile`
-                : `${submittedCount} decision${submittedCount !== 1 ? 's' : ''} submitted`
+                : `${submittedCount} candidate${submittedCount !== 1 ? 's' : ''} — click a name to open their profile`
               }
             </p>
           </div>
