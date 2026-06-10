@@ -8,7 +8,7 @@ export type CandidateStatus = 'active' | 'rejected' | 'hired' | 'withdrawn'
 export type JobStatus = 'draft' | 'open' | 'paused' | 'closed'
 export type EmploymentType = 'full_time' | 'part_time' | 'contract' | 'internship'
 export type Recommendation = 'strong_yes' | 'yes' | 'neutral' | 'no' | 'strong_no'
-export type CostApprovalDecision = 'go_ahead' | 'rework_required'
+export type CostApprovalDecision = 'go_ahead' | 'rework_required' | 'rejected'
 
 export const INTERVIEW_STAGES = [
   'Applied', 'Screening', 'R1', 'Case Study', 'R2', 'R3',
