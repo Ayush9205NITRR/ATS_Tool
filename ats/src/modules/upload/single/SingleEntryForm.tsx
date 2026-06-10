@@ -50,12 +50,24 @@ function SubSourceField({ sourceCategory, value, onChange, required }: {
       {PLATFORM_SRCS.map(p => <option key={p} value={p}>{p}</option>)}
     </select>
   )
-  if (sourceCategory === 'referral') return (
-    <select value={value} onChange={e=>onChange(e.target.value)} className={cls} required={required}>
-      <option value="">Select employee…</option>
-      {(employees as string[]).map(e => <option key={e} value={e}>{e}</option>)}
-    </select>
-  )
+  if (sourceCategory === 'referral') {
+    if ((employees as string[]).length === 0) return (
+      <div className="space-y-1">
+        <input type="text" value={value} onChange={e=>onChange(e.target.value)}
+          placeholder="Type referrer's name…" className={cls} required={required}/>
+        <p className="text-[11px] text-gray-400">
+          No employee list configured.{' '}
+          <a href="/settings" className="text-blue-500 hover:underline">Add employees in Settings →</a>
+        </p>
+      </div>
+    )
+    return (
+      <select value={value} onChange={e=>onChange(e.target.value)} className={cls} required={required}>
+        <option value="">Select employee…</option>
+        {(employees as string[]).map(e => <option key={e} value={e}>{e}</option>)}
+      </select>
+    )
+  }
   return <input type="text" value={value} onChange={e=>onChange(e.target.value)} placeholder="e.g. IIT Delhi, BITS Pilani…" className={cls} required={required}/>
 }
 
