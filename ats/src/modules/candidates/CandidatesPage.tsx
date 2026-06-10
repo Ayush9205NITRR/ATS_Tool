@@ -77,7 +77,12 @@ const DEFAULT_VISIBLE  = new Set(['stage','job','ca_decision','hr_owner','interv
 const DEFAULT_ORDER    = COLS.map(c=>c.key)
 
 // ── Tiny popup (no-lag dropdown) ──────────────────────────────
-function Popup({ trigger, children }: { trigger:React.ReactNode; children:React.ReactNode }) {
+// children can be a render function (close) => ReactNode for popups that
+// contain inputs — those must close explicitly, not on every inner click.
+function Popup({ trigger, children }: {
+  trigger:React.ReactNode
+  children:React.ReactNode | ((close:()=>void)=>React.ReactNode)
+}) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
   useEffect(() => {
@@ -86,13 +91,14 @@ function Popup({ trigger, children }: { trigger:React.ReactNode; children:React.
     document.addEventListener('mousedown', fn)
     return () => document.removeEventListener('mousedown', fn)
   }, [open])
+  const interactive = typeof children === 'function'
   return (
     <div ref={ref} className="relative">
       <div onClick={() => setOpen(o=>!o)}>{trigger}</div>
       {open && (
-        <div onClick={() => setOpen(false)}
+        <div onClick={interactive ? undefined : () => setOpen(false)}
           className="absolute top-full left-0 mt-1 bg-white border border-gray-100 rounded-xl shadow-lg z-50 py-1 min-w-[160px] max-h-60 overflow-y-auto">
-          {children}
+          {interactive ? (children as (close:()=>void)=>React.ReactNode)(() => setOpen(false)) : children}
         </div>
       )}
     </div>
@@ -147,6 +153,7 @@ const SubSourceCell = memo(({ cid, category, name, canEdit, onUpdate }: {
   const [employees, setEmployees]     = useState<string[]>([])
   const [loaded, setLoaded] = useState(false)
   const [collegeInput, setCollegeInput] = useState(name)
+  useEffect(() => { setCollegeInput(name) }, [name])
 
   const display = name || <span className="text-gray-300">—</span>
   if (!canEdit || !category) return <span className="text-xs text-gray-600">{display}</span>
@@ -226,24 +233,38 @@ const SubSourceCell = memo(({ cid, category, name, canEdit, onUpdate }: {
 
   return (
     <Popup trigger={<span onClick={loadData}>{trigger}</span>}>
-      <div className="px-2 py-2 w-52">
-        <input type="text" value={collegeInput}
-          onChange={e => setCollegeInput(e.target.value)}
-          onBlur={e => { if(e.target.value && e.target.value !== name) onUpdate(cid, 'source_name', e.target.value) }}
-          onKeyDown={e => { if(e.key==='Enter') { if(collegeInput) onUpdate(cid,'source_name',collegeInput); (e.target as any).blur() }}}
-          placeholder="Type or select college…"
-          className="w-full px-2.5 py-1.5 text-xs border border-gray-200 rounded mb-1.5 focus:outline-none focus:ring-1 focus:ring-blue-400"/>
-        {colleges.length > 0 && (
-          <div className="max-h-36 overflow-y-auto border-t border-gray-100 pt-1">
-            {colleges.map(c => (
-              <button key={c} onClick={() => { setCollegeInput(c); onUpdate(cid, 'source_name', c) }}
-                className={`w-full text-left text-xs px-2 py-1.5 rounded hover:bg-amber-50 ${name===c?'text-amber-700 font-semibold':''}`}>
-                {c}
-              </button>
-            ))}
+      {close => {
+        const q = collegeInput.trim()
+        // Don't filter by the already-saved value — show the full list until the user types something new
+        const filtered = q && q !== name ? colleges.filter(c => c.toLowerCase().includes(q.toLowerCase())) : colleges
+        const pick = (v: string) => { setCollegeInput(v); onUpdate(cid, 'source_name', v); close() }
+        return (
+          <div className="px-2 py-2 w-52">
+            <input type="text" value={collegeInput} autoFocus
+              onChange={e => setCollegeInput(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter' && q) pick(q) }}
+              placeholder="Type or select college…"
+              className="w-full px-2.5 py-1.5 text-xs border border-gray-200 rounded mb-1.5 focus:outline-none focus:ring-1 focus:ring-blue-400"/>
+            <div className="max-h-36 overflow-y-auto border-t border-gray-100 pt-1">
+              {q && q !== name && !colleges.some(c => c.toLowerCase() === q.toLowerCase()) && (
+                <button onClick={() => pick(q)}
+                  className="w-full text-left text-xs px-2 py-1.5 rounded hover:bg-amber-50 text-amber-700 font-medium">
+                  ＋ Use "{q}"
+                </button>
+              )}
+              {filtered.map(c => (
+                <button key={c} onClick={() => pick(c)}
+                  className={`w-full text-left text-xs px-2 py-1.5 rounded hover:bg-amber-50 ${name===c?'text-amber-700 font-semibold':''}`}>
+                  {c}
+                </button>
+              ))}
+              {filtered.length === 0 && !q && (
+                <p className="text-xs text-gray-400 px-2 py-1.5 italic">No colleges yet — type a name</p>
+              )}
+            </div>
           </div>
-        )}
-      </div>
+        )
+      }}
     </Popup>
   )
 })
