@@ -47,13 +47,24 @@ function SubSourceField({ sourceCategory, value, onChange }: {
       {PLATFORM_SRCS.map(p => <option key={p} value={p}>{p}</option>)}
     </select>
   )
-  if (sourceCategory === 'referral') return (
-    <select value={value} onChange={e => onChange(e.target.value)} className={cls}>
-      <option value="">Select employee…</option>
-      {(employees as string[]).map(e => <option key={e} value={e}>{e}</option>)}
-      {employees.length === 0 && <option disabled value="">No employees — add in Settings → Employee Referral List</option>}
-    </select>
-  )
+  if (sourceCategory === 'referral') {
+    if ((employees as string[]).length === 0) return (
+      <div className="space-y-1">
+        <input type="text" value={value} onChange={e => onChange(e.target.value)}
+          placeholder="Type referrer's name…" className={cls} />
+        <p className="text-[11px] text-gray-400">
+          No employee list configured.{' '}
+          <a href="/settings" className="text-violet-500 hover:underline">Add employees in Settings →</a>
+        </p>
+      </div>
+    )
+    return (
+      <select value={value} onChange={e => onChange(e.target.value)} className={cls}>
+        <option value="">Select employee…</option>
+        {(employees as string[]).map(e => <option key={e} value={e}>{e}</option>)}
+      </select>
+    )
+  }
   return <input type="text" value={value} onChange={e => onChange(e.target.value)} placeholder="e.g. IIT Delhi, BITS Pilani…" className={cls} />
 }
 
@@ -237,7 +248,7 @@ export function SingleResumeUpload() {
           )}
 
           {!isAgency ? (
-            <Field label={sourceCategory === 'agency' ? 'Agency Name' : sourceCategory === 'college' ? 'College Name' : 'Platform'}>
+            <Field label={sourceCategory === 'agency' ? 'Agency Name' : sourceCategory === 'college' ? 'College Name' : sourceCategory === 'referral' ? 'Referred By' : 'Platform'}>
               <SubSourceField sourceCategory={sourceCategory} value={sourceName} onChange={setSourceName} />
             </Field>
           ) : (
