@@ -679,14 +679,24 @@ const displayed = useMemo(() => {
       const{error}=await supabase.from('candidates').update(updates).eq('id',id)
       if(error){console.error('[upd]',error);throw error}
     },
-    onSuccess:(_, vars)=>{
-      // Surgical cache patch — avoids re-fetching the entire list for each cell edit
+    onMutate: ({ id, field, value }) => {
+      // Optimistic update — reflect change immediately before server responds
       qc.setQueriesData<any[]>({ queryKey: ['candidates'] }, (old) => {
         if (!Array.isArray(old)) return old
-        return old.map((c:any) => c.id === vars.id ? { ...c, [vars.field]: vars.value } : c)
+        return old.map((c:any) => c.id === id ? { ...c, [field]: value } : c)
       })
-      // Background re-sync so the cache stays accurate
+    },
+    onSuccess:(_, vars)=>{
+      // Background re-sync so the cache stays accurate after optimistic patch
       qc.invalidateQueries({ queryKey: ['candidates'], refetchType: 'none' })
+      if (vars.field === 'current_stage') {
+        qc.invalidateQueries({ queryKey: ['candidates'] })
+      }
+    },
+    onError: (err, vars) => {
+      // Revert optimistic update — trigger a fresh fetch so stale data is replaced
+      console.error('[updateField error]', vars.field, err)
+      qc.invalidateQueries({ queryKey: ['candidates'] })
     },
   })
 
