@@ -86,10 +86,26 @@ export function SingleEntryForm({ onSuccess }: { onSuccess?: () => void }) {
   const qc = useQueryClient()
   const navigate = useNavigate()
   const [done, setDone] = useState(false)
+  const [referralDone, setReferralDone] = useState(false)
   const [sourceCategory, setSourceCategory] = useState(isAgency ? 'agency' : '')
   const [sourceName, setSourceName] = useState(isAgency ? (user?.full_name ?? '') : '')
   const [customValues, setCustomValues] = useState<Record<string,any>>({})
   const { duplicates, checking, check, reset: resetDup } = useDuplicateCheck()
+
+  const attachReferral = useMutation({
+    mutationFn: async (existingId: string) => {
+      const { error } = await supabase
+        .from('candidates')
+        .update({ source_category: 'referral', source_name: sourceName })
+        .eq('id', existingId)
+      if (error) throw error
+    },
+    onSuccess: (_, existingId) => {
+      qc.invalidateQueries({ queryKey: ['candidates'] })
+      setReferralDone(true)
+      setTimeout(() => navigate(`/candidates/${existingId}`), 1200)
+    },
+  })
 
   // Reset sub-source when source changes
   useEffect(() => { if (!isAgency) setSourceName('') }, [sourceCategory])
@@ -163,6 +179,14 @@ export function SingleEntryForm({ onSuccess }: { onSuccess?: () => void }) {
       <CheckCircle className="w-10 h-10 text-green-500"/>
       <p className="text-lg font-semibold text-gray-900">Candidate added!</p>
       <Button variant="secondary" onClick={() => navigate('/candidates')}>View submissions</Button>
+    </div>
+  )
+
+  if (referralDone) return (
+    <div className="flex flex-col items-center gap-3 py-12">
+      <CheckCircle className="w-10 h-10 text-green-500"/>
+      <p className="text-lg font-semibold text-gray-900">Referral attached!</p>
+      <p className="text-sm text-gray-500">Redirecting to candidate profile…</p>
     </div>
   )
 
@@ -285,11 +309,26 @@ export function SingleEntryForm({ onSuccess }: { onSuccess?: () => void }) {
         </div>
       )}
 
-      <div className="flex justify-end pt-2">
+      <div className="flex justify-end items-center gap-3 pt-2">
         {duplicates.length > 0 ? (
-          <span className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
-            🚫 Duplicate — fix email/phone before adding
-          </span>
+          sourceCategory === 'referral' && sourceName && duplicates.length === 1 ? (
+            <div className="flex items-center gap-3">
+              <span className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                Candidate already exists
+              </span>
+              <Button
+                type="button"
+                onClick={() => attachReferral.mutate(duplicates[0].id)}
+                loading={attachReferral.isPending}
+              >
+                Attach Referral to Existing
+              </Button>
+            </div>
+          ) : (
+            <span className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+              🚫 Duplicate — fix email/phone before adding
+            </span>
+          )
         ) : (
           <Button type="submit" loading={mutation.isPending} disabled={checking}>
             {checking ? 'Checking…' : 'Add Candidate'}

@@ -136,6 +136,7 @@ export function InterviewsPage() {
         .select('id, full_name, current_stage, interview_date, job_id')
         .contains('assigned_interviewers', [user!.id])
         .eq('status', 'active')
+        .is('archived_at', null)
       if (cErr) throw cErr
 
       // Fetch extra candidates that only have feedback records (no longer in assigned panel)
@@ -148,6 +149,7 @@ export function InterviewsPage() {
           .from('candidates')
           .select('id, full_name, current_stage, interview_date, job_id')
           .in('id', extraIds)
+          .is('archived_at', null)
         extraCandidates = ec ?? []
       }
 
@@ -175,10 +177,11 @@ export function InterviewsPage() {
       return {
         all:   assignedWithJob,
         doneMap,
+        recMap,
         // Pending: assigned, not yet reviewed, still in an active interview stage
         pending:   assignedWithJob.filter(c => !doneMap.has(c.id) && ACTIVE_STAGES.has(c.current_stage)),
-        // Submitted: candidates this interviewer approved ("yes") — includes ex-assigned so they can edit
-        submitted: allWithJob.filter(c => recMap.get(c.id) === 'yes'),
+        // Submitted: all candidates where this interviewer gave any feedback (yes OR no)
+        submitted: allWithJob.filter(c => doneMap.has(c.id)),
       }
     },
     enabled: !!user,
@@ -646,7 +649,10 @@ export function InterviewsPage() {
                 <th className="text-left px-4 py-3 font-medium">Stage</th>
                 <th className="text-left px-4 py-3 font-medium">Interview Date</th>
                 {filter === 'submitted' && (
-                  <th className="text-left px-4 py-3 font-medium">Decision Date</th>
+                  <>
+                    <th className="text-left px-4 py-3 font-medium">Decision</th>
+                    <th className="text-left px-4 py-3 font-medium">Decision Date</th>
+                  </>
                 )}
               </tr>
             </thead>
@@ -681,11 +687,26 @@ export function InterviewsPage() {
                       {c.interview_date ? formatDateTime(c.interview_date) : <span className="text-gray-300">—</span>}
                     </td>
 
-                    {/* Decision Date (submitted tab only) */}
+                    {/* Decision + Decision Date (submitted tab only) */}
                     {filter === 'submitted' && (
-                      <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">
-                        {submittedAt ? formatDateTime(submittedAt) : '—'}
-                      </td>
+                      <>
+                        <td className="px-4 py-3">
+                          {data?.recMap.get(c.id) === 'yes' ? (
+                            <span className="inline-flex items-center gap-1 text-xs font-medium text-green-700 bg-green-50 px-2 py-0.5 rounded-full">
+                              <CheckCircle className="w-3 h-3"/> Approved
+                            </span>
+                          ) : data?.recMap.get(c.id) === 'no' ? (
+                            <span className="inline-flex items-center gap-1 text-xs font-medium text-red-600 bg-red-50 px-2 py-0.5 rounded-full">
+                              <UserX className="w-3 h-3"/> Not Recommended
+                            </span>
+                          ) : (
+                            <span className="text-gray-300 text-xs">—</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">
+                          {submittedAt ? formatDateTime(submittedAt) : '—'}
+                        </td>
+                      </>
                     )}
                   </tr>
                 )
