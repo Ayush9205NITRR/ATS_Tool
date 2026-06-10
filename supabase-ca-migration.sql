@@ -315,7 +315,32 @@ $$;
 GRANT EXECUTE ON FUNCTION public.submit_cost_approval(uuid, text, text) TO authenticated;
 
 -- ============================================================
--- 7. OPTIONAL — Employee Referral source category
+-- 8. RLS — interviewers can UPDATE their own feedback row, and
+--    set_candidate_stage already lets them advance/reject the
+--    candidate's stage (SECURITY DEFINER, granted above in #4)
+--
+-- WHY THIS MATTERS:
+-- makeDecision() (CandidateProfilePage "Recommend: Proceed / Reject")
+-- does two writes:
+--   1. interview_feedback insert/update (the interviewer's Yes/No)
+--   2. set_candidate_stage RPC, which moves current_stage to
+--      "{stage} Rejected" on a "No"
+-- There was NO UPDATE policy at all on interview_feedback, so when
+-- an interviewer re-submitted/changed a decision (UPDATE branch),
+-- Postgres silently matched 0 rows — the revised Yes/No never saved,
+-- with no error surfaced. set_candidate_stage already bypasses RLS
+-- via SECURITY DEFINER, so #2 just needed the frontend to call it
+-- (done in CandidateProfilePage.tsx) — this section only adds the
+-- missing interview_feedback policy.
+--
+-- SAFE TO RE-RUN.
+-- ============================================================
+DROP POLICY IF EXISTS "feedback_update_own" ON public.interview_feedback;
+CREATE POLICY "feedback_update_own" ON public.interview_feedback
+  FOR UPDATE USING (interviewer_id = auth.uid());
+
+-- ============================================================
+-- 9. OPTIONAL — Employee Referral source category
 --
 -- Only run this if saving/editing a candidate with
 -- "Source = Employee Referral" fails with an error such as:

@@ -307,14 +307,27 @@ export function CandidateProfilePage() {
       if (error) { console.error('[feedback decision]', error); throw error }
 
       // On any verdict, clear interview_date so the candidate resets for the next scheduling cycle.
-      // Rejection also auto-updates stage to "{stage} Rejected".
-      const candidateUpdate: Record<string, any> = { interview_date: null }
-      if (decision === 'no') candidateUpdate.current_stage = `${currentStage} Rejected`
-
-      const { error: updateErr } = await supabase.from('candidates')
-        .update(candidateUpdate)
-        .eq('id', id!)
-      if (updateErr) console.error('[candidate update after decision]', updateErr)
+      // Rejection also auto-advances stage to "{stage} Rejected". A direct candidates.update()
+      // is silently dropped by RLS for interviewers (candidates_update_staff only allows
+      // admin/super_admin/hr_team), so use the SECURITY DEFINER set_candidate_stage RPC.
+      const newStage = decision === 'no' ? `${currentStage} Rejected` : currentStage
+      const { error: stageErr } = await supabase.rpc('set_candidate_stage', {
+        p_candidate_id: id!,
+        p_new_stage: newStage,
+        p_new_status: 'active',
+      })
+      if (stageErr) {
+        if (stageErr.code === 'PGRST202' || stageErr.message?.includes('Could not find')) {
+          // RPC not yet created (migration not run) — fall back to direct update
+          const candidateUpdate: Record<string, any> = { interview_date: null }
+          if (decision === 'no') candidateUpdate.current_stage = newStage
+          const { error: updateErr } = await supabase.from('candidates').update(candidateUpdate).eq('id', id!)
+          if (updateErr) console.error('[candidate update after decision]', updateErr)
+        } else {
+          console.error('[set_candidate_stage]', stageErr)
+          throw stageErr
+        }
+      }
     },
     onSuccess: async () => {
       setDecisionEditMode(false)
@@ -781,6 +794,7 @@ export function CandidateProfilePage() {
     if (error) {
       console.error('[stage change]', error)
       if (prev) qc.setQueryData(['candidate', id], prev)  // revert on failure
+      alert(`Could not change stage: ${error.message}`)
       return
     }
     // Log the stage change for HR activity tracking (fire-and-forget)
@@ -1727,7 +1741,7 @@ export function CandidateProfilePage() {
                       </button>
                     )}
                   </div>
-                  <p className="text-xs text-gray-500 mb-3">Add interview notes above, then submit your recommendation. HR will advance the stage.</p>
+                  <p className="text-xs text-gray-500 mb-3">Add interview notes above, then submit your recommendation.</p>
                   {feedbackErr && <p className="text-xs text-red-600 mb-2">{feedbackErr}</p>}
                   <div className="flex gap-3">
                     <button
