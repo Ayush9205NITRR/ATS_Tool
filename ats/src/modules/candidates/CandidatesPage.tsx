@@ -155,6 +155,14 @@ const SubSourceCell = memo(({ cid, category, name, canEdit, onUpdate }: {
   const [collegeInput, setCollegeInput] = useState(name)
   useEffect(() => { setCollegeInput(name) }, [name])
 
+  // Reset cached data when category changes so loadData fetches fresh for the new category
+  useEffect(() => {
+    setLoaded(false)
+    setAgencyUsers([])
+    setColleges([])
+    setEmployees([])
+  }, [category])
+
   const display = name || <span className="text-gray-300">—</span>
   if (!canEdit || !category) return <span className="text-xs text-gray-600">{display}</span>
 
