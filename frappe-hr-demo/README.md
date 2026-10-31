@@ -1,16 +1,16 @@
 # Enout HR System (Frappe HR)
 
-**Watch:** `frappe_hr_demo_short.mp4` (80 seconds)
+**Watch:** `frappe_hr_demo_short.mp4` (80 seconds, English voiceover)
 
 ## What it does
 - **Leaves:** Casual, Sick, Observance
 - **Attendance:** pulled from eSSL automatically
-- **Remote staff:** GPS check-in on the phone
+- **Remote staff:** web sign-in from the phone browser, with GPS check-in. No app to install, no App Store needed.
 - **Payroll:** salary slips in the same system
 
 ## How it works
 ```
-eSSL machine → Office PC → Frappe HR (cloud) ← Employee phone
+eSSL machine → Office PC → Frappe HR (cloud) ← Employee browser
 ```
 Set up once. After that, everything is automatic.
 

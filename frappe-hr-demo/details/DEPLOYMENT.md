@@ -1,6 +1,6 @@
 # Frappe HR for Enout: eSSL, deployment and load-test runbook
 
-Companion to `frappe_hr_founder_demo.mp4`. Everything here was run on a Frappe HR v15
+Companion to `frappe_hr_demo_full.mp4`. Everything here was run on a Frappe HR v15
 install with demo data (506 employees) on 31 Oct 2026. Items marked **assumption** or
 **verify** were not tested against our real hardware or accounts.
 
@@ -12,7 +12,7 @@ eSSL devices ──LAN, TCP 4370──▶ Office PC (always on)
                                   polls every 10 min, pushes over HTTPS (API key)
                                          │
                                          ▼
-Remote staff (mobile app) ─▶ Cloudflare Tunnel: hr.<our-domain> ─▶ Frappe HR server
+Remote staff (browser)    ─▶ Cloudflare Tunnel: hr.<our-domain> ─▶ Frappe HR server
 HR / Admin (browser)     ─▶   free SSL, no open ports              Frappe HR + ERPNext core
                                                                     MariaDB, Redis
                                                                     Oracle free VM or office PC
@@ -51,7 +51,7 @@ HR / Admin (browser)     ─▶   free SSL, no open ports              Frappe HR
    Run it as a service: `erpnext_sync_win.py` on Windows, or a systemd unit on Linux.
 
 > **Gotcha found in testing:** if *HR Settings → Allow Geolocation Tracking* is on (needed for
-> mobile GPS check-in), Frappe **rejects punches that have no coordinates**. Every device entry
+> GPS check-in in the browser), Frappe **rejects punches that have no coordinates**. Every device entry
 > must set `latitude`/`longitude` to the office's location.
 
 **Demo result** (`essl_sync_demo.py`). This uses the same API calls as the official tool,
@@ -156,7 +156,7 @@ without a migration project.
 - *Oracle free VM:* it has fewer cores than the test box, so expect about half (**assumption**).
   That is still around 30× the morning rush.
 - *App concurrency:* 200 simultaneously active users stayed under 0.31 s at p95. How headcount
-  maps to "active at once" depends on usage (**assumption**). Most staff open the app a few
+  maps to "active at once" depends on usage (**assumption**). Most staff open it a few
   times a day.
 
 **Scaling path**, in order:
@@ -188,13 +188,14 @@ them with `seed_scale.py`, which is **demo data only**. Never run it on producti
    - salary structure and state Professional Tax
 4. **Weeks 1–4.** Run in parallel with the current process, and compare attendance and one
    payroll cycle.
-5. **Go live.** Roll the mobile app out to remote staff.
+5. **Go live.** Send remote staff the web sign-in link: `https://hr.<domain>/hrms`.
+   It works in any phone browser, so there is nothing to install and no App Store or Play Store account is needed.
 
 ## Files
 
 | File | What it is |
 |---|---|
-| `frappe_hr_founder_demo.mp4` | 4:44 captioned demo video |
+| `frappe_hr_demo_full.mp4` | 4:44 captioned demo video (older; says "mobile app", which means the same web page) |
 | `slides/` | Slide images used in the video |
 | `essl_sync_demo.py` | Demo sync script that uses the official tool's API calls, with a simulated device |
 | `seed_scale.py` | Demo dataset: 500 employees, shift, API user, test logins |
