@@ -1,0 +1,250 @@
+{
+  "company": {
+    "name": "Enout Technologies",
+    "abbr": "ET",
+    "country": "India",
+    "currency": "INR",
+    "timezone": "Asia/Kolkata",
+    "fy_start_date": "2026-04-01",
+    "fy_end_date": "2027-03-31",
+    "admin_full_name": "Enout Admin",
+    "admin_email": "admin@example.in"
+  },
+  "year": 2026,
+  "weekly_off": [
+    "Sunday"
+  ],
+  "holidays": [
+    {
+      "date": "2026-01-26",
+      "name": "Republic Day"
+    },
+    {
+      "date": "2026-03-04",
+      "name": "Holi"
+    },
+    {
+      "date": "2026-08-15",
+      "name": "Independence Day"
+    },
+    {
+      "date": "2026-10-02",
+      "name": "Gandhi Jayanti"
+    },
+    {
+      "date": "2026-10-20",
+      "name": "Dussehra"
+    },
+    {
+      "date": "2026-11-09",
+      "name": "Diwali (observed)"
+    },
+    {
+      "date": "2026-12-25",
+      "name": "Christmas"
+    }
+  ],
+  "observance_holidays": [
+    {
+      "date": "2026-01-14",
+      "name": "Makar Sankranti"
+    },
+    {
+      "date": "2026-03-20",
+      "name": "Eid-ul-Fitr"
+    },
+    {
+      "date": "2026-08-28",
+      "name": "Raksha Bandhan"
+    },
+    {
+      "date": "2026-09-04",
+      "name": "Janmashtami"
+    },
+    {
+      "date": "2026-10-29",
+      "name": "Karwa Chauth"
+    },
+    {
+      "date": "2026-11-10",
+      "name": "Bhai Dooj"
+    },
+    {
+      "date": "2026-12-28",
+      "name": "Year-end observance"
+    }
+  ],
+  "leave_types": [
+    {
+      "name": "Casual Leave",
+      "days": 12,
+      "carry_forward": false
+    },
+    {
+      "name": "Sick Leave",
+      "days": 8,
+      "carry_forward": false
+    },
+    {
+      "name": "Observance Leave",
+      "days": 2,
+      "optional": true
+    }
+  ],
+  "shift": {
+    "name": "General Shift",
+    "start": "09:30:00",
+    "end": "18:30:00",
+    "late_grace_minutes": 15,
+    "half_day_below_hours": 4,
+    "absent_below_hours": 2,
+    "early_checkin_minutes": 120,
+    "late_checkout_minutes": 240,
+    "process_attendance_after": "2026-11-01"
+  },
+  "hr_settings": {
+    "allow_employee_checkin_from_mobile_app": 1,
+    "allow_geolocation_tracking": 1,
+    "leave_approver_mandatory_in_leave_application": 1,
+    "prevent_self_leave_approval": 1,
+    "send_leave_notification": 1
+  },
+  "role_profiles": {
+    "Enout Admin": [
+      "System Manager",
+      "HR Manager",
+      "HR User",
+      "Leave Approver",
+      "Employee"
+    ],
+    "Enout HR": [
+      "HR Manager",
+      "HR User",
+      "Leave Approver",
+      "Employee"
+    ],
+    "Enout Manager": [
+      "Employee",
+      "Leave Approver"
+    ],
+    "Enout Employee": [
+      "Employee",
+      "Employee Self Service"
+    ]
+  },
+  "csv_role_to_profile": {
+    "Admin": "Enout Admin",
+    "HR": "Enout HR",
+    "Manager": "Enout Manager",
+    "Employee": "Enout Employee"
+  },
+  "essl_sync_user": {
+    "email": "essl-sync@example.in",
+    "role": "eSSL Sync",
+    "permissions": {
+      "Employee Checkin": [
+        "read",
+        "create",
+        "write"
+      ],
+      "Attendance": [
+        "read",
+        "create",
+        "write",
+        "submit",
+        "cancel"
+      ],
+      "Shift Type": [
+        "read",
+        "write"
+      ],
+      "Employee": [
+        "read"
+      ],
+      "Employee Checkin@1": [
+        "read",
+        "write"
+      ]
+    },
+    "_note": "'Doctype@1' = permission level 1 (Employee Checkin.time is level 1: without it punches get the sync time)."
+  },
+  "payroll": {
+    "structure": "Enout Standard Structure",
+    "from_date": "2026-04-01",
+    "earnings": [
+      {
+        "component": "Basic",
+        "abbr": "B",
+        "formula": "base * 0.5"
+      },
+      {
+        "component": "House Rent Allowance",
+        "abbr": "HRA",
+        "formula": "base * 0.2"
+      },
+      {
+        "component": "Special Allowance",
+        "abbr": "SA",
+        "formula": "base * 0.3"
+      }
+    ],
+    "deductions": [
+      {
+        "component": "Provident Fund",
+        "abbr": "PF",
+        "formula": "B * 0.12 if B <= 15000 else 1800",
+        "fixed": true
+      },
+      {
+        "component": "Professional Tax",
+        "abbr": "PT",
+        "amount": 200,
+        "fixed": true
+      }
+    ],
+    "_note": "base = monthly CTC from the employees CSV (monthly_ctc column). Components marked fixed do not depend on payment days (PF is derived from Basic, which is already prorated). PT 200/month shown; set your state's slab."
+  },
+  "payroll_settings": {
+    "payroll_based_on": "Attendance",
+    "consider_unmarked_attendance_as": "Present",
+    "include_holidays_in_total_working_days": 0,
+    "daily_wages_fraction_for_half_day": 0.5,
+    "show_leave_balances_in_salary_slip": 1,
+    "email_salary_slip_to_employee": 0
+  },
+  "locked_employee_fields": {
+    "_note": "Only HR/Admin can change these; employees can read them.",
+    "fields": [
+      "attendance_device_id",
+      "default_shift",
+      "holiday_list",
+      "leave_approver",
+      "expense_approver",
+      "reports_to",
+      "user_id",
+      "status",
+      "date_of_joining",
+      "relieving_date",
+      "department",
+      "designation",
+      "company",
+      "ctc",
+      "employment_type",
+      "create_user_permission"
+    ],
+    "write_roles": [
+      "System Manager",
+      "HR Manager",
+      "HR User"
+    ],
+    "read_roles": [
+      "Employee",
+      "Leave Approver",
+      "eSSL Sync"
+    ]
+  },
+  "restrict_to_own_record": [
+    "Manager",
+    "Employee"
+  ]
+}

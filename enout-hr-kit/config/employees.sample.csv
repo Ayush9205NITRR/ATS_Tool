@@ -1,0 +1,7 @@
+first_name,last_name,email,gender,date_of_birth,date_of_joining,department,designation,essl_user_id,role,reports_to_email,mobile,monthly_ctc
+Company,Founder,founder@example.in,Male,1990-01-01,2022-01-01,Management,Founder,100,Admin,,9800000000,150000
+Priya,Sharma,priya.sharma@example.in,Female,1990-04-12,2024-06-01,Human Resources,HR Manager,101,HR,founder@example.in,9800000001,90000
+Rahul,Verma,rahul.verma@example.in,Male,1988-09-03,2023-01-15,Engineering,Engineering Manager,102,Manager,,9800000002,60000
+Ananya,Iyer,ananya.iyer@example.in,Female,1995-02-20,2025-03-01,Engineering,Software Engineer,103,Employee,rahul.verma@example.in,9800000003,120000
+Vikram,Singh,vikram.singh@example.in,Male,1993-11-11,2025-07-01,Sales,Sales Executive,104,Employee,rahul.verma@example.in,9800000004,60000
+Sneha,Patel,sneha.patel@example.in,Female,1991-06-25,2024-02-01,Operations,Operations Lead,105,Employee,priya.sharma@example.in,9800000005,120000

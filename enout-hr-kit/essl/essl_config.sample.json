@@ -1,0 +1,23 @@
+{
+  "frappe_url": "https://hr.example.in",
+  "api_file": "essl_api.json",
+  "host_header": null,
+  "devices": [
+    {
+      "device_id": "ESSL_MAIN_GATE",
+      "ip": "192.168.1.201",
+      "port": 4370,
+      "password": 0,
+      "punch_direction": "AUTO",
+      "latitude": 19.0760,
+      "longitude": 72.8777
+    }
+  ],
+  "shifts": ["General Shift"],
+  "punch_in_codes": [0, 4],
+  "punch_out_codes": [1, 5],
+  "max_catchup_days": 31,
+  "parallel_requests": 4,
+  "state_file": "state.json",
+  "log_dir": "logs"
+}

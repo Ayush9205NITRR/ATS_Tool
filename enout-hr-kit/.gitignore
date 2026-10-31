@@ -1,0 +1,8 @@
+output/
+essl/essl_config.json
+essl/essl_api.json
+essl/state.json
+essl/logs/
+tests/output/
+__pycache__/
+*.pyc
