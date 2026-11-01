@@ -1,8 +1,8 @@
-# Acceptance test — 2026-11-01 09:02
+# Acceptance test — 2026-11-01 09:12
 
 Site: http://127.0.0.1:8001
 
-**40 passed, 0 failed, 0 skipped** in 76 s
+**40 passed, 0 failed, 0 skipped** in 72 s
 
 | ID | Check | Result | Notes |
 |---|---|---|---|
@@ -13,15 +13,15 @@ Site: http://127.0.0.1:8001
 | C04 | Shift with auto attendance + late marking | PASS | processes attendance after 2026-11-01 |
 | C05 | HR settings + payroll based on attendance | PASS |  |
 | C06 | Role profiles Admin / HR / Manager / Employee | PASS |  |
-| C07 | Every employee: eSSL ID (unique), login, shift, approver | PASS | 51 active employees OK |
-| C08 | Every employee has leave balances (policy or Keka import) | PASS | 51 employees set up; no balance (0 in Keka?): Observance Leave ×18 |
+| C07 | Every employee: eSSL ID (unique), login, shift, approver | PASS | 52 active employees OK |
+| C08 | Every employee has leave balances (policy or Keka import) | PASS | 52 employees set up; no balance (0 in Keka?): Annual Leave ×1, Observance Leave ×19 |
 | C09 | Every employee has a salary structure | PASS |  |
 | C10 | eSSL sync user: works, not an admin | PASS |  |
 | R01 | Employee sees only own employee record | PASS |  |
 | R02 | Employee cannot create attendance / see salary structures / change eSSL ID | PASS |  |
 | R03 | Employee cannot see others' attendance, leaves, payslips, punches | PASS |  |
 | R04 | Manager sees own team only, no payroll admin | PASS |  |
-| R05 | HR sees all employees | PASS | HR sees all 55 active employees |
+| R05 | HR sees all employees | PASS | HR sees all 56 active employees |
 | R06 | eSSL sync user cannot read payroll or create users | PASS |  |
 | L01 | Employee applies, manager approves, balance drops by 1 | PASS | 4 → 3 (test joiner gets a pro-rated balance) |
 | L02 | Employee cannot approve own leave | PASS |  |

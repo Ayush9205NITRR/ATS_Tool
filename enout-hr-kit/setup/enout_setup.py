@@ -247,6 +247,12 @@ class Setup:
         step("Managers & leave approvers")
         hr = [r["email"].strip().lower() for r in rows if r["role"].strip() == "HR"]
         admins = [r["email"].strip().lower() for r in rows if r["role"].strip() == "Admin"]
+        # adding joiners later: the CSV may not list HR/Admin, so also use the ones already in Frappe
+        prof = self.c["csv_role_to_profile"]
+        for role, lst in (("HR", hr), ("Admin", admins)):
+            for u in self.f.get_list("User", {"role_profile_name": prof[role], "enabled": 1}, ["name"]):
+                if u["name"].lower() not in lst:
+                    lst.append(u["name"].lower())
         for r in rows:
             email = r["email"].strip().lower()
             mgr = r.get("reports_to_email", "").strip().lower()
@@ -270,12 +276,18 @@ class Setup:
         if new_passwords:
             os.makedirs(OUT, exist_ok=True)
             p = os.path.join(OUT, "initial_passwords.csv")
+            # merge: a later run (e.g. adding one joiner) must not erase passwords not yet shared
+            rows = {}
+            if os.path.exists(p):
+                rows = {r["email"]: r for r in csv.DictReader(open(p))}
+            rows.update({r["email"]: r for r in new_passwords})
             with open(p, "w", newline="") as fh:
                 w = csv.DictWriter(fh, fieldnames=["email", "temporary_password", "role"])
                 w.writeheader()
-                w.writerows(new_passwords)
+                w.writerows(rows.values())
             os.chmod(p, 0o600)
-            log(f"temporary passwords for {len(new_passwords)} new logins → {p}  (share privately, then delete)")
+            log(f"temporary passwords for {len(new_passwords)} new logins added → {p} "
+                f"({len(rows)} total; share privately, then delete)")
         return emp_by_email
 
     def assign_leave_policy(self, emp_names):
@@ -336,7 +348,8 @@ class Setup:
             if self.f.exists("Salary Structure Assignment", {"employee": emp, "docstatus": 1}):
                 continue
             self.f.insert({"doctype": "Salary Structure Assignment", "employee": emp, "salary_structure": name,
-                           "company": self.company, "from_date": pc["from_date"], "base": float(ctc),
+                           "company": self.company, "base": float(ctc),
+                           "from_date": max(pc["from_date"], r["date_of_joining"].strip()),
                            "currency": self.c["company"]["currency"], "payroll_payable_account": payable,
                            "docstatus": 1})
             n += 1

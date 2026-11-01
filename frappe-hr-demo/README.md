@@ -1,6 +1,9 @@
 # Enout HR System (Frappe HR)
 
-**Watch:** `frappe_hr_demo_short.mp4` (80 seconds, English voiceover)
+**Watch first:** `keka_to_frappe_hr.mp4` (2 min, English voiceover): moving off Keka with OL · CL · SL · AL,
+eSSL → attendance → leave → payroll, Frappe HR vs Horilla, hosting cost.
+
+Also: `frappe_hr_demo_short.mp4` (80 seconds, product tour).
 
 ## What it does
 - **Leaves:** Casual, Sick, Observance
