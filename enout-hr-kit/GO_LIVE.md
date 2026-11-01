@@ -63,8 +63,9 @@ pip install -r requirements.txt
 ```
 
 ## 3. Fill in your data
-- **`config/enout.json`**: company name, holidays, observance days, leave days (CL 12 / SL 8 / Observance 2),
-  shift times, and the salary split and Professional Tax for your state.
+- **`config/enout.json`**: company name, holidays, observance days, and leave days:
+  OL (Observance) 2, CL 12, SL 8, AL 15 with up to 15 days carried forward. Also shift times,
+  and the salary split and Professional Tax for your state.
   Set `shift.process_attendance_after` to **your go-live date**.
 - **`config/employees.csv`**: copy `employees.sample.csv` and use one row per person.
   - `essl_user_id` = the person's user number on the eSSL machine.
@@ -88,6 +89,26 @@ It creates:
 You'll find:
 - `output/initial_passwords.csv`: temporary passwords. Share them privately, then **delete the file**.
 - `output/essl_api.json`: needed in step 7.
+
+## 4b. Carry over leave balances from Keka
+In Keka, export the **leave balance report**, then save it as a CSV with three columns:
+```
+email,leave_type,balance
+priya.sharma@example.in,CL,7.5
+priya.sharma@example.in,AL,18
+```
+`leave_type` can be OL, CL, SL or AL. Preview first, then import:
+```bash
+python setup/import_leave_balances.py --config config/enout.json --balances keka_balances.csv --as-of <go-live date> --replace --dry-run
+```
+```bash
+python setup/import_leave_balances.py --config config/enout.json --balances keka_balances.csv --as-of <go-live date> --replace
+```
+Each balance becomes the person's balance from the go-live date. AL carries forward next year by itself.
+Re-running is safe; already-imported rows are skipped.
+A 0 balance means no allocation for that type (Frappe can't store 0).
+
+✅ Check: `errors 0`. Spot-check two people against Keka.
 
 ## 5. Acceptance test (must be 100%)
 ```bash
@@ -167,6 +188,11 @@ In Frappe: **Payroll → Payroll Entry → New**, select the month, *Get Employe
 6. eSSL absences didn't reduce pay (Frappe's default is leave-based payroll). Payroll is now attendance-based.
 7. PF would have been reduced twice for partial months. Fixed in the salary structure.
 8. An offline device or late punches could leave people wrongly Absent. Guarded and self-healing.
+9. With more than 1,000 punches in one run, Frappe moved attendance to a background job and hid errors in a
+   message, so the daily summary read half-processed data. The sync now processes day by day and checks every
+   punch got attendance.
+10. Carry-forward leave was capped at the yearly days, which would have rejected Keka AL balances like 18.
+    The cap is now annual + carry forward.
 
 ## Not tested here (do it on site)
 - **A real eSSL machine.** The tests used a simulated device. The real-device code was exercised up to the network

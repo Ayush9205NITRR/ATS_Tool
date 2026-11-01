@@ -267,10 +267,36 @@ def process_attendance(cfg, args, fr):
         after = dt.date.fromisoformat(str(st["process_attendance_after"])) if st.get("process_attendance_after") else None
         if after and args._from < after:
             log.warning("shift %s only processes attendance after %s (earlier days keep check-ins only)", shift, after)
+        # One day at a time, in Frappe's synchronous mode (is_manually_triggered=0):
+        # the "manual" mode moves >1000 punches to a background job and hides errors in a
+        # message, so the summary would read half-processed data.
         current = st.get("last_sync_of_checkin")
-        if not current or dt.datetime.fromisoformat(str(current)) < until:
-            fr.update("Shift Type", shift, {"last_sync_of_checkin": until.strftime("%Y-%m-%d %H:%M:%S")})
-        fr.run_doc_method("Shift Type", shift, "process_auto_attendance", is_manually_triggered=1)
+        current = dt.datetime.fromisoformat(str(current)) if current else None
+        for day in date_range(args._from, args._to):
+            step_until = min(until, dt.datetime.combine(day, dt.time(23, 59, 59)))
+            if current is None or current < step_until:
+                fr.update("Shift Type", shift, {"last_sync_of_checkin": step_until.strftime("%Y-%m-%d %H:%M:%S")})
+                current = step_until
+            fr.run_doc_method("Shift Type", shift, "process_auto_attendance", is_manually_triggered=0)
+        pending = fr.get_list("Employee Checkin", [["time", "between", [str(args._from), str(args._to)]],
+                                                   ["shift", "=", shift], ["attendance", "is", "not set"],
+                                                   ["skip_auto_attendance", "=", 0]], ["name", "time"])
+        done_until = until - dt.timedelta(hours=st.get("allow_check_out_after_shift_end_time", 0) / 60 + 24)
+        holidays = set()
+        hl = st.get("holiday_list")
+        if hl and not st.get("mark_auto_attendance_on_holidays"):
+            try:
+                holidays = {str(h["holiday_date"]) for h in (fr.get("Holiday List", hl) or {}).get("holidays", [])}
+            except FrappeError:
+                log.info("cannot read holiday list %s (grant the sync role read access); skipping holiday check", hl)
+        finished = [p for p in pending if dt.datetime.fromisoformat(str(p["time"])) < done_until]
+        on_holiday = [p for p in finished if str(p["time"])[:10] in holidays]
+        stuck = [p for p in finished if str(p["time"])[:10] not in holidays]
+        if on_holiday:
+            log.info("%d punches on holidays not counted (turn on 'Mark Auto Attendance on Holidays' in the "
+                     "shift if staff work holidays)", len(on_holiday))
+        if stuck:
+            log.warning("%d punches of finished days still have no attendance (check Error Log in Frappe)", len(stuck))
         log.info("auto attendance processed for %s (logs complete until %s)", shift, until)
 
 

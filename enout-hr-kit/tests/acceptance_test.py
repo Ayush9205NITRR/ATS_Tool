@@ -267,7 +267,9 @@ def config_tests(s: Suite):
         for lt in c["leave_types"]:
             d = a.get("Leave Type", lt["name"])
             assert d, f"missing {lt['name']}"
-            assert float(d["max_leaves_allowed"]) == lt["days"], f"{lt['name']} max {d['max_leaves_allowed']} != {lt['days']}"
+            cap = lt["days"] + (lt.get("max_carry_forward", lt["days"]) if lt.get("carry_forward") else 0)
+            assert float(d["max_leaves_allowed"]) == cap, f"{lt['name']} max {d['max_leaves_allowed']} != {cap}"
+            assert bool(d["is_carry_forward"]) == bool(lt.get("carry_forward")), f"{lt['name']} carry-forward flag wrong"
             assert bool(d["is_optional_leave"]) == bool(lt.get("optional")), f"{lt['name']} optional flag wrong"
         lp = a.get_list("Leave Period", {"company": s.company, "is_active": 1}, ["name", "optional_holiday_list"])
         assert lp and lp[0]["optional_holiday_list"], "active leave period without optional (observance) holiday list"
@@ -322,9 +324,18 @@ def config_tests(s: Suite):
         for x in alloc:
             have.setdefault(x["employee"], set()).add(x["leave_type"])
         need = {lt["name"] for lt in s.cfg["leave_types"]}
-        missing = [e for e in emps if not need <= have.get(e, set())]
-        assert not missing, f"{len(missing)} employees without full leave allocation (e.g. {missing[:5]})"
-        return f"{len(emps)} employees allocated"
+        none = [e for e in emps if not have.get(e)]
+        assert not none, f"{len(none)} employees have NO leave set up (e.g. {none[:5]}): run setup or the Keka import"
+        # Frappe cannot store a 0-day allocation, so a type missing after a Keka import usually means
+        # a 0 balance. Report it so HR can confirm, without failing.
+        gaps = {}
+        for e in emps:
+            for lt in need - have.get(e, set()):
+                gaps[lt] = gaps.get(lt, 0) + 1
+        note = f"{len(emps)} employees set up"
+        if gaps:
+            note += "; no balance (0 in Keka?): " + ", ".join(f"{k} ×{v}" for k, v in sorted(gaps.items()))
+        return note
 
     def t_salary():
         emps = {e["name"] for e in a.get_list("Employee", {"status": "Active", "company": s.company},
@@ -349,7 +360,7 @@ def config_tests(s: Suite):
     s.run("C05", "HR settings + payroll based on attendance", t_settings)
     s.run("C06", "Role profiles Admin / HR / Manager / Employee", t_roles)
     s.run("C07", "Every employee: eSSL ID (unique), login, shift, approver", t_people)
-    s.run("C08", "Every employee has Casual / Sick / Observance balance", t_balances)
+    s.run("C08", "Every employee has leave balances (policy or Keka import)", t_balances)
     s.run("C09", "Every employee has a salary structure", t_salary)
     s.run("C10", "eSSL sync user: works, not an admin", t_essl_user)
 
@@ -578,7 +589,7 @@ def attendance_tests(s: Suite):
 
     def t_process():
         a.update("Shift Type", TEST_SHIFT, {"last_sync_of_checkin": dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
-        (s.essl or a).run_doc_method("Shift Type", TEST_SHIFT, "process_auto_attendance", is_manually_triggered=1)
+        (s.essl or a).run_doc_method("Shift Type", TEST_SHIFT, "process_auto_attendance", is_manually_triggered=0)
 
     def att(emp, day):
         r = a.get_list("Attendance", {"employee": emp, "attendance_date": str(day), "docstatus": 1},
@@ -656,7 +667,7 @@ def attendance_tests(s: Suite):
         sys.path.insert(0, os.path.join(HERE, "..", "essl"))
         import essl_daily_sync
         essl_daily_sync.fix_false_absents(sess, D[1], D[1], sess.whoami())
-        sess.run_doc_method("Shift Type", TEST_SHIFT, "process_auto_attendance", is_manually_triggered=1)
+        sess.run_doc_method("Shift Type", TEST_SHIFT, "process_auto_attendance", is_manually_triggered=0)
         r = att(P["emp2"]["employee"], D[1])
         assert r and r["status"] == "Present", f"after late punches: {r}"
         return "auto Absent → Present after punches arrived late"

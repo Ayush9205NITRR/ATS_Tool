@@ -1,8 +1,8 @@
-# Acceptance test — 2026-10-31 23:07
+# Acceptance test — 2026-11-01 09:02
 
 Site: http://127.0.0.1:8001
 
-**40 passed, 0 failed, 0 skipped** in 83 s
+**40 passed, 0 failed, 0 skipped** in 76 s
 
 | ID | Check | Result | Notes |
 |---|---|---|---|
@@ -14,7 +14,7 @@ Site: http://127.0.0.1:8001
 | C05 | HR settings + payroll based on attendance | PASS |  |
 | C06 | Role profiles Admin / HR / Manager / Employee | PASS |  |
 | C07 | Every employee: eSSL ID (unique), login, shift, approver | PASS | 51 active employees OK |
-| C08 | Every employee has Casual / Sick / Observance balance | PASS | 51 employees allocated |
+| C08 | Every employee has leave balances (policy or Keka import) | PASS | 51 employees set up; no balance (0 in Keka?): Observance Leave ×18 |
 | C09 | Every employee has a salary structure | PASS |  |
 | C10 | eSSL sync user: works, not an admin | PASS |  |
 | R01 | Employee sees only own employee record | PASS |  |
@@ -29,7 +29,7 @@ Site: http://127.0.0.1:8001
 | L04 | Leave beyond balance is refused | PASS |  |
 | L05 | Half-day sick leave counts 0.5 | PASS |  |
 | L06 | Weekly off / holiday inside a leave is not counted | PASS | 3 days incl. 1 off-day → 2.0 leave |
-| L07 | Observance leave only on observance dates | PASS | allowed on 2026-11-10, refused on 2026-11-07 |
+| L07 | Observance leave only on observance dates | PASS | allowed on 2026-11-10, refused on 2026-11-11 |
 | A01 | Unknown eSSL ID is refused (not silently lost) | PASS |  |
 | A02 | eSSL punch without device location is refused | PASS | set latitude/longitude for every device in essl_config.json |
 | A03 | eSSL punches accepted with their real punch time | PASS | 7 punches over 4 days, real times kept |

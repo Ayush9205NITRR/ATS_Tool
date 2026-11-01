@@ -116,12 +116,15 @@ class Setup:
     def leave_types(self):
         step("Leave types")
         for lt in self.c["leave_types"]:
-            body = {"leave_type_name": lt["name"], "max_leaves_allowed": lt["days"], "include_holiday": 0,
+            cap = lt["days"] + (lt.get("max_carry_forward", lt["days"]) if lt.get("carry_forward") else 0)
+            body = {"leave_type_name": lt["name"], "max_leaves_allowed": cap, "include_holiday": 0,
                     "allow_negative": 0, "is_carry_forward": 1 if lt.get("carry_forward") else 0,
                     "is_optional_leave": 1 if lt.get("optional") else 0, "is_lwp": 0}
+            if lt.get("carry_forward"):
+                body["maximum_carry_forwarded_leaves"] = lt.get("max_carry_forward", lt["days"])
             if self.f.get("Leave Type", lt["name"]):
                 self.f.update("Leave Type", lt["name"], body)
-                log(f"~ {lt['name']} ({lt['days']} days)")
+                log(f"~ {lt['name']} ({lt['days']} days{', carry forward' if lt.get('carry_forward') else ''})")
             else:
                 self.f.insert({"doctype": "Leave Type", **body})
                 log(f"+ {lt['name']} ({lt['days']} days)")

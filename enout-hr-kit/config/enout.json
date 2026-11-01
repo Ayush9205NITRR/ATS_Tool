@@ -77,18 +77,28 @@
   "leave_types": [
     {
       "name": "Casual Leave",
+      "short": "CL",
       "days": 12,
       "carry_forward": false
     },
     {
       "name": "Sick Leave",
+      "short": "SL",
       "days": 8,
       "carry_forward": false
     },
     {
       "name": "Observance Leave",
+      "short": "OL",
       "days": 2,
       "optional": true
+    },
+    {
+      "name": "Annual Leave",
+      "short": "AL",
+      "days": 15,
+      "carry_forward": true,
+      "max_carry_forward": 15
     }
   ],
   "shift": {
@@ -164,6 +174,9 @@
       "Employee Checkin@1": [
         "read",
         "write"
+      ],
+      "Holiday List": [
+        "read"
       ]
     },
     "_note": "'Doctype@1' = permission level 1 (Employee Checkin.time is level 1: without it punches get the sync time)."
@@ -246,5 +259,14 @@
   "restrict_to_own_record": [
     "Manager",
     "Employee"
-  ]
+  ],
+  "leave_import": {
+    "_note": "Keka leave-balance export \u2192 CSV with columns email, leave_type (short code or name), balance",
+    "short_codes": {
+      "CL": "Casual Leave",
+      "SL": "Sick Leave",
+      "OL": "Observance Leave",
+      "AL": "Annual Leave"
+    }
+  }
 }
