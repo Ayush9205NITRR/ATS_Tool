@@ -20,13 +20,37 @@ Built-in safeguards (each one verified by the tests):
 
 ---
 
-## 1. Server
-Install Frappe HR v15 with ERPNext. See [`../frappe-hr-demo/details/DEPLOYMENT.md`](../frappe-hr-demo/details/DEPLOYMENT.md):
-Oracle free VM + Cloudflare Tunnel, `bench setup production` (puts nginx in front of the app).
+## 1. Server + Cloudflare (about 45 minutes, mostly waiting)
+
+**1a. Create the server.** Oracle Cloud (free): sign up at cloud.oracle.com; a card is needed for verification only.
+- Compute → Instances → **Create instance**.
+- Image **Ubuntu 24.04**, shape **Ampere A1**, 2 OCPU, 12 GB RAM.
+- Upload your SSH public key, then Create.
+- Note the **public IP**.
+
+Any Ubuntu 22.04/24.04 machine with 4 GB+ RAM works too (another VPS, or an always-on office PC).
+
+**1b. Create the Cloudflare Tunnel** (your existing account):
+- Zero Trust → Networks → **Tunnels** → Create a tunnel → *Cloudflared* → name it `enout-hr`.
+- Copy the **token**: the long string after `cloudflared service install` in the command Cloudflare shows.
+- Next → **Public hostname**: subdomain `hr`, your domain, service **HTTP** `localhost:80` → Save.
+
+**1c. Run the installer on the server** (from your Mac terminal):
 ```bash
-bench --site hr.<domain> enable-scheduler
+ssh ubuntu@<PUBLIC_IP>
 ```
-✅ Check: `https://hr.<domain>` opens the login page.
+On the server, get the kit. If the repository is private, GitHub asks for your username and a personal access token:
+```bash
+git clone -b claude/gallant-ptolemy-luo16h https://github.com/Ayush9205NITRR/ATS_Tool.git
+```
+```bash
+bash ATS_Tool/enout-hr-kit/deploy/install_server.sh hr.<yourdomain> <CLOUDFLARE_TOKEN>
+```
+It installs Frappe HR v15 + ERPNext, MariaDB, Redis, nginx, auto-start on reboot, backups every 6 hours, and the
+tunnel. At the end it prints the **Administrator password** (also saved in `~/enout_secrets.txt`).
+It is safe to re-run if it stops halfway.
+
+✅ Check: `https://hr.<yourdomain>` opens the login page, and you can log in as Administrator.
 
 ## 2. Admin API key
 Log in as Administrator → top-right avatar → **My Settings → API Access → Generate Keys**.
